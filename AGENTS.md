@@ -4,7 +4,7 @@ This is the cross-agent entry point for the repository. Keep it small: durable
 project rules live in `docs/handoff/conventions.md`, and live state is injected
 by the SessionStart hook.
 
-Session state: `docs/handoff/state.md`
+Session state: Agent Handoff injects `docs/handoff/state.md`; do not reread it when injected.
 Full conventions reference: `docs/handoff/conventions.md`
 Detailed review workflows: `docs/handoff/specs-plans.md`
 
@@ -30,12 +30,12 @@ design and plans under `docs/superpowers/`.
 - Settled decisions: `docs/resolved-questions.md`
 - ADRs: `docs/adr/`
 - Research reports: `docs/research/`
-- Current status: `STATUS.md`
-- Work queue: `TODO.md`
+- Current status: `docs/STATUS.md`
+- Work queue: `docs/TODO.md`
 
 ## TODO Discipline
 
-When working on an item listed in `TODO.md`, update that item in the same change:
+When working on an item listed in `docs/TODO.md`, update that item in the same change:
 remove completed work, narrow partially completed work, and add newly discovered
 follow-ups. Keep user-owned and agent-tracked sections separate.
 
@@ -75,3 +75,15 @@ hand-edit `uv.lock`.
 Work on `dev` unless the user asks for a feature branch. `main` is protected and
 advances by PR from `dev` with a merge commit after CI passes. Use conventional,
 GPG-signed commits.
+
+<!-- prettier-ignore-start -->
+
+<!-- BEGIN project-standards:agent-handoff -->
+<!-- markdownlint-disable MD025 -->
+# Agent Handoff
+
+Use the repo-local `agent-handoff` skill at session startup and closeout. Do not reread state already injected by SessionStart. Keep project knowledge inside this repository and store credential references only, never values.
+<!-- markdownlint-enable MD025 -->
+<!-- END project-standards:agent-handoff -->
+
+<!-- prettier-ignore-end -->
