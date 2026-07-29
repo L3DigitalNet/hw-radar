@@ -4,7 +4,7 @@ This directory holds the project's **Architecture Decision Records (ADRs)** — 
 
 ## Conventions
 
-- **Format:** [MADR](https://adr.github.io/madr/), per the [project-standards ADR Standard](https://github.com/L3DigitalNet/project-standards/tree/main/standards/adr). Author new ADRs from that standard's template.
+- **Format:** [MADR](https://adr.github.io/madr/), per the [project-standards ADR Standard](https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/adr). Author new ADRs from that standard's template.
 - **Filename:** `adr-NNNN-short-title.md` (zero-padded sequence; repo-name omitted).
 - **`id` (in ADR frontmatter):** `adr-NNNN-hw-radar-short-title` (embeds the repo name for global uniqueness).
 - **Frontmatter:** ADR files carry the ADR template's YAML frontmatter as a **local, unvalidated convention** — this repo deliberately does **not** adopt the enforced Markdown Frontmatter Standard or a CI validator. See [ADR 0001](adr-0001-decline-markdown-frontmatter-standard.md). This index and all non-ADR docs carry no frontmatter.

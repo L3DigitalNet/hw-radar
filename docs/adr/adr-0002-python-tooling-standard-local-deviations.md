@@ -24,7 +24,7 @@ related:
 supersedes: []
 superseded_by: null
 source:
-  - 'https://github.com/L3DigitalNet/project-standards/tree/main/standards/python-tooling'
+  - 'https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/python-tooling'
 confidence: 'high'
 visibility: 'public'
 license: null
@@ -85,5 +85,5 @@ Repo state confirms the decision: `pyproject.toml` carries the standard's tool t
 
 ## More Information
 
-- [Python Tooling SSOT Standard](https://github.com/L3DigitalNet/project-standards/tree/main/standards/python-tooling) — §20 records exceptions as ADRs; §15 is the CI workflow deferred here.
+- [Python Tooling SSOT Standard](https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/python-tooling) — §20 records exceptions as ADRs; §15 is the CI workflow deferred here.
 - Related: [ADR 0001](adr-0001-decline-markdown-frontmatter-standard.md) (declining the Markdown Frontmatter Standard) and the tracked `AGENTS.md` / `pyproject.toml`.

@@ -1,0 +1,8 @@
+[project_standards]
+schema_version = "1.0"
+catalog = "5"
+
+[standards.agent-handoff]
+enabled = true
+version = "latest"
+config = { contract_version = "1.0", harnesses = ["claude-code", "codex"], startup = "automatic" }

@@ -15,6 +15,8 @@ Instructions for AI agents:
 
 ## Agent tasks
 
+- [ ] Refresh Project Standards after upstream issue #80 ships and re-verify automatic Agent Handoff startup under the `uv-strict-python` shim.
+
 - [ ] Write and execute the MS-1e validation-corpus and harvest-tooling implementation plan.
 
   Keep the real-corpus harvest, owner label audit, ratification gate, and ADR-0019 flip as the later owner-in-the-loop step.

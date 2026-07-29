@@ -21,8 +21,8 @@ related:
 supersedes: []
 superseded_by: null
 source:
-  - 'https://github.com/L3DigitalNet/project-standards/tree/main/standards/adr'
-  - 'https://github.com/L3DigitalNet/project-standards/tree/main/standards/markdown-frontmatter'
+  - 'https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/adr'
+  - 'https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/markdown-frontmatter'
 confidence: 'high'
 visibility: 'public'
 license: null
@@ -103,10 +103,10 @@ Compliance is self-evident from repo state: **no `.project-standards.yml`** and 
 
 ## More Information
 
-Revisit this decision if the repo gains additional maintainers, joins a fleet-wide documentation/CI pipeline, or the number of managed docs grows to where manual consistency becomes unreliable — at which point adopting the [Markdown Frontmatter Standard](https://github.com/L3DigitalNet/project-standards/tree/main/standards/markdown-frontmatter) and retrofitting the non-ADR docs is the migration path. A future ADR would supersede this one.
+Revisit this decision if the repo gains additional maintainers, joins a fleet-wide documentation/CI pipeline, or the number of managed docs grows to where manual consistency becomes unreliable — at which point adopting the [Markdown Frontmatter Standard](https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/markdown-frontmatter) and retrofitting the non-ADR docs is the migration path. A future ADR would supersede this one.
 
 References:
 
-- [ADR Standard](https://github.com/L3DigitalNet/project-standards/tree/main/standards/adr)
-- [Markdown Frontmatter Standard](https://github.com/L3DigitalNet/project-standards/tree/main/standards/markdown-frontmatter)
-- [Python Tooling SSOT Standard](https://github.com/L3DigitalNet/project-standards/tree/main/standards/python-tooling) — §20 records exceptions as ADRs.
+- [ADR Standard](https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/adr)
+- [Markdown Frontmatter Standard](https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/markdown-frontmatter)
+- [Python Tooling SSOT Standard](https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/python-tooling) — §20 records exceptions as ADRs.
