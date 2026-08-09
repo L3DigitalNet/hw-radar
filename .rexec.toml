@@ -1,0 +1,22 @@
+# rexec repository configuration. See `rexec help config`.
+#
+# Caches are intentionally left at their remote defaults: uv, Go and pnpm all
+# cache outside the synchronized worktree and share one content-addressed store
+# across every workspace on the host. Pinning them to {remote_cache} would
+# fragment that store per repository, not protect anything.
+
+[env]
+# Keep the interpreter environment out of the disposable worktree, so
+# `rexec clean` rebuilds the mirror without discarding a full `uv sync`.
+UV_PROJECT_ENVIRONMENT = "{remote_cache}/python-env"
+
+[provision.debian]
+# Native build/runtime dependencies this repository adds to the host baseline.
+packages = ["libpq-dev"]
+
+[provision.tools]
+# Probed, never installed: `rexec setup` names a missing toolchain up front
+# instead of letting the run fail as "command not found" mid-suite.
+
+[provision.tools.uv]
+probe = "uv --version"
