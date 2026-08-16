@@ -4,7 +4,10 @@
 
 - MS-0 and MS-1a through MS-1d are implemented and merged: Django/TimescaleDB foundation, ingestion substrate, matching, catalog seed, five connectors, and availability heartbeat.
 - All marketplace sources ship disabled; scoring and alerting are not implemented.
-- Source go-live remains gated by the SA-004 operations checklist, bounded-retention expiry enforcement, and the eBay listing soft-delete path.
+- Bounded-retention expiry enforcement, eBay listing-grain delete-on-delist (CR-004), and the
+  per-lane scheduling-state split (ADR-0020) landed on `dev` (`5a7f5b7`, 2026-08-16).
+- Source go-live now remains gated by the SA-004 operations checklist and the MS-1e owner
+  ratification step, not by missing code.
 - MS-1e's validation-corpus harness and harvest tooling are merged to `main` and DEPLOYED
   (PR #20, release `1099f766`, healthz-verified 2026-08-16): the Approach-A evaluator, `EvalReport`
   with `precision_verdict`/`audit_gate`, the pure `ms1_ratification_gate`, the `harvest_corpus`

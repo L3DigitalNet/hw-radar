@@ -21,18 +21,27 @@ Instructions for AI agents:
   `manage.py harvest_corpus --all --limit …`, draft labels, have the owner audit a random ~20%
   sample plus every matcher-disagreement entry, run the full verification gate once as the single
   authorizing evidence, and on `ms1_ratification_gate == PASS` flip ADR-0019 to accepted.
+  All code-side go-live gates (sweeper, eBay soft-delete, lane-state split) are now clear; this is
+  the next owner step.
 
-- [ ] Implement bounded-retention expiry enforcement before enabling any bounded source.
-
-- [ ] Implement the eBay listing-grain delete-on-delist soft-delete path before eBay go-live.
-
-- [x] Resolve the shared fast/slow-lane scheduling state before enabling a fast-lane source.
-
-  Done in ADR-0020: `SourceLaneState` holds `current_interval_s`, `clean_polls`, and `backoff_until`
-  per `(source_config, lane)`. Failure counters and `lifecycle_state` stay source-level by design.
-
-- [ ] Complete connector follow-ups for WD enterprise recert discovery and Scrapy diagnostics.
-
-- [ ] Add the remaining DB-level family-agreement veto regression and SanDisk/WD real-corpus alias verification.
+- [ ] Add the remaining SanDisk/WD real-corpus alias verification.
+  Blocked on the owner-gated harvest / first SSD seed.
 
 - [ ] Deliberately enable sources only after their operational and source-specific gates pass.
+
+- [ ] Give the Seller table a retention policy (currently always NULL); needed once IR-002
+  redaction reaches merchant usernames.
+
+- [ ] Add a partial index on `expires_at` for retention-sweep efficiency (needs a migration).
+
+- [ ] Make refdata/refresh skip delisted rows via `not_delisted()`.
+
+- [ ] Add `report.redactions` to the poller retention-sweep log line.
+
+- [ ] Add a registry-level test pairing deletion-exemption with redaction for future anchor models.
+
+- [ ] Move `DelistScope`/`DelistDetector` and `adapter_retention()` to `acquisition/contracts.py`.
+
+- [ ] Add a cadence-aware guard for the 6h absence grace after long pauses.
+
+- [ ] Decide the WD Purple recert opt-in question.
