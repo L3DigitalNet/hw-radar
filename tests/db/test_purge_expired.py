@@ -1,5 +1,5 @@
 """DR-001 sweeper behavior against the real schema: hypertables, composite PKs,
-cascades, and the anchor rows the sweep must leave alone."""
+cascades, and the per-row delete-or-redact policy."""
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -12,9 +12,11 @@ from django.utils import timezone
 from hw_radar.catalog.management.commands import purge_expired
 from hw_radar.catalog.management.commands.purge_expired import sweep_expired
 from hw_radar.catalog.models import (
+    BOUNDED_RETENTION_CLASSES,
     AvailabilityHeartbeatObservation,
     HeartbeatDecision,
     Listing,
+    ListingResolution,
     OfferSnapshot,
     RawPayload,
     RetentionClass,
@@ -53,18 +55,45 @@ def _payload(key: str, retention_class: RetentionClass, expires_at: datetime | N
     )
 
 
-def _listing(site: SourceSite, key: str, expires_at: datetime | None) -> Listing:
+def _listing(
+    site: SourceSite,
+    key: str,
+    expires_at: datetime | None,
+    retention_class: RetentionClass | None = None,
+) -> Listing:
+    # Default class follows expires_at because most cases here only care whether
+    # the row is bounded; the retention-policy tests pass it explicitly, since
+    # WHICH bounded class a listing carries is exactly what decides its fate.
     return Listing.objects.create(
         source_site=site,
         source_listing_key=key,
         canonical_url=f"https://example.invalid/{key}",
         url_hash=key.ljust(64, "b"),
         title_raw=f"Drive {key}",
-        retention_class=(
+        retention_class=retention_class
+        or (
             RetentionClass.EBAY_LISTING_OBSERVATION if expires_at else RetentionClass.MERCHANT_FACT
         ),
         expires_at=expires_at,
     )
+
+
+def _superseded_chain(listing: Listing) -> tuple[ListingResolution, ListingResolution]:
+    """Give `listing` a superseded resolution edge plus the current one.
+
+    Grain NONE keeps the fixture free of identity rows while still satisfying the
+    grain/target coherence CHECK; what matters here is only that the superseded_by
+    link exists, because that is the PROTECT that aborts a careless sweep.
+    """
+    old = ListingResolution.objects.create(
+        listing=listing, matcher_version="1.0.0", is_current=False
+    )
+    current = ListingResolution.objects.create(
+        listing=listing, matcher_version="1.0.1", is_current=True
+    )
+    old.superseded_by = current
+    old.save(update_fields=["superseded_by"])
+    return old, current
 
 
 def _snapshot(
@@ -126,10 +155,10 @@ def test_unexpired_and_indefinite_rows_survive(site: SourceSite) -> None:
 
 
 def test_expired_listing_survives_as_an_audit_anchor(site: SourceSite) -> None:
-    # Listing is a retention ANCHOR: deleting it would cascade into
-    # listing_resolution and destroy the DR-010 trail, so an expired listing row
-    # stays and DR-008 is met by deleting its observation rows instead. The
-    # snapshots here carry the eBay bounded class, exactly as append_snapshot
+    # An eBay-class listing earns the deletion exemption through the
+    # delete-on-delist contract: the row stays as the DR-010 audit anchor, and
+    # DR-008 is met by deleting its observation rows and redacting its content.
+    # The snapshots here carry the eBay bounded class, exactly as append_snapshot
     # copies it from the listing in production.
     expired = _listing(site, "expired-anchor", PAST)
     _snapshot(
@@ -162,6 +191,65 @@ def test_dry_run_never_promises_to_delete_an_anchor(site: SourceSite) -> None:
     report = sweep_expired(now=NOW, dry_run=True)
 
     assert "catalog.Listing" not in report.counts
+
+
+def test_expired_listing_without_the_delist_contract_is_deleted(site: SourceSite) -> None:
+    # DR-001 plain reading for bounded classes that sign no delete-on-delist
+    # contract (spec :269 amazon_ephemeral 24h, :276 transient_discovery TTL 0):
+    # the row expires and goes. The exemption belongs to the contract, not to the
+    # table — a model-wide anchor rule would have retained these forever.
+    ephemeral = _listing(site, "amazon-ephemeral", PAST, RetentionClass.AMAZON_EPHEMERAL)
+    discovery = _listing(site, "serp-discovery", PAST, RetentionClass.TRANSIENT_DISCOVERY)
+    ebay = _listing(site, "ebay-kept", PAST, RetentionClass.EBAY_LISTING_OBSERVATION)
+
+    report = sweep_expired(now=NOW)
+
+    assert report.counts["catalog.Listing"] == 2
+    assert not Listing.objects.filter(pk__in=[ephemeral.pk, discovery.pk]).exists()
+    assert Listing.objects.filter(pk=ebay.pk).exists()  # contract-exempt, redacted instead
+    assert report.redactions["catalog.Listing"] == 1
+
+
+def test_expired_unobligated_listing_with_history_is_redacted_not_deleted(
+    site: SourceSite,
+) -> None:
+    # The judgment call, pinned: when DR-001 says delete but DR-010 says the audit
+    # trail is append-only, the trail wins and content redaction carries DR-001's
+    # actual concern. Deleting would cascade the edges away — and with a
+    # superseded_by chain it would raise ProtectedError and abort the whole pass,
+    # so this also pins that the sweep completes.
+    kept = _listing(site, "amazon-with-history", PAST, RetentionClass.AMAZON_EPHEMERAL)
+    old, current = _superseded_chain(kept)
+
+    report = sweep_expired(now=NOW)
+
+    kept.refresh_from_db()
+    assert Listing.objects.filter(pk=kept.pk).exists()
+    assert kept.is_content_redacted()  # DR-001: no merchant content retained
+    assert kept.title_raw == ""
+    assert kept.canonical_url == ""
+    assert report.redactions["catalog.Listing"] == 1
+    assert "catalog.Listing" not in report.counts
+    old.refresh_from_db()
+    assert old.superseded_by_id == current.pk  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no <field>_id stubs
+    assert ListingResolution.objects.filter(listing=kept).count() == 2
+
+
+def test_sweep_deletes_and_redacts_the_same_table_in_one_pass(site: SourceSite) -> None:
+    # Exemption is per row, so one table can appear in both counters. A reader of
+    # the report must be able to tell the two apart.
+    deleted = _listing(site, "amazon-gone", PAST, RetentionClass.AMAZON_EPHEMERAL)
+    redacted = _listing(site, "ebay-stripped", PAST, RetentionClass.EBAY_LISTING_OBSERVATION)
+
+    report = sweep_expired(now=NOW)
+
+    assert report.counts["catalog.Listing"] == 1
+    assert report.redactions["catalog.Listing"] == 1
+    assert report.total == 1  # deletions only
+    assert report.total_redacted == 1
+    assert not Listing.objects.filter(pk=deleted.pk).exists()
+    redacted.refresh_from_db()
+    assert redacted.is_content_redacted()
 
 
 def test_row_refreshed_between_select_and_delete_survives(
@@ -226,3 +314,21 @@ def test_command_reports_counts(site: SourceSite) -> None:
 
     call_command("purge_expired", stdout=out)
     assert RawPayload.objects.count() == 0
+
+
+def test_no_expired_bounded_listing_keeps_its_content(site: SourceSite) -> None:
+    # The invariant the delete-or-redact split exists to guarantee, checked over
+    # EVERY bounded class rather than the two the review happened to name. The
+    # class list is read from BOUNDED_RETENTION_CLASSES, so a class added there
+    # later is covered here the day it lands — which is the failure this pins:
+    # a new bounded class that is neither contract-exempt nor deleted would sit
+    # in the table with its merchant content and no test would notice.
+    for index, retention_class in enumerate(BOUNDED_RETENTION_CLASSES):
+        _listing(site, f"bounded-{index}", PAST, retention_class)
+
+    sweep_expired(now=NOW)
+
+    survivors = list(Listing.objects.filter(source_site=site))
+    assert survivors, "the eBay-class row must survive; an empty table would pass vacuously"
+    for listing in survivors:
+        assert listing.is_content_redacted(), listing.retention_class

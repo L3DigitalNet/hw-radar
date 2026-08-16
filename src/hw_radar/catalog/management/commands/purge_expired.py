@@ -21,16 +21,19 @@ BOUNDED_RETENTION_CLASSES *and* whose `expires_at` is in the past. Indefinite
 classes carry NULL `expires_at` (enforced by the `*_retention_ttl_coherent`
 CHECK) and can never match; see `_expired`.
 
-Entity vs observation: retention-governed models split into OBSERVATION tables,
-whose expired rows this command physically deletes, and audit ANCHORS, whose rows
-it must never delete (see `is_retention_anchor` and the retention-role paragraph
-on `catalog.Listing`). Deleting an anchor would cascade into `listing_resolution`
-and destroy the DR-010 audit trail, or trip its `superseded_by` PROTECT and abort
-the whole pass. DR-008's physical-deletion obligation is still met on two fronts:
-every piece of evidence hanging off an anchor is an observation row with its own
-`expires_at` and its own pass here, and the anchor itself is redacted in place
-(`_redact_expired`) so an expired listing keeps only its identity and audit
-metadata — never the merchant's content.
+Delete or redact, decided PER ROW, never per table. Most expired rows are simply
+deleted. A row is kept only if its model claims it through `deletion_exempt_q`
+(see `_deletion_exempt_q`), and a kept row is then stripped of merchant content
+through `redact_expired` (see `_redact_expired`) — so every expired bounded row
+either leaves the database or leaves its content behind. `catalog.Listing` is the
+only model that claims any today, and it claims rows, not the table: an eBay row
+under the delete-on-delist contract, or any row whose deletion would cascade
+`listing_resolution` away and destroy the DR-010 audit trail.
+
+DR-008's physical-deletion obligation is met on both fronts: every piece of
+evidence hanging off a kept listing is an observation row with its own
+`expires_at` and its own pass here, and the kept row itself holds only identity
+and audit metadata — never the merchant's content.
 """
 
 from __future__ import annotations
@@ -43,7 +46,7 @@ from typing import TYPE_CHECKING, Any
 from django.apps import apps
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 from django.db import transaction
-from django.db.models import Model, QuerySet
+from django.db.models import Model, Q, QuerySet
 from django.utils import timezone
 
 from hw_radar.catalog.models.base import BOUNDED_RETENTION_CLASSES, RetentionGoverned
@@ -66,13 +69,13 @@ class SweepReport:
 
     `counts` is deletions only, keyed by `app_label.ModelName`, and includes
     cascades, which are reported under the cascaded model rather than the model
-    whose delete triggered them. Anchor models never appear in it: their rows are
-    not deletable, so a count there would promise a deletion that never happens.
+    whose delete triggered them.
 
-    `redactions` is the anchor half of the same pass — rows kept but stripped of
+    `redactions` is the kept half of the same pass — rows retained but stripped of
     merchant content. The two are separate counters, and `total` stays deletions
     only, because a caller reporting "N rows deleted" must not silently include
-    rows that are still there.
+    rows that are still there. One model can appear in both: exemption is per row,
+    so a sweep may delete some of a table's expired rows and redact the rest.
     """
 
     dry_run: bool
@@ -101,28 +104,38 @@ def retention_governed_models() -> list[type[Model]]:
     )
 
 
-def is_retention_anchor(model: type[Model]) -> bool:
-    """Whether this model's rows are audit anchors that must never be deleted.
+def _deletion_exempt_q(model: type[Model]) -> Q:
+    """Return the model's own predicate for expired rows that must NOT be deleted.
 
-    Cross-file contract: the flag is declared on the model itself — `catalog.
-    Listing` sets `retention_anchor = True` and records the DR-008/DR-010
-    reasoning — and defaults to False here, so a new RetentionGoverned model is
-    swept unless its author opts out deliberately. Anchors stay in
-    `retention_governed_models()`: the registry means "every retention-governed
-    table", and narrowing it would hide a real coverage gap behind an opt-out.
+    Cross-file contract: the policy lives on the model — `catalog.Listing.
+    deletion_exempt_q` decides row by row, and records why each clause earns the
+    exemption. The default is an empty Q, so a model that says nothing has every
+    expired row deleted; a model cannot become exempt by accident, only by
+    declaring the method. Exemption is per ROW on purpose: a model-wide flag once
+    granted every Listing class the audit exemption that only the delete-on-delist
+    contract earns, which would have retained amazon_ephemeral and
+    transient_discovery listings forever, against DR-001.
+
+    Exempt models stay in `retention_governed_models()`: the registry means "every
+    retention-governed table", and narrowing it would hide a real coverage gap
+    behind an opt-out.
     """
-    return bool(getattr(model, "retention_anchor", False))
+    predicate = getattr(model, "deletion_exempt_q", None)
+    return Q() if predicate is None else predicate()
 
 
 def _redact_expired(model: type[Model], now: datetime, *, dry_run: bool) -> int:
-    """Run an anchor model's own redaction pass; return the rows it changed.
+    """Run a model's own redaction pass over its kept rows; return rows changed.
 
-    Cross-file contract with the model, matching `is_retention_anchor`: an anchor
-    that owes redaction exposes `redact_expired(now, dry_run=...)` and decides for
-    itself which of its rows are obligated and which columns are content (see
-    `catalog.Listing.REDACTED_CONTENT_FIELDS`). The sweeper deliberately holds no
-    field list — a column added to Listing must not need an edit here to be
-    covered. An anchor without the method simply keeps its rows intact.
+    Cross-file contract with the model, paired with `_deletion_exempt_q`: a model
+    that keeps expired rows exposes `redact_expired(now, dry_run=...)` and decides
+    for itself which columns are merchant content (see `catalog.Listing.
+    REDACTED_CONTENT_FIELDS`). The sweeper deliberately holds no field list — a
+    column added to Listing must not need an edit here to be covered.
+
+    A model with an exemption but no redaction hook keeps its rows whole. That is
+    a retention gap by construction, so any new exemption must arrive with this
+    method; nothing here can detect the omission.
     """
     redactor = getattr(model, "redact_expired", None)
     if redactor is None:
@@ -136,6 +149,19 @@ def _expired(model: type[Model], now: datetime) -> QuerySet[Model]:
     # let an indefinite class into BOUNDED_RETENTION_CLASSES. The class filter
     # and the timestamp filter are therefore two independent guards, not one.
     return model._default_manager.filter(retention_class__in=_BOUNDED_VALUES, expires_at__lt=now)
+
+
+def _deletable(model: type[Model], now: datetime) -> QuerySet[Model]:
+    """Expired rows this sweep may physically delete.
+
+    Every SELECT, DELETE and stall check in the loop below must use THIS
+    predicate, not `_expired`: the exemption is re-evaluated at delete time, so a
+    row that gained resolution history between selection and deletion drops out
+    and survives instead of cascading its brand-new audit edges away.
+    """
+    exempt = _deletion_exempt_q(model)
+    expired = _expired(model, now)
+    return expired.exclude(exempt) if exempt else expired
 
 
 def _batches(queryset: QuerySet[Model], batch_size: int) -> Iterator[list[Any]]:
@@ -155,11 +181,10 @@ def _batches(queryset: QuerySet[Model], batch_size: int) -> Iterator[list[Any]]:
 def sweep_expired(
     *, now: datetime | None = None, dry_run: bool = False, batch_size: int = DEFAULT_BATCH_SIZE
 ) -> SweepReport:
-    """Delete every expired bounded-retention row, in batches, and report counts.
+    """Retire every expired bounded-retention row, in batches, and report counts.
 
-    Anchor models are never deleted from (`is_retention_anchor`); instead their
-    expired rows are redacted in place (`_redact_expired`), which is how the
-    delete-on-delist obligation is met for a row the audit trail needs to keep.
+    Each expired row is either deleted or redacted, decided per row by the model's
+    `deletion_exempt_q` (see `_deletion_exempt_q`) — never left whole.
 
     With `dry_run=True` nothing is deleted or redacted and the counts are the
     matched-row counts per table — cascade rows are NOT included, because they
@@ -169,28 +194,29 @@ def sweep_expired(
     report = SweepReport(dry_run=dry_run)
     for model in retention_governed_models():
         label = model._meta.label
-        if is_retention_anchor(model):
-            redacted = _redact_expired(model, now, dry_run=dry_run)
-            if redacted:
-                report.redactions[label] += redacted
-            continue
-        expired = _expired(model, now)
+        # Redaction runs BEFORE the delete loop: the two row sets are disjoint by
+        # construction, so the order cannot change the outcome, but a CommandError
+        # from the delete loop must not leave kept rows still holding content.
+        redacted = _redact_expired(model, now, dry_run=dry_run)
+        if redacted:
+            report.redactions[label] += redacted
+        deletable = _deletable(model, now)
         if dry_run:
-            matched = expired.count()
+            matched = deletable.count()
             if matched:
                 report.counts[label] += matched
             continue
-        for pks in _batches(expired, batch_size):
+        for pks in _batches(deletable, batch_size):
             with transaction.atomic():
-                # Re-apply the whole expiry predicate in the DELETE instead of
-                # trusting the pk list: the poller re-observing a listing between
-                # this batch's SELECT and its DELETE pushes expires_at into the
-                # future, and a pk-only delete would destroy the refreshed row.
+                # Re-apply the whole predicate in the DELETE instead of trusting
+                # the pk list: the poller re-observing a listing between this
+                # batch's SELECT and its DELETE pushes expires_at into the future,
+                # and a pk-only delete would destroy the refreshed row.
                 # A cascade spans several statements, so the batch is atomic —
                 # a crash mid-collector must not leave orphaned children behind.
-                _total, per_model = _expired(model, now).filter(pk__in=pks).delete()
+                _total, per_model = _deletable(model, now).filter(pk__in=pks).delete()
             report.counts.update(per_model)
-            if not per_model.get(label) and _expired(model, now).filter(pk__in=pks).exists():
+            if not per_model.get(label) and _deletable(model, now).filter(pk__in=pks).exists():
                 # Rows still selectable as expired after a delete that removed
                 # none of them: the SELECT and the DELETE disagree, so the next
                 # iteration would hand back the same pks forever. (Rows that

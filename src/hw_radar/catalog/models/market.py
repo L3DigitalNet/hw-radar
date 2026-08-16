@@ -10,6 +10,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import ClassVar
 
+from django.apps import apps
 from django.db import models, transaction
 from django.db.models.functions import Coalesce, Now
 from django.utils import timezone
@@ -165,10 +166,11 @@ class Listing(RetentionGoverned):
     """One merchant offer page at the ADR-0010 listing grain.
 
     Delisting (IR-002 / DR-008, CR-004) is a SOFT delete: delisted_at + a
-    DelistReason mark the row terminal, and the row itself stays. A hard delete is
-    not available here — ListingResolution.superseded_by is PROTECT and the edges
-    are the DR-010 audit trail, so destroying a listing would either fail or
-    destroy resolution history. The mark is reversible (mark_relisted): an
+    DelistReason mark the row terminal, and the row itself stays. Delisting never
+    deletes, because a listing with resolution history cannot be destroyed without
+    taking that history with it — ListingResolution.superseded_by is PROTECT and
+    the edges are the DR-010 audit trail, so the delete either fails outright or
+    cascades the trail away. The mark is reversible (mark_relisted): an
     absence-based delist that turns out to be wrong self-heals the moment the
     source shows the listing again, which is what makes the absence heuristics in
     acquisition.pipeline safe to run.
@@ -181,27 +183,30 @@ class Listing(RetentionGoverned):
     expires_at and swept independently, so an offer's prices, payloads and
     heartbeat rows are gone within its TTL whether or not the listing was ever
     marked delisted. What survives is the identity skeleton the audit trail hangs
-    from. Without that split the sweeper either cascades a Listing delete into
-    listing_resolution (destroying the trail) or trips the superseded_by PROTECT
-    and aborts the whole hourly pass.
+    from.
+
+    That survival is EARNED PER ROW, not granted to the table — see
+    deletion_exempt_q(), which is the authority on which rows the retention sweep
+    keeps and which it deletes outright. A blanket table-wide exemption (the
+    earlier shape of this rule) let a bounded class with no delete-on-delist
+    contract — amazon_ephemeral at 24h, transient_discovery at TTL 0 — sit here
+    forever, which is exactly what DR-001 forbids.
 
     REDACTION — what "delete on delist" covers (owner ruling, 2026-08-16):
-    merchant-owned CONTENT goes, the anchor stays. For a source under the
-    obligation (DELETE_ON_DELIST_CLASSES) the fields in REDACTED_CONTENT_FIELDS
-    are blanked in place; pk, source_listing_key, resolution edges, delist marks
-    and retention metadata survive, so the DR-010 trail still reads as "this
-    listing existed, resolved to X, and ended at T" without holding the
-    merchant's title, URL or page payload. Two independent triggers converge on
-    that same end state — mark_delisted() redacts immediately, and redact_expired()
-    catches obligated rows whose TTL lapsed while delist detection missed them —
-    because absence-based detection is a heuristic and the obligation is not.
+    merchant-owned CONTENT goes, the anchor stays. The fields in
+    REDACTED_CONTENT_FIELDS are blanked in place; pk, source_listing_key,
+    resolution edges, delist marks and retention metadata survive, so the DR-010
+    trail still reads as "this listing existed, resolved to X, and ended at T"
+    without holding the merchant's title, URL or page payload. Redaction is what
+    every KEPT expired row gets, so a row is never retained with its content:
+      - mark_delisted() redacts immediately, for sources under the
+        delete-on-delist obligation (DELETE_ON_DELIST_CLASSES).
+      - redact_expired() catches every deletion-exempt row whose TTL lapsed —
+        obligated rows whose delist detection missed them, and rows kept only
+        because deleting them would destroy resolution history.
+    Two triggers rather than one because absence-based detection is a heuristic
+    and the obligation is not.
     """
-
-    # Cross-file contract with catalog.management.commands.purge_expired
-    # (is_retention_anchor): the sweeper reads this attribute and never row-
-    # deletes a model that sets it. Default is False, so a newly added
-    # RetentionGoverned model is swept unless it opts out here deliberately.
-    retention_anchor: ClassVar[bool] = True
 
     # Merchant-owned content, mapped to the blank value redaction writes. Every
     # entry must be a field whose column tolerates the blank at the database
@@ -399,8 +404,53 @@ class Listing(RetentionGoverned):
         )
 
     @classmethod
+    def deletion_exempt_q(cls) -> models.Q:
+        """Which expired rows the retention sweeper must keep instead of deleting.
+
+        Cross-file contract with catalog.management.commands.purge_expired
+        (_deletion_exempt_q, _deletable): the sweeper holds no policy of its own —
+        it deletes every expired bounded row this predicate does not claim, and
+        hands the claimed ones to redact_expired(). The two consumers share this
+        one predicate deliberately, so no expired row can fall between them: an
+        expired bounded listing is either deleted or redacted, never left whole.
+
+        Two ways to earn the exemption, and neither is "because this is a Listing":
+
+        1. The delete-on-delist contract (DELETE_ON_DELIST_CLASSES). eBay requires
+           the offer's data to go when the offer does, and redaction plus a kept
+           audit skeleton is how that was settled (see the REDACTION paragraph).
+           A bounded class WITHOUT such a contract — amazon_ephemeral at 24h,
+           transient_discovery at TTL 0 — gets DR-001's plain reading instead: the
+           row expires and is deleted.
+
+        2. Existing resolution history. Deleting such a row cascades into
+           listing_resolution and destroys the DR-010 append-only trail, or trips
+           the superseded_by PROTECT and aborts the whole hourly pass. Redacting
+           and keeping it is the deliberate trade: DR-001's actual concern is that
+           we stop holding the data, which redaction satisfies in full, while the
+           audit trail is unrecoverable once cascaded away. The rejected
+           alternative was catching ProtectedError per row and falling back — that
+           makes the outcome depend on WHICH shape of history a row happens to
+           have, and leaves plain (unsuperseded) edges silently destroyed.
+
+        Clause 2 is also what makes the sweeper's delete path PROTECT-safe: the
+        only FKs into Listing are OfferSnapshot and ListingResolution (both
+        CASCADE) and SearchObservation.matched_listing (SET_NULL), so a row with
+        no resolution edges cannot raise ProtectedError when collected.
+        """
+        # apps.get_model, not an import: resolution.py imports this module, so a
+        # module-level import of ListingResolution here would be circular.
+        resolution = apps.get_model("catalog", "ListingResolution")
+        return models.Q(retention_class__in=[c.value for c in DELETE_ON_DELIST_CLASSES]) | models.Q(
+            # Exists, not a `resolutions__isnull=False` join: a join multiplies
+            # the row once per edge, which would over-count the dry run and make
+            # the redaction update need a distinct() that .update() rejects.
+            models.Exists(resolution.objects.filter(listing=models.OuterRef("pk")))
+        )
+
+    @classmethod
     def redact_expired(cls, now: datetime, *, dry_run: bool = False) -> int:
-        """Redact obligated anchors whose TTL lapsed; return how many rows changed.
+        """Redact expired rows the sweeper keeps; return how many rows changed.
 
         The safety net behind mark_delisted: delist detection is absence-based and
         can miss (a truncated sweep, a paused source, a poller outage), but the
@@ -408,17 +458,24 @@ class Listing(RetentionGoverned):
         expires_at has passed is one we may no longer show, so it is also one
         whose merchant content we may no longer hold — delist mark or not.
 
+        Scoped to the deletion-exempt set, so a kept row never keeps its content:
+        rows outside it are deleted outright by the sweeper and need no redaction.
+
         Bulk .update() rather than per-row saves: this runs hourly over the whole
         table, and .update() also leaves auto_now columns alone, which is exactly
         what the absence clock needs (see redact_merchant_content).
         """
-        obligated = cls.objects.filter(
-            retention_class__in=[c.value for c in DELETE_ON_DELIST_CLASSES],
-            expires_at__lt=now,
-        ).exclude(**cls.REDACTED_CONTENT_FIELDS)  # already-blank rows are skipped
+        kept = (
+            cls.objects.filter(
+                retention_class__in=[c.value for c in BOUNDED_RETENTION_CLASSES],
+                expires_at__lt=now,
+            )
+            .filter(cls.deletion_exempt_q())
+            .exclude(**cls.REDACTED_CONTENT_FIELDS)  # already-blank rows are skipped
+        )
         if dry_run:
-            return obligated.count()
-        return obligated.update(**cls.REDACTED_CONTENT_FIELDS)
+            return kept.count()
+        return kept.update(**cls.REDACTED_CONTENT_FIELDS)
 
     def mark_relisted(self) -> bool:
         """Clear a terminal mark after the source showed the listing again.
