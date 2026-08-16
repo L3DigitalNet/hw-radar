@@ -71,16 +71,30 @@ Files: `src/hw_radar/matching/eval/{__init__,corpus,evaluate,report}.py`,
   `load_meta(path)` implementing design §3 exactly: source-key whitelist (SA-002),
   grain/target-key consistency invariants, `audit_status` enum,
   `oem_dual_label` flag, USD-only currency (rejects `currency != "USD"`), required
-  `CorpusMeta.observed_at` (fixed ISO-8601 UTC), and corpus-level uniqueness —
+  `CorpusMeta.observed_at` (strictly timezone-aware UTC: naive, malformed, and
+  non-UTC-offset values are rejected; PA-004), strict extra-field rejection
+  (`extra="forbid"` or equivalent on every model level — entry, listing, label,
+  target, variant, meta — so a committed `raw_payload`, seller field, or arbitrary
+  nested key can never slip in; PA-002), and corpus-level uniqueness —
   unique `id` and unique `(source, source_listing_key)` — failing at load before
   any DB writes (protects the distinct-first-observation premise; review SA-004).
   Manufacturer-key membership against the seeded set is
   validated at load time by the evaluator (A2), not hardcoded in the schema.
   Tests: `test_corpus_schema.py` — valid entries at every grain; each consistency
   violation rejected; unknown source key rejected; malformed JSON line rejected;
-  non-USD rejected; both duplicate cases rejected.
-- **A2 — evaluator (`evaluate.py`).** `evaluate_corpus(entries) -> list[Prediction]`
-  (DB-touching): per entry rebuild a `ParsedListing` from `title` + `listing`
+  non-USD rejected; both duplicate cases rejected; extra-field injection rejected
+  at every nesting level (incl. `raw_payload` and seller keys); `observed_at`
+  naive / malformed / non-UTC-offset rejected.
+- **A2 — evaluator (`evaluate.py`).**
+  `evaluate_corpus(entries, meta) -> list[Prediction]` (DB-touching). Isolation
+  contract (PA-001): the evaluator owns no transaction management — the caller
+  wraps each evaluation in a transaction/savepoint it rolls back, and the
+  evaluator writes only inside that scope; `meta.observed_at` is threaded to
+  every `fx.stamp` `observed_date` and `append_snapshot` `observed_at`. Two
+  evaluations of the same corpus in independently rolled-back scopes must be
+  possible and identical (the fixed `observed_at` would otherwise collide on the
+  snapshot composite key if state leaked). Per entry rebuild a `ParsedListing`
+  from `title` + `listing`
   fields, run `fx.stamp` → `upsert_listing` → `append_snapshot` (attrs verbatim →
   `attrs_json`, SA-004; `observed_date`/`observed_at` taken from the corpus's
   fixed `meta.observed_at`, never wall-clock), then `CatalogResolver().resolve_listing(listing.pk)`, and
@@ -122,7 +136,10 @@ Files: `src/hw_radar/matching/eval/{__init__,corpus,evaluate,report}.py`,
   corpus, one unaudited disagreement, sample one below the floor, stale meta
   rollup — each `audit_gate != PASS` and a non-pass composite. Also a DB-backed
   end-to-end run of the synthetic fixture through `evaluate_corpus` against a
-  seeded catalog.
+  seeded catalog, plus a repeat-evaluation determinism test (PA-001): the same
+  corpus evaluated twice in independently rolled-back transactions/savepoints
+  yields identical predictions and identical complete reports, and the persisted
+  snapshot carries exactly `meta.observed_at` (PA-004 enforcement point).
 
 ### Phase B — harvest command
 
@@ -137,6 +154,13 @@ Files: `src/hw_radar/catalog/management/commands/harvest_corpus.py`,
   NFR-001); per-source `harvested`/`skipped_malformed` counts in output; eBay
   skipped (others continue) when `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET` absent;
   refuses `--out` under a git-tracked path without `--allow-repo-output` (SA-006).
+  `skipped_malformed` is defined as post-`parse()` staging-validity rejections
+  (blank `title` or blank `source_listing_key`) — `parse()` returns only validated
+  `ParsedListing` objects, so this is the only malformed class observable at the
+  command boundary; adapter-internal drops of malformed source records are out of
+  scope for this manual tool (accepted residual observability gap, PA-003 — a
+  parse-diagnostics contract across all five production adapters is deliberately
+  not in this milestone's blast radius).
   Staging entries are unlabeled (`id`, `source`, `title`, `listing` (+ optional
   `oem_dual_label` heuristic pre-fill)); the command never invents labels.
 - **B2 — tests.** Fake adapter → JSONL shape + counts; eBay-creds-absent →
