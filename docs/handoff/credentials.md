@@ -15,6 +15,8 @@ Never store credential values in this repository.
 - `HW_RADAR_DB_HOST`
 - `HW_RADAR_DB_PORT`
 - `HW_RADAR_KUMA_PUSH_URL`
+- `EBAY_CLIENT_ID` — OpenBao `secret/api-keys/commerce/ebay`
+- `EBAY_CLIENT_SECRET` — OpenBao `secret/api-keys/commerce/ebay`
 
 ## Reference Pattern
 
