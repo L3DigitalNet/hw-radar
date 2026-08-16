@@ -35,7 +35,7 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
-from hw_radar.acquisition.heartbeat import HeartbeatProbe, run_heartbeat
+from hw_radar.acquisition.heartbeat import HeartbeatProbe, adapter_retention, run_heartbeat
 from hw_radar.acquisition.pipeline import run_source
 from hw_radar.acquisition.scheduling.admission import check_admission
 from hw_radar.acquisition.scheduling.apply import apply_run_outcome
@@ -100,7 +100,18 @@ async def poll_source(site_key: str, registry: BucketRegistry, scheduler: AsyncI
     if factory is None:
         logger.warning("source %s enabled but has no adapter registered", site_key)
         return
-    _run, outcome = await run_source(factory(), CatalogResolver())
+    # DR-001/DR-008: the adapter's own retention must ride along, or run_source
+    # defaults every persisted row to indefinite merchant_fact — eBay evidence
+    # from a scheduled poll would then outlive its 6h window forever, unreachable
+    # by the retention sweeper. tests/db/test_poller_retention_wiring.py pins it.
+    adapter = factory()
+    retention = adapter_retention(adapter)
+    _run, outcome = await run_source(
+        adapter,
+        CatalogResolver(),
+        retention_class=retention.retention_class,
+        expires_policy=retention.expires_policy,
+    )
     interval_before = lane_state.current_interval_s
     await sync_to_async(apply_run_outcome)(
         config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
@@ -223,7 +234,17 @@ async def recovery_probe_job(registry: BucketRegistry) -> None:
         if not decision.admitted:
             logger.info("probe for %s not admitted: %s", key, decision.reason)
             continue
-        _run, outcome = await run_source(factory(), CatalogResolver(), run_kind=RunKind.PROBE)
+        # A probe persists real rows, so it forwards retention exactly as
+        # poll_source does; see the comment there for the failure it prevents.
+        adapter = factory()
+        retention = adapter_retention(adapter)
+        _run, outcome = await run_source(
+            adapter,
+            CatalogResolver(),
+            retention_class=retention.retention_class,
+            expires_policy=retention.expires_policy,
+            run_kind=RunKind.PROBE,
+        )
         await sync_to_async(apply_run_outcome)(
             config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
         )

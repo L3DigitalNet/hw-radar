@@ -10,6 +10,13 @@ outcome from one lane can never disturb the other; source-wide health
 (lifecycle, failure counters, last-run stamps) lands on SourceConfig, shared by
 both lanes. Both rows move inside one transaction, so a crash can never leave a
 source backed off on paper but ramping in the scheduler.
+
+Because the two lanes are separate APScheduler jobs, they can be inside this
+function at the same time — max_instances=1 is per job id, not across job ids —
+and the SourceConfig row they share is read-modify-write state. Every decision
+is therefore computed from rows re-read FOR UPDATE inside the transaction; see
+apply_run_outcome for the lock order and what the caller's instances mean
+afterwards.
 """
 
 from __future__ import annotations
@@ -69,21 +76,26 @@ def ramp_floor_s(config: SourceConfig, lane: SchedulingLane) -> int:
     return config.cadence_ceiling_s
 
 
-def apply_run_outcome(
+_CONFIG_MANAGED_FIELDS = (
+    "lifecycle_state",
+    "consecutive_failures",
+    "consecutive_parser_rot",
+    "last_run_at",
+    "last_success_at",
+    "updated_at",
+)
+_LANE_MANAGED_FIELDS = ("clean_polls", "current_interval_s", "backoff_until", "updated_at")
+
+
+def _apply_locked(
     config: SourceConfig,
+    lane_state: SourceLaneState,
     outcome: RunOutcome,
     *,
-    lane_state: SourceLaneState,
     now: datetime,
     rand: Callable[[], float],
 ) -> None:
-    """Apply one run's outcome to its lane's cadence state and the source's health.
-
-    `lane_state` must be the row for the lane the run belongs to (full lane for
-    RunKind.FULL and RunKind.PROBE, heartbeat lane for RunKind.HEARTBEAT); both
-    it and `config` are mutated in place so the caller can compare intervals for
-    an in-place reschedule without re-reading the database.
-    """
+    """Mutate the two locked rows in memory. Caller owns the transaction and saves."""
     event = outcome.event
     lane = SchedulingLane(lane_state.lane)
     new_state = transition(
@@ -117,17 +129,48 @@ def apply_run_outcome(
         lane_state.backoff_until = now + timedelta(seconds=delay_s)
 
     config.lifecycle_state = new_state
+
+
+def apply_run_outcome(
+    config: SourceConfig,
+    outcome: RunOutcome,
+    *,
+    lane_state: SourceLaneState,
+    now: datetime,
+    rand: Callable[[], float],
+) -> None:
+    """Apply one run's outcome to its lane's cadence state and the source's health.
+
+    `lane_state` must identify the lane the run belongs to (full lane for
+    RunKind.FULL and RunKind.PROBE, heartbeat lane for RunKind.HEARTBEAT).
+
+    The two arguments are used as row identity, not as input state: the shared
+    SourceConfig row is read-modify-write state that the other lane's job may
+    have advanced since the caller loaded it, so both rows are re-read FOR
+    UPDATE inside the transaction and every counter, ladder step and lifecycle
+    transition is computed from those locked values. Without that, two lanes
+    failing concurrently each read consecutive_failures=0 and both write 1 — the
+    escalation to paused_pending_fix never fires — and a stale heartbeat success
+    can resurrect a source the full lane just paused for parser rot.
+
+    Both callers' instances are refreshed in place from the committed rows, so
+    the poller can still compare intervals for an in-place reschedule without
+    another query. Unsaved local edits to the managed fields are therefore
+    discarded rather than persisted; write them to the database first if they
+    are meant to be inputs.
+    """
     with transaction.atomic():
-        config.save(
-            update_fields=[
-                "lifecycle_state",
-                "consecutive_failures",
-                "consecutive_parser_rot",
-                "last_run_at",
-                "last_success_at",
-                "updated_at",
-            ]
-        )
-        lane_state.save(
-            update_fields=["clean_polls", "current_interval_s", "backoff_until", "updated_at"]
-        )
+        # Lock order is config row then lane row, in this order on every path.
+        # Both lanes take the same shared config row first and only ever their
+        # OWN lane row second, so no two transactions can hold locks the other
+        # needs — a reversed order here would introduce a real deadlock cycle.
+        locked_config = SourceConfig.objects.select_for_update().get(pk=config.pk)
+        locked_lane = SourceLaneState.objects.select_for_update().get(pk=lane_state.pk)
+        _apply_locked(locked_config, locked_lane, outcome, now=now, rand=rand)
+        locked_config.save(update_fields=list(_CONFIG_MANAGED_FIELDS))
+        locked_lane.save(update_fields=list(_LANE_MANAGED_FIELDS))
+
+    for field in _CONFIG_MANAGED_FIELDS:
+        setattr(config, field, getattr(locked_config, field))
+    for field in _LANE_MANAGED_FIELDS:
+        setattr(lane_state, field, getattr(locked_lane, field))

@@ -14,7 +14,12 @@ from django.utils import timezone
 
 from hw_radar.acquisition.scheduling.apply import RunOutcome, apply_run_outcome
 from hw_radar.acquisition.scheduling.lifecycle import LifecycleEvent
-from hw_radar.catalog.models import SchedulingLane, SourceConfig, SourceLaneState
+from hw_radar.catalog.models import (
+    LifecycleState,
+    SchedulingLane,
+    SourceConfig,
+    SourceLaneState,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -168,3 +173,69 @@ def test_lane_row_is_created_on_demand_when_heartbeat_is_enabled_later() -> None
     lane = config.lane_state(SchedulingLane.HEARTBEAT)
     assert lane.pk is not None
     assert lane.current_interval_s == config.cadence_baseline_s
+
+
+# The two lanes are separate APScheduler jobs, so max_instances=1 does not keep
+# them out of apply_run_outcome at the same time. Both tests below reproduce that
+# overlap deterministically — each "job" holds a SourceConfig instance it loaded
+# BEFORE the other job committed — which is exactly the shape a threaded test
+# would produce, without its scheduling nondeterminism.
+def test_concurrent_lane_failures_both_count_toward_escalation() -> None:
+    config = _config("serverpartdeals")
+    full_lane = config.lane_state(SchedulingLane.FULL)
+    heartbeat_lane = config.lane_state(SchedulingLane.HEARTBEAT)
+    full_view = SourceConfig.objects.get(pk=config.pk)
+    heartbeat_view = SourceConfig.objects.get(pk=config.pk)  # loaded before either applied
+
+    apply_run_outcome(
+        full_view,
+        RunOutcome(LifecycleEvent.PARSER_ROT),
+        lane_state=full_lane,
+        now=timezone.now(),
+        rand=lambda: _MAX_JITTER,
+    )
+    apply_run_outcome(
+        heartbeat_view,
+        RunOutcome(LifecycleEvent.PARSER_ROT),
+        lane_state=heartbeat_lane,
+        now=timezone.now(),
+        rand=lambda: _MAX_JITTER,
+    )
+
+    config.refresh_from_db()
+    # Last-writer-wins on the stale snapshots would leave both counters at 1 and
+    # the source ACTIVE-ish, so ADR-0017's two-strike parser-rot breaker would
+    # never trip while the site kept serving unparseable pages.
+    assert config.consecutive_failures == 2
+    assert config.consecutive_parser_rot == 2
+    assert config.lifecycle_state == LifecycleState.PAUSED_PENDING_FIX
+
+
+def test_stale_heartbeat_success_cannot_resurrect_a_paused_source() -> None:
+    config = _config("serverpartdeals")
+    full_lane = config.lane_state(SchedulingLane.FULL)
+    heartbeat_lane = config.lane_state(SchedulingLane.HEARTBEAT)
+    heartbeat_view = SourceConfig.objects.get(pk=config.pk)  # snapshot taken while ACTIVE
+
+    apply_run_outcome(
+        SourceConfig.objects.get(pk=config.pk),
+        RunOutcome(LifecycleEvent.ANTI_BOT),  # circuit-breaks straight to paused
+        lane_state=full_lane,
+        now=timezone.now(),
+        rand=lambda: _MAX_JITTER,
+    )
+    apply_run_outcome(
+        heartbeat_view,
+        RunOutcome(LifecycleEvent.SUCCESS),
+        lane_state=heartbeat_lane,
+        now=timezone.now(),
+        rand=random.random,
+    )
+
+    config.refresh_from_db()
+    # Only ADR-0017's recovery PROBE reactivates a paused source. Computing the
+    # transition from the stale ACTIVE snapshot would have returned ACTIVE here,
+    # silently un-pausing a source a human was supposed to look at.
+    assert config.lifecycle_state == LifecycleState.PAUSED_PENDING_FIX
+    # The caller's instance is refreshed from the committed row, not left stale.
+    assert heartbeat_view.lifecycle_state == LifecycleState.PAUSED_PENDING_FIX

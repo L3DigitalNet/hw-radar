@@ -264,6 +264,7 @@ def test_apply_success_ramps_and_clears_backoff() -> None:
     lane = config.lane_state(SchedulingLane.FULL)
     lane.clean_polls = 3
     lane.backoff_until = timezone.now() + timedelta(hours=1)
+    lane.save()  # apply_run_outcome re-reads the row FOR UPDATE, so seed the DB
     now = timezone.now()
     apply_run_outcome(
         config, RunOutcome(LifecycleEvent.SUCCESS), lane_state=lane, now=now, rand=random.random
@@ -282,6 +283,7 @@ def test_apply_transient_backs_off_and_resets_interval() -> None:
     config = SourceConfig.objects.get(source_site__normalized_name="demo")
     lane = config.lane_state(SchedulingLane.FULL)
     lane.current_interval_s = 900
+    lane.save()  # apply_run_outcome re-reads the row FOR UPDATE, so seed the DB
     now = timezone.now()
     apply_run_outcome(
         config,
