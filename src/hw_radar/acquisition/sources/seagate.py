@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import cast
 
 import httpx
@@ -127,12 +127,19 @@ class SeagateAdapter:
                 if price is None:
                     self.last_parse_skipped += 1
                     continue
+                try:
+                    entry_price = Decimal(str(price))
+                except InvalidOperation:
+                    # A junk final_price is a bad record, not a page break: skip
+                    # it so sibling SKUs in the bootstrap blob still parse.
+                    self.last_parse_skipped += 1
+                    continue
                 out.append(
                     ParsedListing(
                         source_listing_key=sku,
                         url=CATEGORY_URL,
                         title=f"Seagate {sku} Recertified",
-                        price=Decimal(str(price)),
+                        price=entry_price,
                         stock_status=_stock_status(entry.get("stock_status")),
                         raw_url=item.url,  # per-item raw-payload association (Task B4)
                     )

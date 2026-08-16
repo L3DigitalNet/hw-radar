@@ -122,6 +122,9 @@ def test_seagate_reconciles_valid_and_malformed_bootstrap_entries() -> None:
         "ST18000NM000J": {"final_price": "219.00", "stock_status": "IN_STOCK"},
         "ST16000NM000J": {"stock_status": "IN_STOCK"},
         "ST14000NM001G": "not-a-dict",
+        # Un-Decimal-able final_price is a bad record, not a page break: it must
+        # skip without aborting the sibling SKUs (InvalidOperation regression).
+        "ST12000NM0007": {"final_price": "TBD", "stock_status": "IN_STOCK"},
     }
     html = f'<html><script id="sku-bootstrap-data">{json.dumps(bootstrap)}</script></html>'
     adapter = SeagateAdapter()
@@ -134,7 +137,7 @@ def test_seagate_reconciles_valid_and_malformed_bootstrap_entries() -> None:
     )
 
     assert [p.source_listing_key for p in parsed] == ["ST18000NM000J"]
-    assert adapter.last_parse_skipped == 2
+    assert adapter.last_parse_skipped == 3
 
 
 def test_goharddrive_reconciles_priceless_product_blocks() -> None:
@@ -153,13 +156,19 @@ def test_goharddrive_reconciles_priceless_product_blocks() -> None:
             "https://www.goharddrive.com/exos-x14-p/st14000nm001g.htm",
             {"title": "Seagate Exos X14 14TB", "price_text": "Call for price"},
         ),
+        _json_item(
+            "https://www.goharddrive.com/exos-x12-p/st12000nm0007.htm",
+            # Digit-stripping leaves "1.2.3" — non-empty but un-Decimal-able; must
+            # skip this block, not abort the batch (InvalidOperation regression).
+            {"title": "Seagate Exos X12 12TB", "price_text": "v1.2.3"},
+        ),
     ]
     adapter = GoHardDriveAdapter()
 
     parsed = adapter.parse(_batch("goharddrive", items))
 
     assert [p.source_listing_key for p in parsed] == ["st18000nm000j"]
-    assert adapter.last_parse_skipped == 2
+    assert adapter.last_parse_skipped == 3
 
 
 def test_skip_count_is_reset_per_parse_call() -> None:

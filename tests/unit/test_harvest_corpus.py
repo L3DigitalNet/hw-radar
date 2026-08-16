@@ -218,7 +218,10 @@ def test_source_failure_does_not_halt_sweep(
 
     entries, meta = _read_staging(tmp_path)
     assert meta["sources"]["serverpartdeals"]["status"] == "error"
-    assert "upstream 503" in meta["sources"]["serverpartdeals"]["error"]
+    # Type name only: the persisted manifest must never carry exception detail
+    # (request URLs / token-exchange text); the full repr goes to stderr.
+    assert meta["sources"]["serverpartdeals"]["error"] == "RuntimeError"
+    assert "upstream 503" not in json.dumps(meta)
     assert [e["id"] for e in entries] == ["goharddrive:GHD-1"]
 
 

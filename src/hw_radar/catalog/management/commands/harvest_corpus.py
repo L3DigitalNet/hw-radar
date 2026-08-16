@@ -208,7 +208,11 @@ class Command(BaseCommand):
                 "status": "error",
                 "harvested": 0,
                 "skipped_malformed": 0,
-                "error": repr(exc),
+                # Type name only: a full repr can carry request URLs or
+                # token-exchange detail, and this manifest may be written under
+                # a tracked path via --allow-repo-output. Full repr goes to
+                # stderr above, which is never persisted.
+                "error": type(exc).__name__,
             }
 
         # Truncate BEFORE the staging-validity filter: --limit caps parsed listings
