@@ -7,8 +7,11 @@ from decimal import Decimal
 import pytest
 from django.db import IntegrityError, transaction
 from django.db.models import ProtectedError
+from django.utils import timezone
 
+from hw_radar.catalog.management.commands.purge_expired import sweep_expired
 from hw_radar.catalog.models import (
+    BOUNDED_RETENTION_CLASSES,
     Category,
     DelistReason,
     Listing,
@@ -24,8 +27,17 @@ from hw_radar.catalog.models import (
     StockStatus,
 )
 
-T0 = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)
-TTL = T0 + timedelta(hours=6)  # the eBay DR-008 freshness bound
+T0 = datetime(2026, 7, 4, 12, 0, 0, tzinfo=UTC)  # the delist instant these tests stamp
+
+
+def _live_ttl() -> datetime:
+    """A DR-008 six-hour window that is still open against the DATABASE clock.
+
+    active() compares expires_at with SQL Now(), so a TTL frozen in this module's
+    2026-07-04 test epoch would read as expired and quietly empty every
+    live-offer assertion below.
+    """
+    return timezone.now() + timedelta(hours=6)
 
 
 @pytest.fixture
@@ -42,8 +54,10 @@ def _listing(
     key: str,
     *,
     retention_class: RetentionClass = RetentionClass.EBAY_LISTING_OBSERVATION,
-    expires_at: datetime | None = TTL,
+    expires_at: datetime | None = None,
 ) -> Listing:
+    if expires_at is None and retention_class in BOUNDED_RETENTION_CLASSES:
+        expires_at = _live_ttl()
     return Listing.objects.create(
         source_site=site,
         source_listing_key=key,
@@ -91,7 +105,7 @@ def test_delist_pulls_bounded_evidence_ttl_forward(site: SourceSite) -> None:
         item_price=Decimal("199.99"),
         stock_status=StockStatus.IN_STOCK,
         retention_class=RetentionClass.EBAY_LISTING_OBSERVATION,
-        expires_at=TTL,
+        expires_at=_live_ttl(),
     )
 
     listing.mark_delisted(DelistReason.ABSENT_FROM_SWEEP, when=T0)
@@ -136,6 +150,42 @@ def test_active_and_delisted_managers_partition_the_rows(site: SourceSite) -> No
     assert list(Listing.objects.active().filter(source_site=site)) == [live]
     assert list(Listing.objects.delisted().filter(source_site=site)) == [gone]
     assert Listing.objects.filter(source_site=site).count() == 2  # nothing was deleted
+
+
+def _superseded_chain(listing: Listing) -> tuple[ListingResolution, ListingResolution]:
+    """Give `listing` a two-edge resolution history: a superseded edge and the
+    current one. The superseded_by link is what makes a hard delete of the
+    listing raise ProtectedError rather than silently cascading."""
+    seagate = Manufacturer.objects.get_or_create(
+        normalized_name="seagate-delist-test", defaults={"name": "Seagate"}
+    )[0]
+    category = Category.objects.get_or_create(slug="drive", defaults={"name": "Drive"})[0]
+    family = ProductFamily.objects.get_or_create(
+        manufacturer=seagate,
+        normalized_name="exos-x18",
+        defaults={"category": category, "name": "Exos X18"},
+    )[0]
+    old = ListingResolution.objects.create(
+        listing=listing,
+        grain=ResolutionGrain.FAMILY,
+        product_family=family,
+        method=ResolutionMethod.EXACT_ALIAS,
+        confidence=0.9,
+        matcher_version="1.0.0",
+        is_current=False,
+    )
+    current = ListingResolution.objects.create(
+        listing=listing,
+        grain=ResolutionGrain.FAMILY,
+        product_family=family,
+        method=ResolutionMethod.EXACT_ALIAS,
+        confidence=0.95,
+        matcher_version="1.0.1",
+        is_current=True,
+    )
+    old.superseded_by = current
+    old.save(update_fields=["superseded_by"])
+    return old, current
 
 
 def test_delist_preserves_the_resolution_audit_trail(site: SourceSite) -> None:
@@ -190,5 +240,59 @@ def test_mark_relisted_restores_the_listing(site: SourceSite) -> None:
     listing.refresh_from_db()
     assert listing.delisted_at is None
     assert listing.delist_reason == ""
+    # Clearing the mark alone does not make the offer showable: mark_delisted
+    # backdated the TTL and mark_relisted deliberately does not restore it, so
+    # the row is live again only once a fresh observation re-stamps expires_at
+    # (in the pipeline, upsert_listing does that immediately before this call).
+    assert list(Listing.objects.not_delisted().filter(source_site=site)) == [listing]
+    assert not Listing.objects.active().filter(source_site=site).exists()
+    Listing.objects.filter(pk=listing.pk).update(expires_at=_live_ttl())
     assert list(Listing.objects.active().filter(source_site=site)) == [listing]
     assert listing.mark_relisted() is False  # already live
+
+
+def test_expired_listing_is_not_active_before_the_sweep_runs(site: SourceSite) -> None:
+    # The sweeper runs hourly, so a lapsed DR-008 window is not enough on its own
+    # to keep a stale offer off the live-offer path; active() applies the window
+    # itself. not_delisted() must still see the row — it is the delist-candidate
+    # set, and an expired listing is exactly what an absence sweep has to mark.
+    stale = _listing(site, "ebay-stale", expires_at=timezone.now() - timedelta(minutes=1))
+    fresh = _listing(site, "ebay-fresh")
+    forever = _listing(site, "spd-forever", retention_class=RetentionClass.MERCHANT_FACT)
+
+    active = set(Listing.objects.active().filter(source_site=site))
+    assert active == {fresh, forever}  # NULL expires_at (indefinite) never ages out
+    assert set(Listing.objects.not_delisted().filter(source_site=site)) == {stale, fresh, forever}
+
+
+def test_delisted_listing_with_history_survives_the_retention_sweep(site: SourceSite) -> None:
+    # The CR-004 x DR-001 combination that neither leg's tests covered: delisting
+    # backdates the listing's own expires_at, which used to make the sweeper
+    # collect the row — cascading away the audit trail, or raising ProtectedError
+    # through superseded_by and aborting the entire hourly pass.
+    listing = _listing(site, "ebay-swept")
+    old, current = _superseded_chain(listing)
+    snapshot = OfferSnapshot.objects.create(
+        listing=listing,
+        observed_at=T0 - timedelta(hours=1),
+        item_price=Decimal("199.99"),
+        stock_status=StockStatus.IN_STOCK,
+        retention_class=RetentionClass.EBAY_LISTING_OBSERVATION,
+        expires_at=_live_ttl(),
+    )
+    listing.mark_delisted(DelistReason.ABSENT_FROM_SWEEP, when=timezone.now())
+
+    report = sweep_expired()  # must complete: no ProtectedError, no cascade
+
+    assert Listing.objects.filter(pk=listing.pk).exists()
+    assert set(ListingResolution.objects.filter(listing=listing).values_list("pk", flat=True)) == {
+        old.pk,
+        current.pk,
+    }
+    old.refresh_from_db()
+    assert old.superseded_by_id == current.pk  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no <field>_id stubs
+    # DR-008 is still satisfied through the evidence side of the split.
+    assert not OfferSnapshot.objects.filter(listing=listing).exists()
+    assert report.counts["catalog.OfferSnapshot"] >= 1
+    assert "catalog.Listing" not in report.counts
+    assert snapshot.pk is not None  # the row existed before the sweep removed it

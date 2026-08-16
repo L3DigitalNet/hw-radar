@@ -1,4 +1,5 @@
-"""DR-001 sweeper behavior against the real schema (hypertables, composite PKs, cascades)."""
+"""DR-001 sweeper behavior against the real schema: hypertables, composite PKs,
+cascades, and the anchor rows the sweep must leave alone."""
 
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -8,6 +9,7 @@ import pytest
 from django.core.management import call_command
 from django.utils import timezone
 
+from hw_radar.catalog.management.commands import purge_expired
 from hw_radar.catalog.management.commands.purge_expired import sweep_expired
 from hw_radar.catalog.models import (
     AvailabilityHeartbeatObservation,
@@ -65,13 +67,20 @@ def _listing(site: SourceSite, key: str, expires_at: datetime | None) -> Listing
     )
 
 
-def _snapshot(listing: Listing, observed_at: datetime) -> OfferSnapshot:
+def _snapshot(
+    listing: Listing,
+    observed_at: datetime,
+    *,
+    retention_class: RetentionClass = RetentionClass.MERCHANT_FACT,
+    expires_at: datetime | None = None,
+) -> OfferSnapshot:
     return OfferSnapshot.objects.create(
         listing=listing,
         observed_at=observed_at,
         item_price=Decimal("100.00"),
         stock_status=StockStatus.IN_STOCK,
-        retention_class=RetentionClass.MERCHANT_FACT,
+        retention_class=retention_class,
+        expires_at=expires_at,
     )
 
 
@@ -116,22 +125,66 @@ def test_unexpired_and_indefinite_rows_survive(site: SourceSite) -> None:
     assert OfferSnapshot.objects.filter(listing=keeper).count() == 1
 
 
-def test_expiring_a_listing_cascades_to_its_snapshots(site: SourceSite) -> None:
-    # OfferSnapshot.listing is CASCADE, so a snapshot cannot outlive its listing
-    # even when the snapshot's own class is indefinite. The cascaded rows must be
-    # reported under OfferSnapshot, not folded into the Listing count.
-    doomed = _listing(site, "doomed", PAST)
-    _snapshot(doomed, PAST)
-    _snapshot(doomed, PAST - timedelta(hours=1))
+def test_expired_listing_survives_as_an_audit_anchor(site: SourceSite) -> None:
+    # Listing is a retention ANCHOR: deleting it would cascade into
+    # listing_resolution and destroy the DR-010 trail, so an expired listing row
+    # stays and DR-008 is met by deleting its observation rows instead. The
+    # snapshots here carry the eBay bounded class, exactly as append_snapshot
+    # copies it from the listing in production.
+    expired = _listing(site, "expired-anchor", PAST)
+    _snapshot(
+        expired, PAST, retention_class=RetentionClass.EBAY_LISTING_OBSERVATION, expires_at=PAST
+    )
+    _snapshot(
+        expired,
+        PAST - timedelta(hours=1),
+        retention_class=RetentionClass.EBAY_LISTING_OBSERVATION,
+        expires_at=PAST,
+    )
     keeper = _listing(site, "keeper", None)
     _snapshot(keeper, PAST)
 
     report = sweep_expired(now=NOW)
 
-    assert report.counts["catalog.Listing"] == 1
+    assert "catalog.Listing" not in report.counts  # never promised, never deleted
     assert report.counts["catalog.OfferSnapshot"] == 2
-    assert list(Listing.objects.values_list("source_listing_key", flat=True)) == ["keeper"]
+    assert sorted(Listing.objects.values_list("source_listing_key", flat=True)) == [
+        "expired-anchor",
+        "keeper",
+    ]
+    assert not OfferSnapshot.objects.filter(listing=expired).exists()  # evidence is gone
     assert OfferSnapshot.objects.filter(listing=keeper).count() == 1
+
+
+def test_dry_run_never_promises_to_delete_an_anchor(site: SourceSite) -> None:
+    _listing(site, "expired-anchor", PAST)
+
+    report = sweep_expired(now=NOW, dry_run=True)
+
+    assert "catalog.Listing" not in report.counts
+
+
+def test_row_refreshed_between_select_and_delete_survives(
+    site: SourceSite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The poller re-observing a source extends expires_at. If the DELETE trusted
+    # the pk batch collected by the SELECT, that refreshed row would be destroyed
+    # despite no longer being expired. Simulate the interleaving by refreshing the
+    # row inside the batch generator, i.e. after selection and before deletion.
+    payload = _payload("racy", RetentionClass.EBAY_LISTING_OBSERVATION, PAST)
+    real_batches = purge_expired._batches  # pyright: ignore[reportPrivateUsage]
+
+    def racing_batches(queryset: object, batch_size: int) -> object:
+        for pks in real_batches(queryset, batch_size):  # pyright: ignore[reportArgumentType]
+            RawPayload.objects.filter(pk__in=pks).update(expires_at=FUTURE)
+            yield pks
+
+    monkeypatch.setattr(purge_expired, "_batches", racing_batches)
+
+    report = sweep_expired(now=NOW)  # must terminate, not spin on the same pks
+
+    assert RawPayload.objects.filter(pk=payload.pk).exists()
+    assert report.counts["catalog.RawPayload"] == 0
 
 
 def test_dry_run_reports_without_deleting(site: SourceSite) -> None:

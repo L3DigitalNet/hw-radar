@@ -10,7 +10,7 @@ from decimal import Decimal
 from typing import ClassVar
 
 from django.db import models
-from django.db.models.functions import Coalesce
+from django.db.models.functions import Coalesce, Now
 from django.utils import timezone
 
 from hw_radar.catalog.models.base import (
@@ -96,9 +96,44 @@ class DelistReason(models.TextChoices):
 class ListingQuerySet(models.QuerySet["Listing"]):
     """Live-offer read path. Every caller that means "offers a user could buy"
     must go through active(): a delisted listing keeps its row, its snapshots and
-    its resolution edges (DR-010 audit trail) and is excluded by predicate only."""
+    its resolution edges (DR-010 audit trail) and is excluded by predicate only.
+
+    The three predicates are NOT interchangeable:
+      active()       — showable to a user: neither delisted nor past its
+                       freshness window.
+      not_delisted() — no terminal mark, freshness irrelevant. This, not
+                       active(), is the delist-CANDIDATE set: a listing whose
+                       TTL lapsed is precisely the one an absence sweep still
+                       has to mark, and filtering it out first would make the
+                       stale-absence path unreachable.
+      delisted()     — carries a terminal mark.
+
+    FIXME(owned by the acquisition-pipeline leg, one-line change):
+    acquisition.pipeline._apply_delist still builds its candidate set from
+    active(). Since a bounded listing's expires_at and last_seen advance
+    together on every observation, a listing becomes grace-eligible for
+    DelistReason.ABSENT_STALE at the same moment its TTL lapses — so the
+    freshness clause hides exactly the rows that path exists to mark, and no
+    stale-absence delist is ever recorded. It must call not_delisted().
+    """
 
     def active(self) -> ListingQuerySet:
+        # Two independent ways to stop being a live offer, and the second is not
+        # redundant with the retention sweeper: the sweep runs hourly, so between
+        # two passes a bounded eBay listing can sit hours past the DR-008 six-hour
+        # freshness window. Showing it would breach the very obligation the TTL
+        # encodes, so the read path enforces the window itself.
+        #
+        # Now() rather than timezone.now(): the comparison is made by the database
+        # when the query executes. A Python timestamp is frozen at the moment
+        # active() was called, which a cached or reused queryset outlives.
+        return self.not_delisted().filter(
+            models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=Now())
+        )
+
+    def not_delisted(self) -> ListingQuerySet:
+        # NULL expires_at means an indefinite retention class (DR-001 CHECK), so
+        # merchant facts are never aged out by the freshness clause in active().
         return self.filter(delisted_at__isnull=True)
 
     def delisted(self) -> ListingQuerySet:
@@ -115,6 +150,9 @@ class ListingManager(models.Manager["Listing"]):
     def active(self) -> ListingQuerySet:
         return self.get_queryset().active()
 
+    def not_delisted(self) -> ListingQuerySet:
+        return self.get_queryset().not_delisted()
+
     def delisted(self) -> ListingQuerySet:
         return self.get_queryset().delisted()
 
@@ -123,14 +161,38 @@ class Listing(RetentionGoverned):
     """One merchant offer page at the ADR-0010 listing grain.
 
     Delisting (IR-002 / DR-008, CR-004) is a SOFT delete: delisted_at + a
-    DelistReason mark the row terminal, and nothing is physically removed. A hard
-    delete is not available here — ListingResolution.superseded_by is PROTECT and
-    the edges are the DR-010 audit trail, so destroying a listing would either
-    fail or destroy resolution history. The mark is reversible (mark_relisted):
-    an absence-based delist that turns out to be wrong self-heals the moment the
+    DelistReason mark the row terminal, and the row itself stays. A hard delete is
+    not available here — ListingResolution.superseded_by is PROTECT and the edges
+    are the DR-010 audit trail, so destroying a listing would either fail or
+    destroy resolution history. The mark is reversible (mark_relisted): an
+    absence-based delist that turns out to be wrong self-heals the moment the
     source shows the listing again, which is what makes the absence heuristics in
     acquisition.pipeline safe to run.
+
+    RETENTION ROLE — ENTITY, not observation. DR-008 demands that expired eBay
+    data be physically deleted; DR-010 demands that resolution edges survive. The
+    two are reconciled by splitting the anchor row from the evidence hanging off
+    it: the physical-deletion obligation is carried by the OBSERVATION tables
+    (OfferSnapshot, RawPayload, the heartbeat tables), each stamped with its own
+    expires_at and swept independently, so an offer's prices, payloads and
+    heartbeat rows are gone within its TTL whether or not the listing was ever
+    marked delisted. What survives is the identity skeleton the audit trail hangs
+    from. Without that split the sweeper either cascades a Listing delete into
+    listing_resolution (destroying the trail) or trips the superseded_by PROTECT
+    and aborts the whole hourly pass.
+
+    Deferred (needs an owner ruling on IR-002 scope before implementing): a
+    delisted listing still keeps merchant-owned content — title_raw,
+    canonical_url, page_metadata_json. Retiring those means field-level redaction
+    of the anchor row, keeping the pk and the edges; it is a spec decision about
+    what "delete on delist" covers, not a sweeper behavior.
     """
+
+    # Cross-file contract with catalog.management.commands.purge_expired
+    # (is_retention_anchor): the sweeper reads this attribute and never row-
+    # deletes a model that sets it. Default is False, so a newly added
+    # RetentionGoverned model is swept unless it opts out here deliberately.
+    retention_anchor: ClassVar[bool] = True
 
     source_site = models.ForeignKey(SourceSite, on_delete=models.PROTECT, related_name="listings")
     seller = models.ForeignKey(
@@ -226,10 +288,15 @@ class Listing(RetentionGoverned):
 
         Also pulls the DR-008 evidence TTLs forward to the delist instant for
         BOUNDED retention classes, so the retention sweeper physically removes the
-        offer evidence at its next pass instead of up to a full freshness window
+        offer SNAPSHOTS at its next pass instead of up to a full freshness window
         later. Indefinite classes (merchant facts) are left alone — their
         retention CHECK requires expires_at IS NULL, and delisting an offer is not
         licence to drop a merchant fact.
+
+        The listing's own expires_at moves with them, but for a different reason:
+        the Listing is a retention ANCHOR (see the class docstring) and is never
+        row-deleted by the sweeper, so on this row expires_at is a freshness bound
+        that active() reads, not a deletion trigger.
 
         RawPayload rows are deliberately NOT touched: one stored payload backs
         every listing in its batch, so expiring it per-listing would destroy the
@@ -264,6 +331,12 @@ class Listing(RetentionGoverned):
         by mark_delisted are NOT restored: the next observation writes fresh
         snapshots under the current policy, and reviving a TTL would resurrect
         evidence the delete-on-delist obligation already retired.
+
+        Consequence worth knowing: clearing the mark does not by itself put the
+        row back in active(), because this listing's backdated expires_at still
+        fails the freshness clause. That is deliberate — an offer with no fresh
+        observation must not be shown. The pipeline gets both halves because
+        upsert_listing re-stamps expires_at just before calling this.
         """
         if self.delisted_at is None:
             return False

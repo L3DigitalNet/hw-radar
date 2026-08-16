@@ -19,6 +19,15 @@ The sweep deletes only rows whose `retention_class` is in
 BOUNDED_RETENTION_CLASSES *and* whose `expires_at` is in the past. Indefinite
 classes carry NULL `expires_at` (enforced by the `*_retention_ttl_coherent`
 CHECK) and can never match; see `_expired`.
+
+Entity vs observation: retention-governed models split into OBSERVATION tables,
+whose expired rows this command physically deletes, and audit ANCHORS, whose rows
+it must never delete (see `is_retention_anchor` and the retention-role paragraph
+on `catalog.Listing`). Deleting an anchor would cascade into `listing_resolution`
+and destroy the DR-010 audit trail, or trip its `superseded_by` PROTECT and abort
+the whole pass. DR-008's physical-deletion obligation is still met, because every
+piece of evidence hanging off an anchor is an observation row with its own
+`expires_at` and its own pass here.
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ from typing import TYPE_CHECKING, Any
 
 from django.apps import apps
 from django.core.management.base import BaseCommand, CommandError, CommandParser
+from django.db import transaction
 from django.db.models import Model, QuerySet
 from django.utils import timezone
 
@@ -51,9 +61,11 @@ _BOUNDED_VALUES: tuple[str, ...] = tuple(c.value for c in BOUNDED_RETENTION_CLAS
 class SweepReport:
     """Rows removed (or, in a dry run, matched) keyed by model label.
 
-    Counts are keyed by `app_label.ModelName` and include cascades: deleting an
-    expired Listing takes its OfferSnapshot rows with it, and those rows are
-    reported under `catalog.OfferSnapshot`, not under Listing.
+    Counts are keyed by `app_label.ModelName` and include cascades, which are
+    reported under the cascaded model rather than the model whose delete
+    triggered them. Anchor models never appear at all: their rows are not
+    deletable, so reporting a matched count for them would promise a deletion
+    that never happens.
     """
 
     dry_run: bool
@@ -75,6 +87,19 @@ def retention_governed_models() -> list[type[Model]]:
         (m for m in apps.get_models() if issubclass(m, RetentionGoverned)),
         key=lambda m: m._meta.label,
     )
+
+
+def is_retention_anchor(model: type[Model]) -> bool:
+    """Whether this model's rows are audit anchors that must never be deleted.
+
+    Cross-file contract: the flag is declared on the model itself — `catalog.
+    Listing` sets `retention_anchor = True` and records the DR-008/DR-010
+    reasoning — and defaults to False here, so a new RetentionGoverned model is
+    swept unless its author opts out deliberately. Anchors stay in
+    `retention_governed_models()`: the registry means "every retention-governed
+    table", and narrowing it would hide a real coverage gap behind an opt-out.
+    """
+    return bool(getattr(model, "retention_anchor", False))
 
 
 def _expired(model: type[Model], now: datetime) -> QuerySet[Model]:
@@ -104,6 +129,8 @@ def sweep_expired(
 ) -> SweepReport:
     """Delete every expired bounded-retention row, in batches, and report counts.
 
+    Anchor models are skipped entirely (`is_retention_anchor`), in dry runs too.
+
     With `dry_run=True` nothing is deleted and the counts are the matched-row
     counts per table — cascade rows are NOT included, because they are only
     discoverable by running the collector.
@@ -111,6 +138,8 @@ def sweep_expired(
     now = now or timezone.now()
     report = SweepReport(dry_run=dry_run)
     for model in retention_governed_models():
+        if is_retention_anchor(model):
+            continue
         label = model._meta.label
         expired = _expired(model, now)
         if dry_run:
@@ -119,13 +148,21 @@ def sweep_expired(
                 report.counts[label] += matched
             continue
         for pks in _batches(expired, batch_size):
-            _total, per_model = model._default_manager.filter(pk__in=pks).delete()
+            with transaction.atomic():
+                # Re-apply the whole expiry predicate in the DELETE instead of
+                # trusting the pk list: the poller re-observing a listing between
+                # this batch's SELECT and its DELETE pushes expires_at into the
+                # future, and a pk-only delete would destroy the refreshed row.
+                # A cascade spans several statements, so the batch is atomic —
+                # a crash mid-collector must not leave orphaned children behind.
+                _total, per_model = _expired(model, now).filter(pk__in=pks).delete()
             report.counts.update(per_model)
-            if not per_model.get(label):
-                # The batch matched rows but deleted none of them, so the next
-                # iteration would select the same pks forever. Only a filter that
-                # disagrees with the delete path can cause this; stop rather than
-                # spin, and leave the table for the next sweep.
+            if not per_model.get(label) and _expired(model, now).filter(pk__in=pks).exists():
+                # Rows still selectable as expired after a delete that removed
+                # none of them: the SELECT and the DELETE disagree, so the next
+                # iteration would hand back the same pks forever. (Rows that
+                # merely stopped being expired are the normal race above — they
+                # drop out of the re-query, so the loop still makes progress.)
                 raise CommandError(
                     f"{label}: {len(pks)} expired rows selected but none deleted; "
                     "aborting to avoid an unbounded retry loop"
