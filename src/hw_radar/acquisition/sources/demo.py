@@ -47,6 +47,10 @@ class DemoAdapter:
     site_key = "demo"
     run_kind = RunKind.FULL
     expects_json = False
+    # The fixture is checked into the repo, so parse() below raises on a bad blob
+    # instead of dropping it — a broken fixture is a test bug, not source drift.
+    # The attribute exists (and stays 0) only to satisfy the SourceAdapter protocol.
+    last_parse_skipped = 0
 
     def __init__(self, fixture: Path = FIXTURE) -> None:
         self._fixture = fixture
@@ -64,6 +68,7 @@ class DemoAdapter:
         return RawBatch(source=self.name, fetched_at=datetime.now(tz=UTC), items=items)
 
     def parse(self, batch: RawBatch) -> list[ParsedListing]:
+        self.last_parse_skipped = 0
         parsed: list[ParsedListing] = []
         for item in batch.items:
             data = json.loads(item.payload_text or "{}")

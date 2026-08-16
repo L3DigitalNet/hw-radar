@@ -112,6 +112,7 @@ class EbayAdapter:
     site_key = "ebay"  # == migration-0005 normalized_name
     run_kind = RunKind.FULL
     expects_json = True
+    last_parse_skipped = 0  # SourceAdapter parse diagnostic; see parse()
     # Consumed by the eBay run's run_source(...) call (D1 poller wiring): bounded
     # retention class + the per-batch TTL policy the pipeline applies as
     # expires_policy(batch.fetched_at).
@@ -199,29 +200,40 @@ class EbayAdapter:
         # untyped Browse JSON at each level (mirrors wd.py): a summary without a
         # price dict is skipped rather than raising, so a malformed body degrades
         # to "0 records" (run_source's PARSER_ROT guard) instead of a crash.
+        #
+        # Every `continue` below is a malformed-record drop and increments
+        # last_parse_skipped (SourceAdapter contract), one count per summary that
+        # could have become a listing.
+        self.last_parse_skipped = 0
         out: list[ParsedListing] = []
         for item in batch.items:
             data = item.payload_json or {}
             raw_summaries = data.get("itemSummaries", [])
             if not isinstance(raw_summaries, list):
+                self.last_parse_skipped += 1
                 continue
             for raw_summary in cast("list[object]", raw_summaries):
                 if not isinstance(raw_summary, dict):
+                    self.last_parse_skipped += 1
                     continue
                 summary = cast("dict[str, object]", raw_summary)
                 item_id = summary.get("itemId")
                 if item_id is None:
+                    self.last_parse_skipped += 1
                     continue  # no itemId ⇒ can't key the listing; skip this entry
                 raw_price = summary.get("price")
                 if not isinstance(raw_price, dict):
+                    self.last_parse_skipped += 1
                     continue
                 price = cast("dict[str, object]", raw_price)
                 value = price.get("value")
                 if value is None:
+                    self.last_parse_skipped += 1
                     continue
                 try:
                     item_price = Decimal(str(value))
                 except InvalidOperation:
+                    self.last_parse_skipped += 1
                     continue
                 out.append(
                     ParsedListing(

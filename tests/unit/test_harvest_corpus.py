@@ -29,7 +29,8 @@ class FakeAdapter:
 
     `fetch_error` models a source that dies mid-sweep (NFR-001 isolation), and
     `fetched` proves eBay's credential skip happens BEFORE any network call
-    rather than after a failed fetch.
+    rather than after a failed fetch. `parse_skipped` stands in for records a real
+    adapter would have dropped inside parse() and reported via last_parse_skipped.
     """
 
     expects_json = True
@@ -41,11 +42,14 @@ class FakeAdapter:
         listings: list[ParsedListing],
         *,
         fetch_error: Exception | None = None,
+        parse_skipped: int = 0,
     ) -> None:
         self.name = site_key
         self.site_key = site_key
         self._listings = listings
         self._fetch_error = fetch_error
+        self._parse_skipped = parse_skipped
+        self.last_parse_skipped = 0
         self.fetched = False
 
     async def fetch(self) -> RawBatch:
@@ -55,6 +59,7 @@ class FakeAdapter:
         return RawBatch(source=self.site_key, fetched_at=datetime.now(UTC))
 
     def parse(self, batch: RawBatch) -> list[ParsedListing]:
+        self.last_parse_skipped = self._parse_skipped
         return list(self._listings)
 
 
@@ -234,6 +239,60 @@ def test_limit_truncates_after_parse(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     entries, meta = _read_staging(tmp_path)
     assert [e["id"] for e in entries] == ["serverpartdeals:SPD-1", "serverpartdeals:SPD-2"]
     assert meta["sources"]["serverpartdeals"]["harvested"] == 2
+    # Truncation is not malformed: the three dropped tail listings were healthy.
+    assert meta["sources"]["serverpartdeals"]["skipped_malformed"] == 0
+
+
+def test_skipped_malformed_sums_adapter_and_staging_drops(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Two distinct malformed populations that must both land in one count: three
+    # raw records the adapter never returned (last_parse_skipped) and one returned
+    # listing with a blank title that staging validity rejects.
+    _install(
+        monkeypatch,
+        {
+            "serverpartdeals": FakeAdapter(
+                "serverpartdeals",
+                [_listing("SPD-1"), _listing("SPD-2", title="  ")],
+                parse_skipped=3,
+            )
+        },
+    )
+
+    call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(tmp_path))
+
+    _, meta = _read_staging(tmp_path)
+    assert meta["sources"]["serverpartdeals"] == {
+        "status": "ok",
+        "harvested": 1,
+        "skipped_malformed": 4,
+    }
+
+
+def test_adapter_reported_drops_survive_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # --limit slices what parse() returned; it cannot retract what parse() already
+    # discarded, so the adapter's count stands in full alongside a truncated harvest.
+    _install(
+        monkeypatch,
+        {
+            "serverpartdeals": FakeAdapter(
+                "serverpartdeals",
+                [_listing(f"SPD-{n}") for n in range(1, 6)],
+                parse_skipped=2,
+            )
+        },
+    )
+
+    call_command(
+        "harvest_corpus", "--source", "serverpartdeals", "--limit", "2", "--out", str(tmp_path)
+    )
+
+    _, meta = _read_staging(tmp_path)
+    assert meta["sources"]["serverpartdeals"]["harvested"] == 2
+    assert meta["sources"]["serverpartdeals"]["skipped_malformed"] == 2
 
 
 @pytest.fixture

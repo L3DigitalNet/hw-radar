@@ -43,6 +43,8 @@ class FakeAdapter:
     site_key = "demo"
     run_kind = RunKind.FULL
     expects_json = True
+    # SourceAdapter conformance only: run_source never reads the parse diagnostic.
+    last_parse_skipped = 0
 
     def __init__(self, items: list[RawItem], parsed: list[ParsedListing]) -> None:
         self._items = items

@@ -124,9 +124,15 @@ def _requires_repo_opt_in(out_dir: Path) -> bool:
     return ignored.returncode != 0
 
 
-async def _fetch_parse(adapter: SourceAdapter) -> list[ParsedListing]:
+async def _fetch_parse(adapter: SourceAdapter) -> tuple[list[ParsedListing], int]:
+    """Return this adapter's parsed listings plus the malformed records parse() dropped.
+
+    The skip count must be read from the same adapter instance immediately after
+    parse() — `last_parse_skipped` describes only the most recent call.
+    """
     batch = await adapter.fetch()
-    return adapter.parse(batch)
+    parsed = adapter.parse(batch)
+    return parsed, adapter.last_parse_skipped
 
 
 class Command(BaseCommand):
@@ -188,7 +194,7 @@ class Command(BaseCommand):
             )
             return [], {"status": "skipped_no_credentials", "harvested": 0, "skipped_malformed": 0}
         try:
-            parsed = asyncio.run(_fetch_parse(ADAPTERS[key]()))
+            parsed, dropped_in_parse = asyncio.run(_fetch_parse(ADAPTERS[key]()))
         except Exception as exc:
             self.stderr.write(f"{key} failed: {exc!r}")
             return [], {
@@ -198,9 +204,10 @@ class Command(BaseCommand):
                 "error": repr(exc),
             }
 
-        # Truncate BEFORE the malformed filter: --limit caps parsed listings
-        # (design §4), so `harvested + skipped_malformed` equals the capped slice
-        # and a run is reproducible from the same batch.
+        # Truncate BEFORE the staging-validity filter: --limit caps parsed listings
+        # (design §4), so a run is reproducible from the same batch. Truncation is
+        # NOT malformed and is never counted — dropping the tail of a healthy parse
+        # would otherwise read as source rot in the harvest-quality report.
         if limit is not None:
             parsed = parsed[:limit]
         usable = [p for p in parsed if p.title.strip() and p.source_listing_key.strip()]
@@ -208,7 +215,11 @@ class Command(BaseCommand):
         return entries, {
             "status": "ok",
             "harvested": len(entries),
-            "skipped_malformed": len(parsed) - len(usable),
+            # Both halves of the malformed picture (B3): records the adapter itself
+            # discarded inside parse(), plus listings it returned that carry nothing
+            # the matcher could resolve. The adapter half is unaffected by --limit,
+            # so `harvested + skipped_malformed` need not equal the capped slice.
+            "skipped_malformed": dropped_in_parse + (len(parsed) - len(usable)),
         }
 
     def _write(self, out_dir: Path, entries: list[dict[str, Any]], summary: dict[str, Any]) -> None:
