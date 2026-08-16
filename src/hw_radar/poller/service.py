@@ -38,6 +38,7 @@ from hw_radar.acquisition.scheduling.buckets import BucketRegistry
 from hw_radar.acquisition.scheduling.checkpoint import load_buckets, save_buckets
 from hw_radar.acquisition.scrapy_support import install_asyncio_reactor
 from hw_radar.acquisition.sources import ADAPTERS
+from hw_radar.catalog.management.commands.purge_expired import sweep_expired
 from hw_radar.catalog.models import CheapSignal, LifecycleState, RunKind, SourceConfig
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata import refresh as refdata_refresh
@@ -54,6 +55,11 @@ FX_REFRESH_HOUR_UTC = 6
 RECOVERY_PROBE_SECONDS = 86_400  # ADR-0017: daily recovery probe for paused sources
 REFDATA_REFRESH_DAY = 1  # monthly-order cadence, its own axis (ADR-0018 rule 3)
 REFDATA_REFRESH_HOUR_UTC = 7  # after the 06:00 FX refresh
+# DR-001 sweep cadence. Hourly is chosen against the tightest bound we carry:
+# DR-008 gives eBay observations a 6h TTL, so an expired row outlives its window
+# by at most one interval — a daily sweep would stretch that to 30h and break the
+# carve-out. The sweep is a handful of indexed DELETEs, so it is cheap to repeat.
+RETENTION_SWEEP_SECONDS = 3_600
 
 
 def heartbeat() -> None:
@@ -208,6 +214,16 @@ async def refdata_refresh_job() -> None:
     logger.info("refdata refresh: %s", report.as_json())
 
 
+async def retention_sweep_job() -> None:
+    """DR-001 enforcement pass; shares its implementation with `purge_expired`.
+
+    The function is imported rather than driven through `call_command` so the
+    per-table counts come back as data to log instead of command stdout.
+    """
+    report = await sync_to_async(sweep_expired)()
+    logger.info("retention sweep: %s row(s) deleted %s", report.total, dict(report.counts))
+
+
 def build_scheduler(registry: BucketRegistry, configs: Sequence[SourceConfig]) -> AsyncIOScheduler:
     # Codex CR-003: APScheduler defaults to LOCAL time, so the *_UTC constants
     # above were only aspirational until the scheduler itself is pinned — cron
@@ -238,6 +254,12 @@ def build_scheduler(registry: BucketRegistry, configs: Sequence[SourceConfig]) -
         day=REFDATA_REFRESH_DAY,
         hour=REFDATA_REFRESH_HOUR_UTC,
         id="refdata-refresh",
+    )
+    scheduler.add_job(
+        retention_sweep_job,
+        "interval",
+        seconds=RETENTION_SWEEP_SECONDS,
+        id="retention-sweep",
     )
     for config in configs:
         key = config.source_site.normalized_name
