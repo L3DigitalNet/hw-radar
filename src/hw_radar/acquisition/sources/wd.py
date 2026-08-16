@@ -16,11 +16,21 @@ Each HTTP response becomes its OWN RawItem (Task B4 per-item raw persistence),
 so every variant's raw_url points at the product response it was parsed from,
 and _persist_all's by_url association stores distinct provenance per product.
 
-TODO(MS-1d+): `query=recertified` surfaces WD *consumer* recert (My Book /
-Elements / My Passport), not the enterprise Gold/Red/Ultrastar recert catalog.
-The consumer sweep is a valid walking connector for the MS-1 per-source gate
-(needs >=1 listing); the enterprise recert facet (an OCC category/facet param
-on the search) still needs enumerating and preferring.
+Three search sweeps, not one: the OCC catalog has no recert facet for
+enterprise SKUs, so `query=recertified` (consumer My Book / Elements / My
+Passport) is joined by two `category:<code>` sweeps — `cat_data_center_drives`
+(Ultrastar DC HCxxx + WD Gold) and `cat_nas_hdd` (WD Red) — live-verified
+against api.westerndigital.com on 2026-08-16. Combining a free-text query with
+a category selector (`query=recertified:relevance:category:...`) returns
+empty, so the sweeps must stay separate round-trips. Both category sweeps
+return their non-recert siblings too, since recert-ness is only encoded in the
+product code suffix `-recertified` (and the display name) — never in a
+category/facet value — so every sweep's codes are merged, deduped, and then
+filtered to the `-recertified` suffix before the per-product detail loop.
+WD's taxonomy is undocumented and unversioned: these category codes can drift
+without notice and have no stability guarantee from WD. WD Purple recert
+exists in the catalog but is deliberately excluded (owner decision covers only
+Gold/Red/Ultrastar).
 """
 
 from __future__ import annotations
@@ -39,12 +49,19 @@ from hw_radar.catalog.models import RunKind
 API_BASE = "https://api.westerndigital.com"
 SEARCH_URL = f"{API_BASE}/wdwebservices/v2/us/products/search"
 # OCC `fields` projections keep the payload to the code/price/stock we consume.
-SEARCH_PARAMS = {
-    "query": "recertified",
+_SEARCH_COMMON = {
     "fields": "products(code)",
     "lang": "en",
     "curr": "USD",
 }
+# Three independent sweeps (see module docstring): consumer free-text query
+# plus one category selector per enterprise line. Order matters only for
+# fetch-count determinism in tests, not for correctness (codes are deduped).
+SEARCH_PARAMS_LIST = [
+    {**_SEARCH_COMMON, "query": "recertified"},
+    {**_SEARCH_COMMON, "query": ":relevance:category:cat_data_center_drives"},
+    {**_SEARCH_COMMON, "query": ":relevance:category:cat_nas_hdd"},
+]
 PRODUCT_PARAMS = {
     "fields": "code,name,variantOptions(code,priceData(FULL),stock(FULL))",
     "lang": "en",
@@ -94,17 +111,29 @@ class WdAdapter:
         owns = self._client is None
         client = self._client or httpx.AsyncClient(timeout=30.0)
         try:
-            search = await http.get(SEARCH_URL, client=client, params=SEARCH_PARAMS)
-            items = [
-                RawItem(
-                    url=str(search.url),
-                    http_status=search.status_code,
-                    content_type=search.headers.get("content-type", "application/json"),
-                    payload_json=search.json() if search.status_code == 200 else None,
-                    payload_text=search.text,
+            items: list[RawItem] = []
+            # dict-as-ordered-set: preserves first-seen order across the three
+            # sweeps while deduping codes that multiple sweeps surface (e.g. a
+            # Gold drive could in principle appear in more than one category).
+            seen_codes: dict[str, None] = {}
+            for search_params in SEARCH_PARAMS_LIST:
+                search = await http.get(SEARCH_URL, client=client, params=search_params)
+                items.append(
+                    RawItem(
+                        url=str(search.url),
+                        http_status=search.status_code,
+                        content_type=search.headers.get("content-type", "application/json"),
+                        payload_json=search.json() if search.status_code == 200 else None,
+                        payload_text=search.text,
+                    )
                 )
-            ]
-            for code in _codes_from_search(items[0].payload_json):
+                for code in _codes_from_search(items[-1].payload_json):
+                    seen_codes[code] = None
+            # Category sweeps return non-recert siblings alongside recert SKUs
+            # (see module docstring) — only the `-recertified` suffix marks a
+            # product as actually recertified, so it gates every sweep's
+            # output uniformly before the expensive per-product fetch.
+            for code in (c for c in seen_codes if c.endswith("-recertified")):
                 resp = await http.get(_product_url(code), client=client, params=PRODUCT_PARAMS)
                 items.append(
                     RawItem(
