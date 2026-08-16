@@ -1,12 +1,13 @@
 # Specs And Plans
 
-Last updated: 2026-07-06
+Last updated: 2026-08-16
 
 ## Active Design Artifacts
 
 | Artifact | Role | Status |
 | --- | --- | --- |
-| `docs/superpowers/specs/2026-07-06-ms1e-validation-corpus-ratification-design.md` | MS-1e validation-corpus + ADR-0019 ratification design | Active; Codex-converged, plan not yet written |
+| `docs/superpowers/specs/2026-07-06-ms1e-validation-corpus-ratification-design.md` | MS-1e validation-corpus + ADR-0019 ratification design | Implemented on dev; §6 owner-gated |
+| `docs/superpowers/plans/2026-08-16-ms1e-validation-corpus.md` | MS-1e harvest-tooling implementation plan | Implemented on dev; converged |
 | `docs/research/2026-07-05-ms1c-catalog-seed-inputs.md` | MS-1c catalog seed input ledger | Implemented; keep for provenance |
 | `docs/superpowers/plans/2026-07-05-ms1c-catalog-seed.md` | MS-1c catalog seed implementation plan | Implemented; keep for provenance |
 | `docs/superpowers/specs/2026-07-05-ms1-ingestion-design.md` | MS-1 ingestion design and milestone split | Active |

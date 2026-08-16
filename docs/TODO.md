@@ -17,9 +17,10 @@ Instructions for AI agents:
 
 - [ ] Refresh Project Standards after upstream issue #80 ships and re-verify automatic Agent Handoff startup under the `uv-strict-python` shim.
 
-- [ ] Write and execute the MS-1e validation-corpus and harvest-tooling implementation plan.
-
-  Keep the real-corpus harvest, owner label audit, ratification gate, and ADR-0019 flip as the later owner-in-the-loop step.
+- [ ] Run the MS-1e owner-in-the-loop ratification step (design §6): live-harvest a corpus with
+  `manage.py harvest_corpus --all --limit …`, draft labels, have the owner audit a random ~20%
+  sample plus every matcher-disagreement entry, run the full verification gate once as the single
+  authorizing evidence, and on `ms1_ratification_gate == PASS` flip ADR-0019 to accepted.
 
 - [ ] Implement bounded-retention expiry enforcement before enabling any bounded source.
 
