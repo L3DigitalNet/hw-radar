@@ -33,6 +33,7 @@ from hw_radar.acquisition.contracts import ParsedListing
 from hw_radar.catalog.models import (
     AliasSourceKind,
     AliasType,
+    Category,
     DriveSpec,
     Listing,
     ListingResolution,
@@ -40,6 +41,7 @@ from hw_radar.catalog.models import (
     MediaType,
     OfferSnapshot,
     ProductAlias,
+    ProductFamily,
     ProductModel,
     ResolutionGrain,
     RetentionClass,
@@ -93,6 +95,54 @@ def exos_16tb() -> ProductModel:
         source_kind=AliasSourceKind.CATALOG_AUTHORITATIVE,
     )
     return model
+
+
+@pytest.fixture
+def exos_family_split() -> ProductFamily:
+    """FAMILY-grain agreement fixture (spec 1216 / C.3.2 `_family_agreement_attrs`):
+    two models under one family that AGREE on interface (both SATA) but
+    DISAGREE on capacity (16TB vs 18TB). Neither model carries an MPN alias,
+    so a listing can only reach this family via the rung-2 grammar decode
+    (mirrors `test_rung2_decode_materializes_provisional_family_once` in
+    test_resolver.py) — the resulting prior's hard_attrs are the agreement
+    set, not either model's own spec, which is exactly what the single-model
+    `exos_16tb` fixture above can never exercise: one model can't disagree
+    with itself.
+    """
+    manufacturer, _ = Manufacturer.objects.get_or_create(
+        normalized_name="seagate", defaults={"name": "Seagate"}
+    )
+    family = ProductFamily.objects.create(
+        manufacturer=manufacturer,
+        normalized_name="exos",
+        name="Exos",
+        category=Category.objects.get(slug="drive"),
+    )
+    model_a = ProductModel.objects.create(
+        manufacturer=manufacturer,
+        product_family=family,
+        model_number="ST16000NM002C",
+        normalized_model_number=normalize_alias_text("ST16000NM002C"),
+    )
+    DriveSpec.objects.create(
+        product_model=model_a,
+        media_type=MediaType.HDD,
+        capacity_tb=Decimal("16.000"),
+        interface="SATA 6Gb/s",
+    )
+    model_b = ProductModel.objects.create(
+        manufacturer=manufacturer,
+        product_family=family,
+        model_number="ST18000NM003D",
+        normalized_model_number=normalize_alias_text("ST18000NM003D"),
+    )
+    DriveSpec.objects.create(
+        product_model=model_b,
+        media_type=MediaType.HDD,
+        capacity_tb=Decimal("18.000"),
+        interface="SATA 6Gb/s",
+    )
+    return family
 
 
 def _observe(site: SourceSite, *, title: str, observed_at: datetime, price: str) -> Listing:
@@ -245,3 +295,73 @@ def test_contradicting_reobservation_is_demoted_to_review_not_inherited(
     assert listing.resolution_grain == ResolutionGrain.NONE
     assert _edge_count(listing) == 2
     assert _edge(listing, is_current=True).evidence["outcome"] == Outcome.REVIEW
+
+
+def test_family_agreement_veto_fires_on_agreed_field(
+    site: SourceSite, exos_family_split: ProductFamily
+) -> None:
+    """C.3.2 agreement-set veto, agree half: the split models agree on
+    interface (both SATA), so `_family_agreement_attrs()` carries a real
+    'sata' value for that field and a re-observation claiming NVMe must veto
+    exactly like the single-model contradiction tests above."""
+    listing = _observe(
+        site,
+        title="Seagate Exos ST16000NM002C 16TB SATA Factory Recertified",
+        observed_at=_FIRST_SEEN,
+        price="199.00",
+    )
+    assert listing.resolution_grain == ResolutionGrain.FAMILY
+    assert listing.product_family == exos_family_split
+    first_edge = _edge(listing, is_current=True)
+
+    listing = _observe(
+        site,
+        title="Seagate Exos ST16000NM002C 16TB NVMe Factory Recertified",
+        observed_at=_FIRST_SEEN + timedelta(days=1),
+        price="199.00",
+    )
+
+    current = _edge(listing, is_current=True)
+    assert current.evidence["rung"] == 0
+    assert current.evidence["outcome"] == Outcome.REVIEW
+    assert current.evidence["veto"] == ["interface"]
+    assert current.grain == ResolutionGrain.NONE
+    assert listing.resolution_grain == ResolutionGrain.NONE
+    assert listing.product_family is None
+    assert _edge_count(listing) == 2
+    assert _edge_count(listing, is_current=True) == 1
+    first_edge.refresh_from_db()
+    assert first_edge.superseded_by_id == current.pk  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType] - django-types has no <field>_id shadow-attribute stubs
+
+
+def test_family_agreement_veto_silent_on_disagreed_field(
+    site: SourceSite, exos_family_split: ProductFamily
+) -> None:
+    """C.3.2 agreement-set veto, disagree half: the split models disagree on
+    capacity (16TB vs 18TB), so that field is unknown on the catalog side and
+    MUST NOT veto (spec 1216: 'disagreeing fields stay unknown, never
+    guessed') — a re-observation claiming the other model's capacity is
+    treated as non-contradicting and inherits, same as an unchanged re-poll."""
+    listing = _observe(
+        site,
+        title="Seagate Exos ST16000NM002C 16TB SATA Factory Recertified",
+        observed_at=_FIRST_SEEN,
+        price="199.00",
+    )
+    assert listing.resolution_grain == ResolutionGrain.FAMILY
+    first_edge = _edge(listing, is_current=True)
+    stamp_before = first_edge.last_evaluated_at
+
+    listing = _observe(
+        site,
+        title="Seagate Exos ST16000NM002C 18TB SATA Factory Recertified",
+        observed_at=_FIRST_SEEN + timedelta(days=1),
+        price="189.00",
+    )
+
+    assert _edge_count(listing) == 1  # no veto on the disagreed field: inherited
+    current = _edge(listing, is_current=True)
+    assert current.pk == first_edge.pk
+    assert current.last_evaluated_at > stamp_before
+    assert listing.resolution_grain == ResolutionGrain.FAMILY
+    assert listing.product_family == exos_family_split
