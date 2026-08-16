@@ -5,9 +5,10 @@
 - MS-0 and MS-1a through MS-1d are implemented and merged: Django/TimescaleDB foundation, ingestion substrate, matching, catalog seed, five connectors, and availability heartbeat.
 - All marketplace sources ship disabled; scoring and alerting are not implemented.
 - Source go-live remains gated by the SA-004 operations checklist, bounded-retention expiry enforcement, and the eBay listing soft-delete path.
-- MS-1e's validation-corpus harness and harvest tooling are implemented on `dev`: the Approach-A
-  evaluator, `EvalReport` with `precision_verdict`/`audit_gate`, the pure `ms1_ratification_gate`,
-  the `harvest_corpus` management command with parse-diagnostics, and the rung-0 regression suite.
+- MS-1e's validation-corpus harness and harvest tooling are merged to `main` and DEPLOYED
+  (PR #20, release `1099f766`, healthz-verified 2026-08-16): the Approach-A evaluator, `EvalReport`
+  with `precision_verdict`/`audit_gate`, the pure `ms1_ratification_gate`, the `harvest_corpus`
+  management command with parse-diagnostics, and the rung-0 regression suite.
 - The live harvest, Claude label drafting, owner audit, ratification run, and ADR-0019 flip remain
   the deferred owner-in-the-loop step (design §6); `tests/db/test_ratification_corpus.py` skips
   with "corpus not yet harvested" until that step lands.

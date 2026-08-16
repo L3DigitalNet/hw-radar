@@ -1,16 +1,24 @@
 # Deployed State
 
-Last updated: 2026-07-06
+Last updated: 2026-08-16
 
 ## Current Deployment
 
 - The service deploys from `main` via the GitHub Actions Deploy workflow.
-  Latest confirmed deployed increment: MS-1b (PR #10). The MS-1c merge (PR #11)
-  deploy run was in progress at the 2026-07-06 session end — verify its outcome
-  before relying on refdata features in production.
+  Latest confirmed deployed increment: MS-1e (PR #20, dev→main merge commit
+  `1099f766`, deploy run 31952349044). Verified 2026-08-16 via `/healthz` at
+  `https://hw-radar.l3digital.net`, reporting release `1099f766`, `database: true`.
 - Production runtime uses the deployment assets under `deploy/` and the Django
-  settings in `src/hw_radar/settings.py`.
-- The app exposes `/healthz` for release and database health checks.
+  settings in `src/hw_radar/settings.py`; the app exposes `/healthz` for
+  release and database health checks.
+- The Deploy workflow's GitHub production environment requires a manual
+  reviewer approval before it runs on each push to `main`. An unapproved run
+  sits pending and dies at GitHub's 30-day cap; this caused production to go
+  stale at MS-1b from 2026-07-05 until this session, when PR #20's run
+  succeeded only after an owner-authorized approval. Every future merge to
+  `main` needs the same approval or the deploy will not run.
+- PR #15's deploy run separately failed the pip-audit gate on `cryptography`
+  49.0.0 (PYSEC-2026-3552); fixed this session by upgrading to 50.0.0.
 
 ## Public-Safe Boundary
 

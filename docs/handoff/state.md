@@ -2,10 +2,10 @@
 
 ## Current focus
 
-- Write the MS-1e implementation plan from the converged validation-corpus design.
-- Implement the evaluation harness and harvest tooling while keeping ratification owner-gated.
-- Clear bounded-retention and source-specific go-live gates before enabling any source.
-- Use `HW_RADAR_DB_PORT=5433` when the local TimescaleDB container maps to port 5433.
+- MS-1e (PR #20, release `1099f766`) is merged to `main` and deployed; healthz-verified 2026-08-16.
+- Next: the deferred owner-in-the-loop ratification step (design §6) — live harvest through ADR-0019 flip.
+- Clear go-live gates first: bounded-retention sweeper, eBay soft-delete (CR-004), lane-state split.
+- Every merge to `main` needs deployment approval or the run dies at 30 days; use `HW_RADAR_DB_PORT=5433` locally.
 
 ## Active incidents
 
