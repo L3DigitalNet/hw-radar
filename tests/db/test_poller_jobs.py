@@ -4,7 +4,7 @@ import pytest
 
 from hw_radar.acquisition.scheduling.buckets import BucketRegistry
 from hw_radar.catalog.models import SourceConfig
-from hw_radar.poller.service import build_scheduler
+from hw_radar.poller.service import build_scheduler, load_schedules
 
 # transaction=True: recovery_probe_job writes via sync_to_async threads;
 # serialized_rollback preserves the migration-0005 seed (see test_pipeline.py).
@@ -15,7 +15,7 @@ def test_disabled_sources_get_no_jobs() -> None:
     # Seed ships everything disabled; the scheduler must reflect that.
     registry = BucketRegistry()
     configs = list(SourceConfig.objects.select_related("source_site").filter(enabled=True))
-    scheduler = build_scheduler(registry, configs=configs)
+    scheduler = build_scheduler(registry, load_schedules(configs))
     assert scheduler.get_job("poll-demo") is None
 
 
@@ -80,7 +80,7 @@ def test_enabled_source_gets_job_with_config_cadence_and_bucket() -> None:
     SourceConfig.objects.filter(source_site__normalized_name="demo").update(enabled=True)
     registry = BucketRegistry()
     configs = list(SourceConfig.objects.select_related("source_site").filter(enabled=True))
-    scheduler = build_scheduler(registry, configs=configs)
+    scheduler = build_scheduler(registry, load_schedules(configs))
     job = scheduler.get_job("poll-demo")
     assert job is not None
     assert job.trigger.interval.total_seconds() == 3600  # seeded baseline

@@ -11,8 +11,12 @@ bootstraps Django at import time; see ``poller/__init__.py``.
 
 Per-source interval jobs are registered from SourceConfig rows; the admission
 gate (buckets → back-off → lifecycle) runs inside each job, so a denied tick
-is cheap. Auto-ramp/back-off changes to current_interval_s reschedule the
-source's job in place. Django ORM calls go through sync_to_async.
+is cheap. Auto-ramp/back-off changes to a lane's current_interval_s reschedule
+that lane's job in place. Django ORM calls go through sync_to_async.
+
+Scheduling state is per lane (ADR-0020): each poll path reads and writes only
+its own SourceLaneState row, so a repair-crawl failure cannot reset the
+heartbeat's earned cadence or impose its back-off window, or the reverse.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import random
 import signal
 import time
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -39,7 +44,13 @@ from hw_radar.acquisition.scheduling.checkpoint import load_buckets, save_bucket
 from hw_radar.acquisition.scrapy_support import install_asyncio_reactor
 from hw_radar.acquisition.sources import ADAPTERS
 from hw_radar.catalog.management.commands.purge_expired import sweep_expired
-from hw_radar.catalog.models import CheapSignal, LifecycleState, RunKind, SourceConfig
+from hw_radar.catalog.models import (
+    CheapSignal,
+    LifecycleState,
+    RunKind,
+    SchedulingLane,
+    SourceConfig,
+)
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata import refresh as refdata_refresh
 
@@ -70,11 +81,12 @@ async def poll_source(site_key: str, registry: BucketRegistry, scheduler: AsyncI
     config = await sync_to_async(SourceConfig.objects.select_related("source_site").get)(
         source_site__normalized_name=site_key
     )
+    lane_state = await sync_to_async(config.lane_state)(SchedulingLane.FULL)
     decision = check_admission(
         enabled=config.enabled,
         lifecycle_state=LifecycleState(config.lifecycle_state),
         run_kind=RunKind.FULL,
-        backoff_until=config.backoff_until,
+        backoff_until=lane_state.backoff_until,
         now=timezone.now(),
         registry=registry,
         source_key=site_key,
@@ -89,22 +101,24 @@ async def poll_source(site_key: str, registry: BucketRegistry, scheduler: AsyncI
         logger.warning("source %s enabled but has no adapter registered", site_key)
         return
     _run, outcome = await run_source(factory(), CatalogResolver())
-    interval_before = config.current_interval_s
-    await sync_to_async(apply_run_outcome)(config, outcome, now=timezone.now(), rand=random.random)
-    if config.current_interval_s != interval_before:
+    interval_before = lane_state.current_interval_s
+    await sync_to_async(apply_run_outcome)(
+        config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
+    )
+    if lane_state.current_interval_s != interval_before:
         job: Job | None = scheduler.get_job(f"poll-{site_key}")
         if job is not None:
             scheduler.reschedule_job(
                 f"poll-{site_key}",
                 trigger="interval",
-                seconds=config.current_interval_s,
-                jitter=max(1, config.current_interval_s // 10),
+                seconds=lane_state.current_interval_s,
+                jitter=max(1, lane_state.current_interval_s // 10),
             )
             logger.info(
                 "source %s rescheduled: %ss → %ss",
                 site_key,
                 interval_before,
-                config.current_interval_s,
+                lane_state.current_interval_s,
             )
 
 
@@ -114,15 +128,19 @@ async def poll_heartbeat(
     """ADR-0015 fast lane. Mirrors poll_source fully (CR-006 residual): the same
     admission gate (run_kind=HEARTBEAT), apply_run_outcome, and in-place interval
     reschedule — only the poll-HEARTBEAT job is retargeted, and run_heartbeat
-    (not run_source) fires the full pipeline solely on a detected transition."""
+    (not run_source) fires the full pipeline solely on a detected transition.
+
+    Every scheduling read and write here is against the HEARTBEAT lane row
+    (ADR-0020); the repair crawl's full-lane row is untouched."""
     config = await sync_to_async(SourceConfig.objects.select_related("source_site").get)(
         source_site__normalized_name=site_key
     )
+    lane_state = await sync_to_async(config.lane_state)(SchedulingLane.HEARTBEAT)
     decision = check_admission(
         enabled=config.enabled,
         lifecycle_state=LifecycleState(config.lifecycle_state),
         run_kind=RunKind.HEARTBEAT,
-        backoff_until=config.backoff_until,
+        backoff_until=lane_state.backoff_until,
         now=timezone.now(),
         registry=registry,
         source_key=site_key,
@@ -140,23 +158,25 @@ async def poll_heartbeat(
     # HeartbeatProbe; the ADAPTERS registry only knows the base SourceAdapter type.
     adapter = cast("HeartbeatProbe", factory())
     outcome = await run_heartbeat(adapter, config, CatalogResolver())
-    interval_before = config.current_interval_s
-    await sync_to_async(apply_run_outcome)(config, outcome, now=timezone.now(), rand=random.random)
-    if config.current_interval_s != interval_before:
+    interval_before = lane_state.current_interval_s
+    await sync_to_async(apply_run_outcome)(
+        config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
+    )
+    if lane_state.current_interval_s != interval_before:
         job_id = f"poll-heartbeat-{site_key}"
         job: Job | None = scheduler.get_job(job_id)
         if job is not None:
             scheduler.reschedule_job(
                 job_id,
                 trigger="interval",
-                seconds=config.current_interval_s,
-                jitter=max(1, config.current_interval_s // 10),
+                seconds=lane_state.current_interval_s,
+                jitter=max(1, lane_state.current_interval_s // 10),
             )
             logger.info(
                 "heartbeat %s rescheduled: %ss → %ss",
                 site_key,
                 interval_before,
-                config.current_interval_s,
+                lane_state.current_interval_s,
             )
 
 
@@ -187,11 +207,13 @@ async def recovery_probe_job(registry: BucketRegistry) -> None:
         factory = ADAPTERS.get(key)
         if factory is None:
             continue
+        # A probe replays the full pipeline, so it is a full-lane run (ADR-0020).
+        lane_state = await sync_to_async(config.lane_state)(SchedulingLane.FULL)
         decision = check_admission(
             enabled=config.enabled,
             lifecycle_state=LifecycleState(config.lifecycle_state),
             run_kind=RunKind.PROBE,
-            backoff_until=config.backoff_until,
+            backoff_until=lane_state.backoff_until,
             now=timezone.now(),
             registry=registry,
             source_key=key,
@@ -203,7 +225,7 @@ async def recovery_probe_job(registry: BucketRegistry) -> None:
             continue
         _run, outcome = await run_source(factory(), CatalogResolver(), run_kind=RunKind.PROBE)
         await sync_to_async(apply_run_outcome)(
-            config, outcome, now=timezone.now(), rand=random.random
+            config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
         )
         logger.info("recovery probe for %s → %s", key, config.lifecycle_state)
 
@@ -224,7 +246,37 @@ async def retention_sweep_job() -> None:
     logger.info("retention sweep: %s row(s) deleted %s", report.total, dict(report.counts))
 
 
-def build_scheduler(registry: BucketRegistry, configs: Sequence[SourceConfig]) -> AsyncIOScheduler:
+@dataclass(frozen=True)
+class SourceSchedule:
+    """One source's registration input: its policy row plus both lane intervals.
+
+    build_scheduler must stay ORM-free — it is called from inside run()'s event
+    loop, where any lazy query would raise SynchronousOnlyOperation — so the
+    ADR-0020 lane rows are resolved by load_schedules() on a worker thread and
+    handed over as plain integers. heartbeat_interval_s is inert for a source
+    with heartbeat_enabled=False; no job reads it until the flag is flipped.
+    """
+
+    config: SourceConfig
+    full_interval_s: int
+    heartbeat_interval_s: int
+
+
+def load_schedules(configs: Sequence[SourceConfig]) -> list[SourceSchedule]:
+    """Read (creating if absent) both lane rows for each config. Sync ORM."""
+    return [
+        SourceSchedule(
+            config=config,
+            full_interval_s=config.lane_state(SchedulingLane.FULL).current_interval_s,
+            heartbeat_interval_s=config.lane_state(SchedulingLane.HEARTBEAT).current_interval_s,
+        )
+        for config in configs
+    ]
+
+
+def build_scheduler(
+    registry: BucketRegistry, schedules: Sequence[SourceSchedule]
+) -> AsyncIOScheduler:
     # Codex CR-003: APScheduler defaults to LOCAL time, so the *_UTC constants
     # above were only aspirational until the scheduler itself is pinned — cron
     # triggers inherit the scheduler's timezone, not UTC, unless told to.
@@ -261,7 +313,8 @@ def build_scheduler(registry: BucketRegistry, configs: Sequence[SourceConfig]) -
         seconds=RETENTION_SWEEP_SECONDS,
         id="retention-sweep",
     )
-    for config in configs:
+    for schedule in schedules:
+        config = schedule.config
         key = config.source_site.normalized_name
         registry.configure_source(
             key,
@@ -270,12 +323,14 @@ def build_scheduler(registry: BucketRegistry, configs: Sequence[SourceConfig]) -
             now_s=time.monotonic(),
         )
         if config.heartbeat_enabled:
-            # Fast lane: cheap probe at current_interval_s, gating the full pipeline.
+            # Fast lane: cheap probe at the heartbeat lane's own interval, gating
+            # the full pipeline.
+            fast_s = schedule.heartbeat_interval_s
             scheduler.add_job(
                 poll_heartbeat,
                 "interval",
-                seconds=config.current_interval_s,
-                jitter=max(1, config.current_interval_s // 10),
+                seconds=fast_s,
+                jitter=max(1, fast_s // 10),
                 misfire_grace_time=config.misfire_grace_s,
                 id=f"poll-heartbeat-{key}",
                 args=[key, registry, scheduler],
@@ -286,21 +341,27 @@ def build_scheduler(registry: BucketRegistry, configs: Sequence[SourceConfig]) -
             # poll IS both heartbeat and full fetch (natively-both source), so a
             # second poll-{key} job would just double-poll: it stays single-job.
             if config.cheap_signal != CheapSignal.EBAY_BROWSE.value:  # .value: django-types quirk
+                # The repair lane's interval is its own row's, which ramp_floor_s
+                # pins at cadence_baseline_s for heartbeat sources — the slow end
+                # CR-006 asks for, now stated by the lane row rather than by
+                # reading cadence_baseline_s here.
+                slow_s = schedule.full_interval_s
                 scheduler.add_job(
                     poll_source,
                     "interval",
-                    seconds=config.cadence_baseline_s,
-                    jitter=max(1, config.cadence_baseline_s // 10),
+                    seconds=slow_s,
+                    jitter=max(1, slow_s // 10),
                     misfire_grace_time=config.misfire_grace_s,
                     id=f"poll-{key}",
                     args=[key, registry, scheduler],
                 )
         else:
+            full_s = schedule.full_interval_s
             scheduler.add_job(
                 poll_source,
                 "interval",
-                seconds=config.current_interval_s,
-                jitter=max(1, config.current_interval_s // 10),
+                seconds=full_s,
+                jitter=max(1, full_s // 10),
                 misfire_grace_time=config.misfire_grace_s,
                 id=f"poll-{key}",
                 args=[key, registry, scheduler],
@@ -310,7 +371,8 @@ def build_scheduler(registry: BucketRegistry, configs: Sequence[SourceConfig]) -
 
 async def run(configs: Sequence[SourceConfig] | None = None, *, checkpoint: bool = True) -> None:
     """checkpoint=False + configs=[] is the unit-test mode: no ORM call on the
-    startup/shutdown path itself (no bucket load/save, no config query). The
+    startup/shutdown path itself (no bucket load/save, no config query, and
+    load_schedules over an empty sequence queries nothing either). The
     registered service jobs (FX refresh, checkpoints, probes) do touch the DB —
     but only when they fire, which a short-lived unit run never reaches
     (tests/unit/test_poller.py drives run(configs=[], checkpoint=False))."""
@@ -324,7 +386,8 @@ async def run(configs: Sequence[SourceConfig] | None = None, *, checkpoint: bool
         configs = await sync_to_async(
             lambda: list(SourceConfig.objects.select_related("source_site").filter(enabled=True))
         )()
-    scheduler = build_scheduler(registry, configs)
+    schedules = await sync_to_async(load_schedules)(configs)
+    scheduler = build_scheduler(registry, schedules)
     scheduler.start()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

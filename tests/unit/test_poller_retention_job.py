@@ -9,7 +9,7 @@ from hw_radar.poller.service import RETENTION_SWEEP_SECONDS, build_scheduler
 def test_retention_sweep_is_scheduled_even_with_no_sources() -> None:
     # Service-level job: it must exist before any source is enabled, since the
     # sweeper is the gate that lets a bounded source be enabled at all.
-    scheduler = build_scheduler(BucketRegistry(), configs=[])
+    scheduler = build_scheduler(BucketRegistry(), schedules=[])
     job = scheduler.get_job("retention-sweep")
     assert job is not None
     assert job.trigger.interval.total_seconds() == RETENTION_SWEEP_SECONDS

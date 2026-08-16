@@ -26,9 +26,10 @@ Instructions for AI agents:
 
 - [ ] Implement the eBay listing-grain delete-on-delist soft-delete path before eBay go-live.
 
-- [ ] Resolve the shared fast/slow-lane scheduling state before enabling a fast-lane source.
+- [x] Resolve the shared fast/slow-lane scheduling state before enabling a fast-lane source.
 
-  Admission backoff, `current_interval_s`, and clean-poll ramp state currently couple both lanes through one `SourceConfig` row.
+  Done in ADR-0020: `SourceLaneState` holds `current_interval_s`, `clean_polls`, and `backoff_until`
+  per `(source_config, lane)`. Failure counters and `lifecycle_state` stay source-level by design.
 
 - [ ] Complete connector follow-ups for WD enterprise recert discovery and Scrapy diagnostics.
 

@@ -27,6 +27,7 @@ from hw_radar.catalog.models import (
     RunFailureClass,
     RunKind,
     RunStatus,
+    SchedulingLane,
     ScraperRun,
     SourceConfig,
     SourceSite,
@@ -260,33 +261,43 @@ def test_adapter_crash_is_classified() -> None:
 
 def test_apply_success_ramps_and_clears_backoff() -> None:
     config = SourceConfig.objects.get(source_site__normalized_name="demo")
-    config.clean_polls = 3
-    config.backoff_until = timezone.now() + timedelta(hours=1)
+    lane = config.lane_state(SchedulingLane.FULL)
+    lane.clean_polls = 3
+    lane.backoff_until = timezone.now() + timedelta(hours=1)
     now = timezone.now()
-    apply_run_outcome(config, RunOutcome(LifecycleEvent.SUCCESS), now=now, rand=random.random)
+    apply_run_outcome(
+        config, RunOutcome(LifecycleEvent.SUCCESS), lane_state=lane, now=now, rand=random.random
+    )
     config.refresh_from_db()
+    lane.refresh_from_db()
     assert config.lifecycle_state == LifecycleState.ACTIVE
-    assert config.current_interval_s == 1800  # 3600 halved, floored at 900
-    assert config.clean_polls == 0
-    assert config.backoff_until is None
+    assert lane.current_interval_s == 1800  # 3600 halved, floored at 900
+    assert lane.clean_polls == 0
+    assert lane.backoff_until is None
     assert config.consecutive_failures == 0
     assert config.last_success_at is not None
 
 
 def test_apply_transient_backs_off_and_resets_interval() -> None:
     config = SourceConfig.objects.get(source_site__normalized_name="demo")
-    config.current_interval_s = 900
+    lane = config.lane_state(SchedulingLane.FULL)
+    lane.current_interval_s = 900
     now = timezone.now()
     apply_run_outcome(
-        config, RunOutcome(LifecycleEvent.TRANSIENT_FAILURE), now=now, rand=lambda: 1.0
+        config,
+        RunOutcome(LifecycleEvent.TRANSIENT_FAILURE),
+        lane_state=lane,
+        now=now,
+        rand=lambda: 1.0,
     )
     config.refresh_from_db()
+    lane.refresh_from_db()
     assert config.lifecycle_state == LifecycleState.BACKING_OFF
     assert config.consecutive_failures == 1
-    assert config.clean_polls == 0
-    assert config.current_interval_s == 3600  # AW-003: cadence resets to baseline
-    assert config.backoff_until is not None
-    assert config.backoff_until > now
+    assert lane.clean_polls == 0
+    assert lane.current_interval_s == 3600  # AW-003: cadence resets to baseline
+    assert lane.backoff_until is not None
+    assert lane.backoff_until > now
 
 
 def test_apply_probe_failure_is_state_neutral() -> None:
@@ -295,12 +306,20 @@ def test_apply_probe_failure_is_state_neutral() -> None:
     config = SourceConfig.objects.get(source_site__normalized_name="demo")
     config.lifecycle_state = LifecycleState.PAUSED_PENDING_FIX
     config.save()
+    lane = config.lane_state(SchedulingLane.FULL)
     now = timezone.now()
-    apply_run_outcome(config, RunOutcome(LifecycleEvent.PROBE_FAILURE), now=now, rand=lambda: 1.0)
+    apply_run_outcome(
+        config,
+        RunOutcome(LifecycleEvent.PROBE_FAILURE),
+        lane_state=lane,
+        now=now,
+        rand=lambda: 1.0,
+    )
     config.refresh_from_db()
+    lane.refresh_from_db()
     assert config.lifecycle_state == LifecycleState.PAUSED_PENDING_FIX
     assert config.consecutive_failures == 0
-    assert config.backoff_until is None
+    assert lane.backoff_until is None
     assert config.last_run_at is not None
 
 
@@ -363,13 +382,15 @@ def test_healthy_multi_item_run_is_not_misclassified_as_anti_bot() -> None:
 
 def test_apply_honors_retry_after_verbatim() -> None:
     config = SourceConfig.objects.get(source_site__normalized_name="demo")
+    lane = config.lane_state(SchedulingLane.FULL)
     now = timezone.now()
     apply_run_outcome(
         config,
         RunOutcome(LifecycleEvent.TRANSIENT_FAILURE, retry_after_s=120.0),
+        lane_state=lane,
         now=now,
         rand=lambda: 1.0,
     )
-    config.refresh_from_db()
-    assert config.backoff_until is not None
-    assert abs((config.backoff_until - now).total_seconds() - 120.0) < 1.0
+    lane.refresh_from_db()
+    assert lane.backoff_until is not None
+    assert abs((lane.backoff_until - now).total_seconds() - 120.0) < 1.0

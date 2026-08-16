@@ -22,9 +22,10 @@ from hw_radar.catalog.models import (
     LifecycleState,
     OfferSnapshot,
     RetentionClass,
+    SchedulingLane,
     SourceConfig,
 )
-from hw_radar.poller.service import build_scheduler, poll_heartbeat
+from hw_radar.poller.service import build_scheduler, load_schedules, poll_heartbeat
 
 # transaction=True: run_heartbeat/run_source write from sync_to_async threads.
 # serialized_rollback preserves the migration-0005 seed (see test_pipeline.py).
@@ -184,7 +185,6 @@ def test_poll_heartbeat_admits_records_and_applies_outcome(monkeypatch: pytest.M
     SourceConfig.objects.filter(source_site__normalized_name="serverpartdeals").update(
         enabled=True,
         lifecycle_state=LifecycleState.ACTIVE,
-        current_interval_s=900,
         cadence_baseline_s=3600,
         cadence_ceiling_s=300,
     )
@@ -195,7 +195,10 @@ def test_poll_heartbeat_admits_records_and_applies_outcome(monkeypatch: pytest.M
             source_site__normalized_name="serverpartdeals"
         )
     )
-    scheduler = build_scheduler(registry, configs)
+    hb_lane = configs[0].lane_state(SchedulingLane.HEARTBEAT)
+    hb_lane.current_interval_s = 900
+    hb_lane.save()
+    scheduler = build_scheduler(registry, load_schedules(configs))
     asyncio.run(poll_heartbeat("serverpartdeals", registry, scheduler))
 
     config = SourceConfig.objects.get(source_site__normalized_name="serverpartdeals")
