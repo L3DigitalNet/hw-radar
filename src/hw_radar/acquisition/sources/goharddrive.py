@@ -78,7 +78,7 @@ class GoHardDriveAdapter:
 
     async def fetch(self) -> RawBatch:
         override = None if self._obey_robots else {"ROBOTSTXT_OBEY": False}
-        scraped = await run_spider(
+        result = await run_spider(
             GoHardDriveSpider,
             settings_override=override,
             start_url=self._start_url,
@@ -89,9 +89,14 @@ class GoHardDriveAdapter:
                 content_type="text/html",
                 payload_json={"title": entry["title"], "price_text": entry["price_text"]},
             )
-            for entry in scraped
+            for entry in result.items
         ]
-        return RawBatch(source=self.name, fetched_at=datetime.now(tz=UTC), items=items)
+        return RawBatch(
+            source=self.name,
+            fetched_at=datetime.now(tz=UTC),
+            items=items,
+            scrapy_stats=result.stats,
+        )
 
     def parse(self, batch: RawBatch) -> list[ParsedListing]:
         self.last_parse_skipped = 0

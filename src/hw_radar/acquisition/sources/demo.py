@@ -56,16 +56,21 @@ class DemoAdapter:
         self._fixture = fixture
 
     async def fetch(self) -> RawBatch:
-        scraped = await run_spider(DemoSpider, fixture_url=self._fixture.as_uri())
+        result = await run_spider(DemoSpider, fixture_url=self._fixture.as_uri())
         items = [
             RawItem(
                 url=str(entry["url"]),
                 content_type="text/html",
                 payload_text=str(entry["jsonld"]),
             )
-            for entry in scraped
+            for entry in result.items
         ]
-        return RawBatch(source=self.name, fetched_at=datetime.now(tz=UTC), items=items)
+        return RawBatch(
+            source=self.name,
+            fetched_at=datetime.now(tz=UTC),
+            items=items,
+            scrapy_stats=result.stats,
+        )
 
     def parse(self, batch: RawBatch) -> list[ParsedListing]:
         self.last_parse_skipped = 0

@@ -30,6 +30,10 @@ class RawBatch(BaseModel):
     source: str
     fetched_at: datetime
     items: list[RawItem] = Field(default_factory=list)
+    # Raw scrapy.statscollectors.StatsCollector.get_stats() snapshot from
+    # run_spider() (None for non-Scrapy adapters). run_source() filters this
+    # down to a stable subset before it lands in ScraperRun.detail_json.
+    scrapy_stats: dict[str, object] | None = None
 
 
 class ParsedListing(BaseModel):

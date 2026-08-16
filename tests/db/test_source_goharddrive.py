@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
@@ -51,3 +52,17 @@ def test_goharddrive_scrapes_two_listings(scrapy_loop: asyncio.AbstractEventLoop
         assert snap is not None
         prices[listing.source_listing_key] = snap.item_price
     assert prices == {"g01": Decimal("149.99"), "g02": Decimal("89.50")}
+
+    stats: dict[str, object] = run.detail_json["scrapy_stats"]  # pyright: ignore[reportAssignmentType]
+    assert stats["downloader/response_status_count/200"] == 1
+    assert stats["item_scraped_count"] == 2
+    # json.dumps is the actual downstream consumer (detail_json is a JSONField);
+    # this is the round-trip guarantee that matters, not isinstance checks.
+    json.dumps(stats)
+
+
+def test_goharddrive_scrapy_stats_on_raw_batch(scrapy_loop: asyncio.AbstractEventLoop) -> None:
+    adapter = GoHardDriveAdapter(start_url=FIXTURE.as_uri(), obey_robots=False)
+    batch = scrapy_loop.run_until_complete(adapter.fetch())
+    assert batch.scrapy_stats is not None
+    assert batch.scrapy_stats["item_scraped_count"] == 2

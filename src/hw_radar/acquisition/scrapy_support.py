@@ -10,6 +10,8 @@ get it via run_spider() itself. BASE_SETTINGS encodes the C-007 guardrails
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from scrapy import signals
 from scrapy.crawler import AsyncCrawlerRunner
 from scrapy.settings import Settings
@@ -48,13 +50,21 @@ def install_asyncio_reactor() -> None:
         raise RuntimeError("a non-asyncio Twisted reactor is already installed")
 
 
+@dataclass(frozen=True)
+class SpiderResult:
+    """Items a spider scraped plus the Scrapy StatsCollector snapshot for the run."""
+
+    items: list[dict[str, object]]
+    stats: dict[str, object]
+
+
 async def run_spider(
     spider_cls: type,
     *,
     settings_override: dict[str, object] | None = None,
     **spider_kwargs: object,
-) -> list[dict[str, object]]:
-    """Run one spider on the current loop; return its scraped items as dicts.
+) -> SpiderResult:
+    """Run one spider on the current loop; return its scraped items and run stats.
 
     AsyncCrawlerRunner is the asyncio-native primitive the Scrapy docs prescribe
     (design §MS-1a / Codex SA-006). Documented fallback ONLY if the pinned Scrapy
@@ -80,4 +90,9 @@ async def run_spider(
     crawler = runner.create_crawler(spider_cls)
     crawler.signals.connect(collect, signal=signals.item_scraped)
     await runner.crawl(crawler, **spider_kwargs)
-    return items
+    # crawler.stats is set in Crawler._apply_settings (before crawl()) and is
+    # never cleared afterward on Scrapy 2.16.0, so reading get_stats() here —
+    # after crawl() has resolved — returns the full run's final snapshot,
+    # including close-time stats like finish_reason/finish_time.
+    stats = crawler.stats.get_stats() if crawler.stats is not None else {}
+    return SpiderResult(items=items, stats=stats)

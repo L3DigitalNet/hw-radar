@@ -244,6 +244,49 @@ def _grain_counts(listing_ids: list[int]) -> dict[str, int]:
     return counts
 
 
+# Scalar keys pulled verbatim from a Scrapy StatsCollector snapshot into
+# detail_json["scrapy_stats"]. Deliberately NOT the raw stats dict: Scrapy
+# accumulates internal/volatile keys (memusage/*, scheduler/*, responses_per_minute)
+# that are noise here and would grow detail_json unboundedly across stat additions
+# in future Scrapy versions. Keep this list and _STATS_PREFIXES in sync with the
+# research note in the MS-1 Scrapy-diagnostics follow-up.
+_STATS_SCALAR_KEYS = (
+    "finish_reason",
+    "start_time",
+    "finish_time",
+    "elapsed_time_seconds",
+    "item_scraped_count",
+    "item_dropped_count",
+    "response_received_count",
+)
+# Prefix families worth keeping in full: response-status and exception counts
+# are the actual blind spot this feature closes (non-2xx responses never
+# reach parse(), so they are otherwise invisible in ScraperRun). log_count/*
+# is deliberately excluded: empirically, with BASE_SETTINGS["LOG_ENABLED"] =
+# False, Scrapy's LogStats extension never fires and no log_count/* key is
+# ever populated (verified against a demo-adapter run on Scrapy 2.16.0).
+_STATS_PREFIXES = (
+    "downloader/response_status_count/",
+    "downloader/exception_count",
+    "downloader/exception_type_count/",
+    "retry/",
+    "item_dropped_reasons_count/",
+)
+
+
+def _filter_scrapy_stats(stats: dict[str, object]) -> dict[str, object]:
+    """Select the stable diagnostic subset of a raw Scrapy stats snapshot.
+
+    datetimes (start_time/finish_time) are not JSON-serializable, so they are
+    converted to ISO strings here rather than at the detail_json call site.
+    """
+    selected: dict[str, object] = {}
+    for key, value in stats.items():
+        if key in _STATS_SCALAR_KEYS or key.startswith(_STATS_PREFIXES):
+            selected[key] = value.isoformat() if isinstance(value, datetime) else value
+    return selected
+
+
 async def _normalize(
     parsed_records: list[ParsedListing], observed_date: date
 ) -> list[NormalizedListing]:
@@ -318,6 +361,8 @@ async def run_source(
             "grain_counts": grain_counts,
             "listings_delisted": delisted,
         }
+        if batch.scrapy_stats:
+            run.detail_json["scrapy_stats"] = _filter_scrapy_stats(batch.scrapy_stats)
         run.status = RunStatus.SUCCESS
         run.finished_at = timezone.now()
         await sync_to_async(run.save)()

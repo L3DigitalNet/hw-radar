@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import Iterator
 
 import pytest
@@ -41,6 +42,11 @@ def test_walking_skeleton_end_to_end(scrapy_loop: asyncio.AbstractEventLoop) -> 
     snap = OfferSnapshot.objects.filter(listing__in=listings).first()
     assert snap is not None
     assert snap.fx_pair == "USD/USD"  # FR-004 identity stamp present
+
+    stats: dict[str, object] = run.detail_json["scrapy_stats"]  # pyright: ignore[reportAssignmentType]
+    assert stats["downloader/response_status_count/200"] == 1
+    assert stats["item_scraped_count"] == 2
+    json.dumps(stats)  # detail_json is a JSONField; this is the real contract
 
 
 def test_two_consecutive_crawls_one_process_one_loop(
