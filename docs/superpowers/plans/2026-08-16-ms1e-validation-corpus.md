@@ -70,29 +70,41 @@ Files: `src/hw_radar/matching/eval/{__init__,corpus,evaluate,report}.py`,
   `GroundTruthLabel`, `CorpusEntry`, `CorpusMeta` + `load_corpus(jsonl_path)` /
   `load_meta(path)` implementing design §3 exactly: source-key whitelist (SA-002),
   grain/target-key consistency invariants, `audit_status` enum,
-  `oem_dual_label` flag. Manufacturer-key membership against the seeded set is
+  `oem_dual_label` flag, USD-only currency (rejects `currency != "USD"`), required
+  `CorpusMeta.observed_at` (fixed ISO-8601 UTC), and corpus-level uniqueness —
+  unique `id` and unique `(source, source_listing_key)` — failing at load before
+  any DB writes (protects the distinct-first-observation premise; review SA-004).
+  Manufacturer-key membership against the seeded set is
   validated at load time by the evaluator (A2), not hardcoded in the schema.
   Tests: `test_corpus_schema.py` — valid entries at every grain; each consistency
-  violation rejected; unknown source key rejected; malformed JSON line rejected.
+  violation rejected; unknown source key rejected; malformed JSON line rejected;
+  non-USD rejected; both duplicate cases rejected.
 - **A2 — evaluator (`evaluate.py`).** `evaluate_corpus(entries) -> list[Prediction]`
   (DB-touching): per entry rebuild a `ParsedListing` from `title` + `listing`
   fields, run `fx.stamp` → `upsert_listing` → `append_snapshot` (attrs verbatim →
-  `attrs_json`, SA-004), then `CatalogResolver().resolve_listing(listing.pk)`, and
+  `attrs_json`, SA-004; `observed_date`/`observed_at` taken from the corpus's
+  fixed `meta.observed_at`, never wall-clock), then `CatalogResolver().resolve_listing(listing.pk)`, and
   read back `Prediction(grain, manufacturer_key, family_norm, model_norm,
   variant_tuple, rung, outcome)` from the denorm fields + latest resolution edge.
   Label comparison per SA-003 (loader-normalized display values; exact
   `manufacturer_key`; exact variant enums). Unknown `manufacturer_key` (absent from
   seeded `Manufacturer.normalized_name` set) is a hard validation error.
-- **A3 — report (`report.py`).** `EvalReport` with the §5 metrics: auto-accepts
-  (`outcome == ACCEPT and rung ∈ {1,2}`), precision, tri-state `precision_verdict`
-  (`MIN_AUTO_ACCEPTS = 100` named constant; `PASS_PRECISION = 0.995`), per-source
-  coverage (reported), per-source ≥1-family-grain floor, OEM dual-label rate over
-  serverpartdeals+ebay, and the composite `ms1_ratification_gate` (SA-NEW-002:
-  PASS only when precision PASS ∧ per-source floor met ∧ `rung0_suite_green` input
-  is True — the suite result is an explicit input parameter, never assumed).
+- **A3 — report (`report.py`).** `EvalReport` confined to corpus-derived results
+  (§5 as revised): auto-accepts (`outcome == ACCEPT and rung ∈ {1,2}`), precision,
+  tri-state `precision_verdict` (`MIN_AUTO_ACCEPTS = 100` named constant;
+  `PASS_PRECISION = 0.995`), per-source coverage (reported), per-source
+  ≥1-family-grain floor, OEM dual-label rate over serverpartdeals+ebay, and
+  `audit_gate` (design §3: disagreement coverage + seeded ceil(0.20·N) sample
+  floor via `random.Random(corpus_version)` over id-sorted entries + meta-rollup
+  consistency). The composite is a pure function
+  `ms1_ratification_gate(report, rung0_status)` with `rung0_status ∈
+  {PASS, FAIL, NOT_RUN}` supplied by the caller; PASS requires precision PASS ∧
+  floor ∧ audit_gate PASS ∧ rung0 PASS; rung0 FAIL → FAIL, NOT_RUN → INCOMPLETE.
   Tests: `test_corpus_eval.py` drives synthetic predictions/fixture through the
   math: 99.4% → FAIL; <100 accepts → INSUFFICIENT_CORPUS (never PASS); floor miss
-  → composite FAIL despite precision PASS; OEM rate; variant-identity case (two
+  → composite FAIL despite precision PASS; audit-gate math incl. reproducible
+  sample selection; composite with rung0 FAIL/NOT_RUN/PASS; determinism (same
+  input twice → identical report); OEM rate; variant-identity case (two
   entries, one model, different `condition` — must compare variant identity, not a
   model-collapsed key); poison capacity-contradiction entry lands REVIEW.
 - **A4 — synthetic fixture.** ~10 hand-built entries with known outcomes spanning
@@ -100,12 +112,17 @@ Files: `src/hw_radar/matching/eval/{__init__,corpus,evaluate,report}.py`,
   `synthetic.meta.json`. The fixture feeds A1/A3 unit tests and the DB-backed
   harness test.
 - **A5 — ratification gate (`tests/db/test_ratification_corpus.py`).** Corpus
-  absent → `pytest.skip("corpus not yet harvested")`; corpus present → compute and
-  assert `ms1_ratification_gate == PASS`. Parametrized tmp-corpus fixtures cover
+  absent → `pytest.skip("corpus not yet harvested")`; corpus present → assert the
+  corpus-side gate (precision + floor + audit_gate; `rung0_status` is supplied
+  externally per design §5/§6 — the suite-level green of the same pytest run is
+  what binds rung 0 in). Parametrized tmp-corpus fixtures cover
   absent / below-floor (asserts INSUFFICIENT_CORPUS and fails the gate) /
   failing-precision / precision-pass-but-one-source-`none` (composite FAIL) /
-  fully-passing (SA-005, SA-NEW-002). Also a DB-backed end-to-end run of the
-  synthetic fixture through `evaluate_corpus` against a seeded catalog.
+  fully-passing (SA-005, SA-NEW-002), plus audit-gate negatives: all-draft
+  corpus, one unaudited disagreement, sample one below the floor, stale meta
+  rollup — each `audit_gate != PASS` and a non-pass composite. Also a DB-backed
+  end-to-end run of the synthetic fixture through `evaluate_corpus` against a
+  seeded catalog.
 
 ### Phase B — harvest command
 
