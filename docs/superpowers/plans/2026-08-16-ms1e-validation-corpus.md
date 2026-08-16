@@ -154,13 +154,19 @@ Files: `src/hw_radar/catalog/management/commands/harvest_corpus.py`,
   NFR-001); per-source `harvested`/`skipped_malformed` counts in output; eBay
   skipped (others continue) when `EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET` absent;
   refuses `--out` under a git-tracked path without `--allow-repo-output` (SA-006).
-  `skipped_malformed` is defined as post-`parse()` staging-validity rejections
-  (blank `title` or blank `source_listing_key`) — `parse()` returns only validated
-  `ParsedListing` objects, so this is the only malformed class observable at the
-  command boundary; adapter-internal drops of malformed source records are out of
-  scope for this manual tool (accepted residual observability gap, PA-003 — a
-  parse-diagnostics contract across all five production adapters is deliberately
-  not in this milestone's blast radius).
+  `skipped_malformed` = adapter-reported malformed drops (B3) + post-`parse()`
+  staging-validity rejections (blank `title` or blank `source_listing_key`).
+- **B3 — parse-diagnostics contract (PA-003).** The `SourceAdapter` protocol
+  gains `last_parse_skipped: int` — the count of raw source records the most
+  recent `parse()` call discarded as malformed, reset at the start of every
+  `parse()`. Each of the five production adapters increments it at its existing
+  internal drop sites; production `run_source` semantics are unchanged (the
+  attribute is observational). `harvest_corpus` folds it into the per-source
+  `skipped_malformed` count. Tests: per-adapter real-shape batches containing
+  valid + malformed records assert harvested/skipped counts reconcile with the
+  batch under `--limit` semantics (limit truncation is not "malformed"), plus a
+  fake-adapter test that the command sums adapter-reported and staging-validity
+  drops.
   Staging entries are unlabeled (`id`, `source`, `title`, `listing` (+ optional
   `oem_dual_label` heuristic pre-fill)); the command never invents labels.
 - **B2 — tests.** Fake adapter → JSONL shape + counts; eBay-creds-absent →
