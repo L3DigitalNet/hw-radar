@@ -235,6 +235,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Default harvest_corpus staging output (raw, unlabeled marketplace listings — never committed)
+.harvest/
+
 # Codex review/delegate scratch (audit .md/.log; may echo read file contents — never commit)
 docs/codex-delegate/
 docs/codex-reviews/

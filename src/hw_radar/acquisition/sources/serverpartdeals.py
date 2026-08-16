@@ -30,6 +30,7 @@ class ServerPartDealsAdapter:
     site_key = "serverpartdeals"
     run_kind = RunKind.FULL
     expects_json = True
+    last_parse_skipped = 0  # SourceAdapter parse diagnostic; see parse()
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         # Inject-or-own-and-close: tests inject a MockTransport client (not
@@ -62,15 +63,23 @@ class ServerPartDealsAdapter:
         # The `cast`s below only retarget list[Unknown]/dict[Unknown, Unknown]
         # (bare-isinstance narrowing) to their declared element types; the
         # isinstance checks are the actual runtime safety net.
+        #
+        # Every `continue` below is a malformed-record drop and increments
+        # last_parse_skipped (SourceAdapter contract): a product-level drop counts
+        # once for the product, a variant-level drop once per variant, so the
+        # count is in units of "records that could have become a listing".
+        self.last_parse_skipped = 0
         out: list[ParsedListing] = []
         for item in batch.items:
             data = item.payload_json or {}
             raw_products = data.get("products", [])
             if not isinstance(raw_products, list):
+                self.last_parse_skipped += 1
                 continue
             products = cast("list[object]", raw_products)
             for raw_product in products:
                 if not isinstance(raw_product, dict):
+                    self.last_parse_skipped += 1
                     continue
                 product = cast("dict[str, object]", raw_product)
                 # handle/title are required to build a listing; a Shopify entry
@@ -78,22 +87,27 @@ class ServerPartDealsAdapter:
                 handle = product.get("handle")
                 title = product.get("title")
                 if not isinstance(handle, str) or not isinstance(title, str):
+                    self.last_parse_skipped += 1
                     continue
                 raw_variants = product.get("variants", [])
                 if not isinstance(raw_variants, list):
+                    self.last_parse_skipped += 1
                     continue
                 variants = cast("list[object]", raw_variants)
                 for raw_variant in variants:
                     if not isinstance(raw_variant, dict):
+                        self.last_parse_skipped += 1
                         continue
                     variant = cast("dict[str, object]", raw_variant)
                     variant_id = variant.get("id")
                     raw_price = variant.get("price")
                     if variant_id is None or raw_price is None:
+                        self.last_parse_skipped += 1
                         continue
                     try:
                         price = Decimal(str(raw_price))
                     except InvalidOperation:
+                        self.last_parse_skipped += 1
                         continue
                     out.append(
                         ParsedListing(

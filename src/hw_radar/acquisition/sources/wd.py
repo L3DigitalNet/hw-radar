@@ -82,6 +82,7 @@ class WdAdapter:
     site_key = "wd-recertified"  # == migration-0005 normalized_name
     run_kind = RunKind.FULL
     expects_json = True
+    last_parse_skipped = 0  # SourceAdapter parse diagnostic; see parse()
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         # Inject-or-own-and-close: tests inject a MockTransport client (not
@@ -125,29 +126,42 @@ class WdAdapter:
         # the search RawItem has no variantOptions and yields nothing, so
         # iterating every item naturally emits only per-product variants, each
         # carrying its own product response url as raw_url.
+        #
+        # Every `continue` below is a malformed-record drop and increments
+        # last_parse_skipped (SourceAdapter contract). The search RawItem carries
+        # no "variantOptions" key at all, so it takes the `[]` default and is never
+        # counted — only a product response whose variantOptions is present but not
+        # a list is a real drop.
+        self.last_parse_skipped = 0
         out: list[ParsedListing] = []
         for item in batch.items:
             data = item.payload_json or {}
             raw_variants = data.get("variantOptions", [])
             if not isinstance(raw_variants, list):
+                self.last_parse_skipped += 1
                 continue
             title = str(data.get("name", ""))
             for raw_variant in cast("list[object]", raw_variants):
                 if not isinstance(raw_variant, dict):
+                    self.last_parse_skipped += 1
                     continue
                 variant = cast("dict[str, object]", raw_variant)
                 code = variant.get("code")
                 if code is None:
+                    self.last_parse_skipped += 1
                     continue  # no code ⇒ can't key the listing; skip this variant
                 raw_price = variant.get("priceData")
                 if not isinstance(raw_price, dict):
+                    self.last_parse_skipped += 1
                     continue  # no price ⇒ not a sellable variant; skip
                 value = cast("dict[str, object]", raw_price).get("value")
                 if value is None:
+                    self.last_parse_skipped += 1
                     continue
                 try:
                     price = Decimal(str(value))
                 except InvalidOperation:
+                    self.last_parse_skipped += 1
                     continue
                 out.append(
                     ParsedListing(

@@ -64,6 +64,15 @@ class SourceAdapter(Protocol):
     run_kind: RunKind
     expects_json: bool  # drives the anti_bot "JSON endpoint answered text/html" check
 
+    # How many raw source records the MOST RECENT parse() discarded as malformed.
+    # Adapters reset it to 0 at the top of every parse() and increment at each
+    # internal drop site; it is write-only from the adapter's perspective, and no
+    # production path (run_source, the poller, heartbeat) reads or branches on it.
+    # harvest_corpus adds it to the per-source `skipped_malformed` count, which is
+    # otherwise blind to records parse() dropped before returning (PA-003) — a
+    # source whose markup drifted would look perfectly healthy at 3 harvested rows.
+    last_parse_skipped: int
+
     async def fetch(self) -> RawBatch: ...
 
     def parse(self, batch: RawBatch) -> list[ParsedListing]: ...

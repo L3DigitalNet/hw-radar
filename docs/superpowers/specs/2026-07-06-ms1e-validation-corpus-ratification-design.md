@@ -8,6 +8,8 @@
 > document records the *evaluation harness + harvest tooling* design and the owner scope
 > decision taken 2026-07-06 (build the deterministic harness + harvest tooling now; the
 > live harvest, label audit, and ratification run are a deferred owner-in-the-loop step).
+> Revised 2026-08-16 per cross-agent review SA-001..SA-003: audit-validity gate input,
+> explicit rung-0 status boundary, USD-only corpus v1 with a fixed observation timestamp.
 
 **Goal:** a repeatable, deterministic **evaluation harness** that runs a versioned,
 hand-labeled corpus of real listings through the **production** rung-0–2 resolver
@@ -134,9 +136,32 @@ A JSONL corpus plus a sidecar manifest under `tests/fixtures/matching_corpus/`.
 - **`label.oem_dual_label`** — the OEM-token-AND-MPN spot-check flag (ADR-0019 rule 7 / consequence);
   measured against ServerPartDeals + eBay listings.
 - **`label.audit_status`** ∈ `claude_draft | owner_confirmed | owner_corrected`.
+- **Currency (corpus v1 is USD-only).** Schema validation **rejects** any `currency != "USD"`.
+  The FX identity path is the only one a v1 corpus exercises, so evaluation is
+  wall-clock-independent by construction. A future non-USD corpus version must add a
+  per-entry `observed_date` plus a versioned FX-rate fixture before the schema admits other
+  currencies; until then the harness makes no non-USD promise.
 
-**`corpus.meta.json`** — `corpus_version` (string), `harvested_at` range, per-source counts,
+**`corpus.meta.json`** — `corpus_version` (string), `harvested_at` range, **`observed_at`**
+(one fixed ISO-8601 UTC timestamp; the evaluator stamps every reconstructed snapshot with it,
+so re-runs are bit-identical regardless of evaluation date), per-source counts,
 `matcher_version` at labeling time, and an audit rollup (counts by `audit_status`).
+
+**Audit-validity gate (`audit_gate`, SA-001 revision).** The owner-audit requirement of E-5 is
+machine-checked, not procedural. `audit_gate == PASS` iff all of:
+
+1. **Disagreement coverage** — every entry whose label disagrees with the matcher prediction
+   (wrong grain or wrong target at the labeled grain) has
+   `audit_status ∈ {owner_confirmed, owner_corrected}`.
+2. **Sample floor** — at least `ceil(0.20 × N)` of all `N` entries are owner-audited. The
+   ~20% sample is selected reproducibly: entries sorted by `id`, then a `random.Random(corpus_version)`
+   seeded shuffle takes the first `ceil(0.20 × N)`; those selected entries must all be owner-audited
+   (owner-corrected entries outside the sample count toward the floor but do not substitute for
+   selected-sample coverage).
+3. **Rollup consistency** — the `corpus.meta.json` audit rollup counts equal the per-entry
+   `audit_status` tallies.
+
+An all-`claude_draft` corpus therefore can never ratify, whatever its precision.
 
 **Target-key comparison — one normalizer, both sides (ADR-0019 rule 1; SA-003).** The loader compares a
 label to the predicted target by running the **production** normalizers on both: `family` through
@@ -188,9 +213,9 @@ For each corpus entry, the harness (Approach A, E-2) reproduces the production i
    (`source_listing_key`, `url`, `price`, `currency`, `condition_label`, `attrs`), run it through the same
    normalize + `upsert_listing` + `append_snapshot` calls `run_source` uses — so an `OfferSnapshot` with
    `attrs_json = entry.listing.attrs` and an FX-stamped USD price exists before resolution, against the
-   seeded catalog, all inside a rolled-back test-DB transaction. The corpus is US-priced (USD) in v1;
-   an entry carrying a non-USD currency is FX-stamped via the production FX path so the snapshot invariant
-   holds.
+   seeded catalog, all inside a rolled-back test-DB transaction. The corpus is USD-only in v1 (schema
+   invariant, §3) and every snapshot is stamped with the corpus's fixed `meta.observed_at`, so the FX
+   identity path is the only one exercised and evaluation is deterministic on any wall-clock date.
 2. **Resolve.** Call `CatalogResolver().resolve_listing(listing.pk)` — the exact production resolver.
 3. **Read back** a `Prediction(grain, target_natural_key, rung, outcome)` from the denorm fields + the
    current `listing_resolution` edge (rung/method live in the edge evidence).
@@ -205,17 +230,23 @@ For each corpus entry, the harness (Approach A, E-2) reproduces the production i
 | **Coverage** (reported, not gated) | per-source % of listings resolved at model grain or better (MS-2's ≥ 80% expectation) |
 | **Per-source floor** (MS-1 gate) | every one of the 5 sources resolves ≥ 1 listing at family grain or better; a source stuck at `grain = none` fails MS-1 (surfaces a catalog/extraction gap) |
 | **OEM dual-label rate** (reported) | % of ServerPartDeals + eBay listings printing both an OEM token and an MPN |
+| **Audit gate** (ratification input) | the §3 `audit_gate`: disagreement coverage + reproducible ≥ 20% owner-audit sample floor + meta-rollup consistency |
 
 The `100` auto-accept floor is a named constant (ingestion-design §MS-1e denominator rule: the gate must
 not be passable on trivially few matches or `grain = none` rows). A corpus that resolves 12 lucky matches
 reports `INSUFFICIENT_CORPUS`, **never** `PASS`.
 
-**Two distinct results, so precision can't masquerade as full readiness (SA-NEW-002).** `EvalReport`
-carries `precision_verdict` (the tri-state above — precision + denominator only) **and** a composite
-`ms1_ratification_gate`, which is `PASS` **only** when *all* of: `precision_verdict == PASS`; the
-per-source family floor is met (every one of the 5 sources resolves ≥ 1 listing at family grain or
-better); and the rung-0 regression suite (E-2b) is green. A precision `PASS` with one source stuck at
-`grain = none` yields `ms1_ratification_gate = FAIL` — the ADR flip and MS-1 close key off the composite
+**Two distinct results, so precision can't masquerade as full readiness (SA-NEW-002; boundary revised
+per SA-002).** `EvalReport` is confined to **corpus-derived** results: `precision_verdict` (the
+tri-state above — precision + denominator only), the per-source family floor, coverage, the OEM rate,
+and `audit_gate` (§3). The composite is a pure function over that report plus one explicit external
+input: `ms1_ratification_gate(report, rung0_status)` where `rung0_status ∈ {PASS, FAIL, NOT_RUN}` is
+the observed outcome of the rung-0 regression suite (E-2b), supplied by the caller — the report never
+assumes or discovers it. The composite is `PASS` **only** when *all* of: `precision_verdict == PASS`;
+the per-source family floor is met (every one of the 5 sources resolves ≥ 1 listing at family grain or
+better); `audit_gate == PASS`; and `rung0_status == PASS`. `rung0_status = FAIL` yields composite
+`FAIL`; `NOT_RUN` yields composite `INCOMPLETE` — both non-pass. A precision `PASS` with one source
+stuck at `grain = none` yields composite `FAIL` — the ADR flip and MS-1 close key off the composite
 gate, never bare precision. (If eBay is legitimately absent because access regressed, that is an
 owner-decided OQ per §8, not a silent floor pass.)
 
@@ -228,10 +259,15 @@ Documented as a runbook; executed after MS-1e merges, not in its PR:
 2. Claude drafts `label` for every entry → labeled `corpus.jsonl` + `corpus.meta.json`.
 3. Owner audits a random ~20% sample **plus every entry where the label disagrees with the matcher
    prediction** (S-5); corrections set `audit_status = owner_corrected`.
-4. Run `tests/db/test_ratification_corpus.py` (which evaluates `ms1_ratification_gate`) **and** the rung-0
-   regression suite (E-2b).
-5. **PASS** — `ms1_ratification_gate == PASS` (precision `PASS` on ≥ 100 rung-1/2 auto-accepts **and** the
-   per-source family floor met across all 5 sources **and** the rung-0 regression suite green) → flip
+4. Run the full pytest suite once. **The single authorizing evidence for the ADR flip is that one run**,
+   in which both `tests/db/test_ratification_corpus.py` (asserting the corpus-side gate: precision,
+   floor, and `audit_gate`) **and** `tests/db/test_rung0_regression.py` are green. From that run's
+   observed rung-0 outcome the owner records `ms1_ratification_gate(report, rung0_status=PASS)`; the
+   composite function is the reporting artifact, never a substitute for the run (SA-002 boundary: the
+   corpus test cannot see other tests' results, so the suite-level green is what binds them).
+5. **PASS** — the composite `ms1_ratification_gate == PASS` (precision `PASS` on ≥ 100 rung-1/2
+   auto-accepts **and** the per-source family floor met across all 5 sources **and** `audit_gate`
+   PASS **and** the rung-0 regression suite green in the same run) → flip
    ADR-0019 MADR status `proposed → accepted`, record the result in its **Confirmation** section, drop the
    D-019 / C.3 "(proposed)" qualifiers in the master spec, update the ADR-index row, and close the TODO
    ratification item.
@@ -266,10 +302,15 @@ resolver-driven test (a recert + a new listing of the same drive → one `produc
   `--allow-repo-output`** (SA-006).
 - **Ratification test** (`tests/db/test_ratification_corpus.py`): distinguishes **corpus absent** →
   `pytest.skip("corpus not yet harvested")` (pre-harvest CI stays green) from **corpus present** →
-  compute `ms1_ratification_gate` and **assert `PASS`**; a present-but-below-floor corpus asserts
+  assert the **corpus-side gate** (precision `PASS` + per-source floor + `audit_gate`, i.e. the
+  composite with `rung0_status` supplied externally per §5/§6); a present-but-below-floor corpus asserts
   `INSUFFICIENT_CORPUS` and **fails** (never a silent skip, SA-005). Separate parametrized fixtures cover
   absent / below-floor / failing-precision / **precision-passes-but-one-source-at-`grain=none`**
-  (composite gate must FAIL, SA-NEW-002) / fully-passing. This *is* the executable ratification gate.
+  (composite gate must FAIL, SA-NEW-002) / fully-passing. Audit-gate negatives (SA-001): all-draft
+  corpus, one unaudited disagreement, sample one entry below the reproducible-sample floor, and a
+  stale meta rollup — each must yield `audit_gate != PASS` and a non-pass composite. Composite-function
+  cases: an otherwise-passing report with `rung0_status` FAIL / NOT_RUN / PASS yields FAIL /
+  INCOMPLETE / PASS. This *is* the executable ratification gate.
 - **Full gate** (`uv run python -m scripts.check`) green at every commit: ruff format + check,
   basedpyright, pytest + coverage, pip-audit.
 

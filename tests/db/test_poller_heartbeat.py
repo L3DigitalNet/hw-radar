@@ -49,6 +49,8 @@ class FakeHeartbeatAdapter:
 
     name = "fake-hb"
     expects_json = True
+    # SourceAdapter conformance only: the heartbeat path never reads it.
+    last_parse_skipped = 0
 
     def __init__(
         self,

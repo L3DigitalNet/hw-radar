@@ -23,7 +23,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import scrapy
 
@@ -68,6 +68,7 @@ class GoHardDriveAdapter:
     site_key = "goharddrive"  # == migration-0005 normalized_name
     run_kind = RunKind.FULL
     expects_json = False
+    last_parse_skipped = 0  # SourceAdapter parse diagnostic; see parse()
 
     def __init__(self, start_url: str = CATEGORY_URL, *, obey_robots: bool = True) -> None:
         # obey_robots defaults True (C-007). Tests point start_url at a file://
@@ -93,13 +94,23 @@ class GoHardDriveAdapter:
         return RawBatch(source=self.name, fetched_at=datetime.now(tz=UTC), items=items)
 
     def parse(self, batch: RawBatch) -> list[ParsedListing]:
+        self.last_parse_skipped = 0
         parsed: list[ParsedListing] = []
         for item in batch.items:
             data = item.payload_json or {}
             cleaned = re.sub(r"[^0-9.]", "", str(data.get("price_text", "")))
             if not cleaned:
                 # A product block with no readable price degrades to "skipped"
-                # (Volusion markup drift) rather than raising on Decimal("").
+                # (Volusion markup drift) rather than raising on Decimal("") —
+                # counted for the SourceAdapter diagnostic.
+                self.last_parse_skipped += 1
+                continue
+            try:
+                price = Decimal(cleaned)
+            except InvalidOperation:
+                # Digit-stripped text can still be un-Decimal-able ("...", "1.2.3");
+                # one bad block must not abort the sibling listings in the batch.
+                self.last_parse_skipped += 1
                 continue
             match = _SKU_RE.search(item.url)
             sku = match.group(1) if match else item.url
@@ -108,7 +119,7 @@ class GoHardDriveAdapter:
                     source_listing_key=sku,
                     url=item.url,
                     title=str(data.get("title", "")),
-                    price=Decimal(cleaned),
+                    price=price,
                     currency="USD",
                     stock_status="unknown",
                     raw_url=item.url,

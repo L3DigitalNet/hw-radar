@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import cast
 
 import httpx
@@ -79,6 +79,7 @@ class SeagateAdapter:
     site_key = "seagate-recertified"  # == migration-0005 normalized_name
     run_kind = RunKind.FULL
     expects_json = False  # HTML page carrying embedded JSON, not a JSON endpoint
+    last_parse_skipped = 0  # SourceAdapter parse diagnostic; see parse()
 
     def __init__(self, client: httpx.AsyncClient | None = None) -> None:
         # Inject-or-own-and-close: tests inject a MockTransport client (not
@@ -107,22 +108,38 @@ class SeagateAdapter:
         # One ParsedListing per SKU key in the bootstrap blob. isinstance/cast
         # narrows the untyped embedded JSON so a malformed entry (non-dict, or
         # missing final_price) degrades to "skip that SKU" rather than raising.
+        #
+        # Both `continue`s below are malformed-record drops and increment
+        # last_parse_skipped (SourceAdapter contract), one count per bootstrap SKU
+        # entry. A missing or unparseable bootstrap blob yields no entries at all
+        # and so is NOT counted here — run_source's empty-parse PARSER_ROT guard
+        # owns that failure, which is a whole-page break rather than a bad record.
+        self.last_parse_skipped = 0
         out: list[ParsedListing] = []
         for item in batch.items:
             bootstrap = _extract_bootstrap(item.payload_text or "")
             for sku, raw_entry in bootstrap.items():
                 if not isinstance(raw_entry, dict):
+                    self.last_parse_skipped += 1
                     continue
                 entry = cast("dict[str, object]", raw_entry)
                 price = entry.get("final_price")
                 if price is None:
+                    self.last_parse_skipped += 1
+                    continue
+                try:
+                    entry_price = Decimal(str(price))
+                except InvalidOperation:
+                    # A junk final_price is a bad record, not a page break: skip
+                    # it so sibling SKUs in the bootstrap blob still parse.
+                    self.last_parse_skipped += 1
                     continue
                 out.append(
                     ParsedListing(
                         source_listing_key=sku,
                         url=CATEGORY_URL,
                         title=f"Seagate {sku} Recertified",
-                        price=Decimal(str(price)),
+                        price=entry_price,
                         stock_status=_stock_status(entry.get("stock_status")),
                         raw_url=item.url,  # per-item raw-payload association (Task B4)
                     )

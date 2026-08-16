@@ -1,0 +1,18 @@
+{
+  "corpus_version": "synthetic-v1",
+  "harvested_from": "2026-07-06",
+  "harvested_to": "2026-07-06",
+  "observed_at": "2026-07-06T12:00:00Z",
+  "source_counts": {
+    "serverpartdeals": 2,
+    "goharddrive": 2,
+    "wd-recertified": 2,
+    "seagate-recertified": 2,
+    "ebay": 2
+  },
+  "matcher_version": "2026.07.3",
+  "audit_rollup": {
+    "claude_draft": 8,
+    "owner_confirmed": 2
+  }
+}
