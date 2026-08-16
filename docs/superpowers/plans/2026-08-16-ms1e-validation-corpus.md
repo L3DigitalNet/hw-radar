@@ -161,8 +161,14 @@ Files: `src/hw_radar/catalog/management/commands/harvest_corpus.py`,
   recent `parse()` call discarded as malformed, reset at the start of every
   `parse()`. Each of the five production adapters increments it at its existing
   internal drop sites; production `run_source` semantics are unchanged (the
-  attribute is observational). `harvest_corpus` folds it into the per-source
-  `skipped_malformed` count. Tests: per-adapter real-shape batches containing
+  attribute is observational). Because the protocol member is required under
+  structural typing, the change also covers every other `SourceAdapter`
+  implementation: the `demo` fixture adapter (declare + reset only — it has no
+  drop site) and each structurally typed test double in the repository
+  (`tests/db/test_pipeline.py`, `tests/db/test_poller_heartbeat.py`,
+  `tests/unit/test_harvest_corpus.py` fakes gain the attribute), keeping the
+  mandatory basedpyright-strict gate green. `harvest_corpus` folds it into the
+  per-source `skipped_malformed` count. Tests: per-adapter real-shape batches containing
   valid + malformed records assert harvested/skipped counts reconcile with the
   batch under `--limit` semantics (limit truncation is not "malformed"), plus a
   fake-adapter test that the command sums adapter-reported and staging-validity
