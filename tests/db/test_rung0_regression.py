@@ -5,7 +5,7 @@ corpus entry runs with `prior = None` and can only exercise rungs 1-2 (design
 E-2b). Rung 0 is reached exclusively by RE-observing a listing that already
 carries an accepted denorm state, and its contract is behavioral, not a precision
 sample. This module is the third input to the MS-1 ratification gate
-(`ms1_ratification_gate`'s `rung0_suite_green` parameter): it drives the
+(`ms1_ratification_gate`'s `rung0_status` parameter): it drives the
 PRODUCTION `CatalogResolver` over the real ingest chain and pins both halves of
 that contract —
 

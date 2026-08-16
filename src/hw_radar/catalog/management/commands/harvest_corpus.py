@@ -91,10 +91,14 @@ def _requires_repo_opt_in(out_dir: Path) -> bool:
     """Report whether `out_dir` lands on git-tracked ground and so needs `--allow-repo-output`.
 
     "Tracked ground" is decided by git itself: inside a work tree and not matched by
-    an ignore rule. Anything git cannot answer for (no work tree, or check-ignore
-    erroring) is treated as needing the opt-in, because the failure this guard exists
-    to prevent — raw, unaudited staging output committed into the public repo — is
-    far worse than an extra flag on a legitimate run.
+    an ignore rule. A `rev-parse` failure whose stderr says "not a git repository" means
+    we are genuinely outside any work tree — no tracked path can be involved, so no
+    opt-in is needed. Any OTHER `rev-parse` failure (e.g. exit 128 "detected dubious
+    ownership" from a safe.directory refusal) or an unparseable success (empty stdout)
+    means git could not actually answer the question, and is treated as needing the
+    opt-in — as is a check-ignore call that itself errors inside a work tree — because
+    the failure this guard exists to prevent — raw, unaudited staging output committed
+    into the public repo — is far worse than an extra flag on a legitimate run.
     """
     anchor = out_dir
     while not anchor.exists():
@@ -109,8 +113,11 @@ def _requires_repo_opt_in(out_dir: Path) -> bool:
         check=False,
     )
     if root.returncode != 0:
-        return False
-    if not out_dir.resolve().is_relative_to(Path(root.stdout.strip()).resolve()):
+        return "not a git repository" not in root.stderr
+    root_dir = root.stdout.strip()
+    if not root_dir:
+        return True
+    if not out_dir.resolve().is_relative_to(Path(root_dir).resolve()):
         return False
     # Trailing separator is load-bearing: check-ignore reads a bare path as a FILE
     # when it does not exist on disk, and a directory-only rule (`.harvest/`) then

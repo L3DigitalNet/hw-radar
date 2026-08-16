@@ -39,7 +39,13 @@ from hw_radar.catalog.models import (
     ProductModel,
     RetentionClass,
 )
-from hw_radar.matching.eval.corpus import CorpusEntry, CorpusMeta, load_corpus, load_meta
+from hw_radar.matching.eval.corpus import (
+    CorpusEntry,
+    CorpusMeta,
+    load_corpus,
+    load_meta,
+    select_audit_sample,
+)
 from hw_radar.matching.eval.evaluate import (
     Prediction,
     UnknownManufacturerError,
@@ -458,6 +464,28 @@ def test_generated_corpus_with_an_unaudited_disagreement_fails_the_audit_gate(
     assert report.audit.unaudited_disagreement_ids == ("gen-0000",)
     assert report.audit_gate is Verdict.FAIL
     assert ms1_ratification_gate(report, Rung0Status.PASS) is Verdict.FAIL
+
+
+def test_generated_corpus_with_the_selected_sample_undercovered_fails_the_audit_gate(
+    seeded_catalog: None, tmp_path: Path
+) -> None:
+    """E-5 sample coverage, not just a naive audited-count: the owner must audit the
+    reproducible `select_audit_sample` draw specifically, so auditing enough OTHER
+    entries to clear a naive 20% count does not substitute for covering the actual
+    sample (mirrors unit test_one_unaudited_entry_inside_the_sample_fails_the_gate)."""
+    entries = _generated_corpus(PASSING_COUNT)
+    sample = select_audit_sample((entry["id"] for entry in entries), "generated-v1")
+    entries = [
+        {**entry, "label": {**entry["label"], "audit_status": "claude_draft"}}
+        if entry["id"] == sample[0]
+        else entry
+        for entry in entries
+    ]
+    jsonl, meta_path = _write_corpus(tmp_path, entries)
+    _, report = _evaluate(load_corpus(jsonl), load_meta(meta_path))
+    assert report.audit.unaudited_sample_ids == (sample[0],)
+    assert report.audit_gate is not Verdict.PASS
+    assert ms1_ratification_gate(report, Rung0Status.PASS) is not Verdict.PASS
 
 
 def test_generated_corpus_with_a_stale_manifest_rollup_fails_the_audit_gate(

@@ -365,3 +365,73 @@ def test_ignored_output_dir_needs_no_optin(
 def test_source_and_all_are_mutually_exclusive(tmp_path: Path) -> None:
     with pytest.raises(CommandError):
         call_command("harvest_corpus", "--out", str(tmp_path))
+
+
+class _FakeCompletedProcess:
+    def __init__(self, returncode: int, stdout: str = "", stderr: str = "") -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def test_genuinely_outside_a_work_tree_needs_no_optin(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A plain non-repo directory: git's own "not a git repository" answer is the
+    # one failure that proves no tracked path can be involved. Routed through the
+    # public command (not the private guard function) so the harness exercises the
+    # same path a real run does.
+    _one_fake(monkeypatch)
+    out = tmp_path / "plain"
+    out.mkdir()
+
+    def fake_run(cmd: list[str], **kwargs: object) -> _FakeCompletedProcess:
+        assert cmd[3] == "rev-parse"
+        return _FakeCompletedProcess(
+            128, stderr=f"fatal: not a git repository (or any of the parent directories): {out}\n"
+        )
+
+    monkeypatch.setattr(harvest_corpus.subprocess, "run", fake_run)
+    call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(out))
+    entries, _ = _read_staging(out)
+    assert [e["id"] for e in entries] == ["serverpartdeals:SPD-1"]
+
+
+def test_dubious_ownership_refusal_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # git refused to answer at all (safe.directory) — this is NOT the "no work
+    # tree" case, so the guard must not wave the write through unverified.
+    _one_fake(monkeypatch)
+    out = tmp_path / "dubious"
+    out.mkdir()
+
+    def fake_run(cmd: list[str], **kwargs: object) -> _FakeCompletedProcess:
+        assert cmd[3] == "rev-parse"
+        return _FakeCompletedProcess(
+            128, stderr=f"fatal: detected dubious ownership in repository at '{out}'\n"
+        )
+
+    monkeypatch.setattr(harvest_corpus.subprocess, "run", fake_run)
+    with pytest.raises(CommandError, match="--allow-repo-output"):
+        call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(out))
+    assert not (out / "staging.jsonl").exists()
+
+
+def test_empty_rev_parse_stdout_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A 0 exit with nothing on stdout is unparseable: trusting it would resolve
+    # Path("") to the CWD and could wrongly wave a tracked path through.
+    _one_fake(monkeypatch)
+    out = tmp_path / "empty-stdout"
+    out.mkdir()
+
+    def fake_run(cmd: list[str], **kwargs: object) -> _FakeCompletedProcess:
+        assert cmd[3] == "rev-parse"
+        return _FakeCompletedProcess(0, stdout="\n")
+
+    monkeypatch.setattr(harvest_corpus.subprocess, "run", fake_run)
+    with pytest.raises(CommandError, match="--allow-repo-output"):
+        call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(out))
+    assert not (out / "staging.jsonl").exists()
