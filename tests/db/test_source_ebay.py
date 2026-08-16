@@ -348,7 +348,12 @@ def test_ebay_relisting_revives_the_same_row(loop: asyncio.AbstractEventLoop) ->
     # comes back as the SAME row, so its history and resolution edges are intact.
     _run_ebay(loop, _mock_body(SWEEP_BOTH))
     _run_ebay(loop, _mock_body(SWEEP_COMPLETE_ONE))
-    pk = Listing.objects.get(source_listing_key=DELISTED_KEY).pk
+    delisted = Listing.objects.get(source_listing_key=DELISTED_KEY)
+    pk = delisted.pk
+    # Delisting an eBay listing redacts its merchant content (IR-002 ruling), so
+    # the revive path has to repopulate it from the new observation, not merely
+    # clear the terminal mark.
+    assert delisted.is_content_redacted()
     snapshots_before = OfferSnapshot.objects.filter(listing_id=pk).count()
 
     _run_ebay(loop, _mock_body(SWEEP_BOTH))
@@ -359,6 +364,10 @@ def test_ebay_relisting_revives_the_same_row(loop: asyncio.AbstractEventLoop) ->
     assert revived.delist_reason == ""
     assert revived.expires_at is not None and revived.expires_at > timezone.now()
     assert OfferSnapshot.objects.filter(listing_id=pk).count() == snapshots_before + 1
+    assert not revived.is_content_redacted()
+    assert revived.title_raw == "HGST He10 10TB Recertified"
+    assert revived.canonical_url == "https://www.ebay.com/itm/110500000003"
+    assert revived.url_hash != ""
 
 
 def test_ebay_probe_run_never_delists(loop: asyncio.AbstractEventLoop) -> None:

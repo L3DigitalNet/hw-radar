@@ -291,8 +291,136 @@ def test_delisted_listing_with_history_survives_the_retention_sweep(site: Source
     }
     old.refresh_from_db()
     assert old.superseded_by_id == current.pk  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no <field>_id stubs
-    # DR-008 is still satisfied through the evidence side of the split.
+    # DR-008 is satisfied on both fronts: the evidence rows are deleted, and the
+    # surviving anchor holds no merchant content.
     assert not OfferSnapshot.objects.filter(listing=listing).exists()
     assert report.counts["catalog.OfferSnapshot"] >= 1
     assert "catalog.Listing" not in report.counts
     assert snapshot.pk is not None  # the row existed before the sweep removed it
+    listing.refresh_from_db()
+    assert listing.is_content_redacted()
+
+
+def _with_content(listing: Listing) -> Listing:
+    """Populate every field redaction is supposed to blank.
+
+    _listing() only fills the columns the pipeline's upsert writes; the rest
+    (title_normalized from the resolver, and the two fields no writer sets today)
+    are filled here so a redaction assertion cannot pass on a field that was
+    already empty.
+    """
+    Listing.objects.filter(pk=listing.pk).update(
+        title_normalized="seagate exos x18 18tb recertified",
+        condition_label_raw="Seller refurbished",
+        listing_fingerprint="f" * 64,
+        page_metadata_json={"seller": "diskdeals_us", "itemWebUrl": "https://www.ebay.com/itm/1"},
+    )
+    listing.refresh_from_db()
+    return listing
+
+
+def test_delist_redacts_merchant_content_for_an_obligated_source(site: SourceSite) -> None:
+    # IR-002 owner ruling: delete-on-delist covers merchant-owned content. The
+    # anchor survives for DR-010, stripped of everything that was the merchant's.
+    listing = _with_content(_listing(site, "ebay-redact"))
+    old, current = _superseded_chain(listing)
+    seen_before = listing.last_seen
+
+    assert listing.mark_delisted(DelistReason.ABSENT_FROM_SWEEP, when=T0) is True
+
+    listing.refresh_from_db()
+    assert listing.is_content_redacted()
+    assert listing.canonical_url == ""
+    assert listing.url_hash == ""  # a digest of redacted content is still that content
+    assert listing.title_raw == ""
+    assert listing.title_normalized == ""
+    assert listing.condition_label_raw == ""
+    assert listing.listing_fingerprint == ""
+    assert listing.page_metadata_json == {}
+    # Identity and audit metadata are the point of keeping the row at all.
+    assert listing.source_listing_key == "ebay-redact"
+    assert listing.delisted_at == T0
+    assert listing.delist_reason == DelistReason.ABSENT_FROM_SWEEP
+    assert listing.last_seen == seen_before  # the absence clock must not move
+    assert set(ListingResolution.objects.filter(listing=listing).values_list("pk", flat=True)) == {
+        old.pk,
+        current.pk,
+    }
+
+
+def test_delist_keeps_content_for_a_source_without_the_obligation(site: SourceSite) -> None:
+    # Scoped by the obligation, not by "is this a delist": a merchant_fact source
+    # signs no delete-on-delist contract, and DR-001 keeps its facts indefinitely.
+    listing = _with_content(
+        _listing(site, "spd-no-obligation", retention_class=RetentionClass.MERCHANT_FACT)
+    )
+
+    listing.mark_delisted(DelistReason.MANUAL, when=T0)
+
+    listing.refresh_from_db()
+    assert listing.delisted_at == T0
+    assert listing.title_raw != ""
+    assert listing.canonical_url != ""
+    assert not listing.is_content_redacted()
+
+
+def test_redaction_is_idempotent(site: SourceSite) -> None:
+    # The blank state is the fixed point, so the hourly sweep re-reaching an
+    # already-redacted row rewrites nothing and reports nothing.
+    listing = _with_content(_listing(site, "ebay-twice"))
+    listing.mark_delisted(DelistReason.ABSENT_FROM_SWEEP, when=T0)
+    listing.refresh_from_db()
+
+    assert listing.redact_merchant_content() is False
+    assert Listing.redact_expired(timezone.now()) == 0
+
+    report = sweep_expired()
+    assert "catalog.Listing" not in report.redactions
+
+
+def test_sweep_redacts_an_expired_listing_that_delist_detection_missed(site: SourceSite) -> None:
+    # The second trigger, and the reason it exists: absence detection can miss
+    # (truncated sweep, paused source, poller outage) but the obligation attaches
+    # to the freshness window regardless. No delist mark here — only a lapsed TTL.
+    missed = _with_content(
+        _listing(site, "ebay-missed", expires_at=timezone.now() - timedelta(minutes=1))
+    )
+    seen_before = missed.last_seen
+
+    report = sweep_expired()
+
+    missed.refresh_from_db()
+    assert report.redactions["catalog.Listing"] == 1
+    assert report.total_redacted == 1
+    assert report.total == 0  # a redacted row is not a deleted row
+    assert missed.is_content_redacted()
+    assert missed.delisted_at is None  # redaction is not a terminal mark
+    assert missed.source_listing_key == "ebay-missed"
+    assert missed.last_seen == seen_before
+
+
+def test_sweep_dry_run_reports_redactions_without_changing_rows(site: SourceSite) -> None:
+    listing = _with_content(
+        _listing(site, "ebay-dry", expires_at=timezone.now() - timedelta(minutes=1))
+    )
+
+    report = sweep_expired(dry_run=True)
+
+    listing.refresh_from_db()
+    assert report.redactions["catalog.Listing"] == 1
+    assert listing.title_raw != ""
+
+
+def test_sweep_leaves_fresh_and_unobligated_listings_intact(site: SourceSite) -> None:
+    fresh = _with_content(_listing(site, "ebay-fresh-keep"))
+    unobligated = _with_content(
+        _listing(site, "spd-keep", retention_class=RetentionClass.MERCHANT_FACT)
+    )
+
+    report = sweep_expired()
+
+    fresh.refresh_from_db()
+    unobligated.refresh_from_db()
+    assert "catalog.Listing" not in report.redactions
+    assert fresh.title_raw != ""  # still inside its freshness window
+    assert unobligated.title_raw != ""  # never under the obligation

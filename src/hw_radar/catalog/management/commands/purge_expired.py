@@ -2,7 +2,8 @@
 # Django's public model-introspection surface is spelled with leading underscores
 # (`Model._meta`, `Model._default_manager`); a generic sweeper over model classes
 # cannot avoid them, so the rule is disabled for this file only.
-"""DR-001 bounded-retention enforcement: physically delete rows past `expires_at`.
+"""DR-001 bounded-retention enforcement: retire rows past `expires_at` — deleting
+observation rows outright and redacting the anchor rows that must survive.
 
 `expires_at` is stamped at write time on every bounded-class row, but a stamp is
 not enforcement — without this sweeper the data simply accumulates. That makes
@@ -25,9 +26,11 @@ whose expired rows this command physically deletes, and audit ANCHORS, whose row
 it must never delete (see `is_retention_anchor` and the retention-role paragraph
 on `catalog.Listing`). Deleting an anchor would cascade into `listing_resolution`
 and destroy the DR-010 audit trail, or trip its `superseded_by` PROTECT and abort
-the whole pass. DR-008's physical-deletion obligation is still met, because every
-piece of evidence hanging off an anchor is an observation row with its own
-`expires_at` and its own pass here.
+the whole pass. DR-008's physical-deletion obligation is still met on two fronts:
+every piece of evidence hanging off an anchor is an observation row with its own
+`expires_at` and its own pass here, and the anchor itself is redacted in place
+(`_redact_expired`) so an expired listing keeps only its identity and audit
+metadata — never the merchant's content.
 """
 
 from __future__ import annotations
@@ -59,21 +62,30 @@ _BOUNDED_VALUES: tuple[str, ...] = tuple(c.value for c in BOUNDED_RETENTION_CLAS
 
 @dataclass
 class SweepReport:
-    """Rows removed (or, in a dry run, matched) keyed by model label.
+    """Rows removed and rows redacted (or, in a dry run, matched), by model label.
 
-    Counts are keyed by `app_label.ModelName` and include cascades, which are
-    reported under the cascaded model rather than the model whose delete
-    triggered them. Anchor models never appear at all: their rows are not
-    deletable, so reporting a matched count for them would promise a deletion
-    that never happens.
+    `counts` is deletions only, keyed by `app_label.ModelName`, and includes
+    cascades, which are reported under the cascaded model rather than the model
+    whose delete triggered them. Anchor models never appear in it: their rows are
+    not deletable, so a count there would promise a deletion that never happens.
+
+    `redactions` is the anchor half of the same pass — rows kept but stripped of
+    merchant content. The two are separate counters, and `total` stays deletions
+    only, because a caller reporting "N rows deleted" must not silently include
+    rows that are still there.
     """
 
     dry_run: bool
     counts: Counter[str] = field(default_factory=Counter[str])
+    redactions: Counter[str] = field(default_factory=Counter[str])
 
     @property
     def total(self) -> int:
         return sum(self.counts.values())
+
+    @property
+    def total_redacted(self) -> int:
+        return sum(self.redactions.values())
 
 
 def retention_governed_models() -> list[type[Model]]:
@@ -100,6 +112,22 @@ def is_retention_anchor(model: type[Model]) -> bool:
     table", and narrowing it would hide a real coverage gap behind an opt-out.
     """
     return bool(getattr(model, "retention_anchor", False))
+
+
+def _redact_expired(model: type[Model], now: datetime, *, dry_run: bool) -> int:
+    """Run an anchor model's own redaction pass; return the rows it changed.
+
+    Cross-file contract with the model, matching `is_retention_anchor`: an anchor
+    that owes redaction exposes `redact_expired(now, dry_run=...)` and decides for
+    itself which of its rows are obligated and which columns are content (see
+    `catalog.Listing.REDACTED_CONTENT_FIELDS`). The sweeper deliberately holds no
+    field list — a column added to Listing must not need an edit here to be
+    covered. An anchor without the method simply keeps its rows intact.
+    """
+    redactor = getattr(model, "redact_expired", None)
+    if redactor is None:
+        return 0
+    return int(redactor(now, dry_run=dry_run))
 
 
 def _expired(model: type[Model], now: datetime) -> QuerySet[Model]:
@@ -129,18 +157,23 @@ def sweep_expired(
 ) -> SweepReport:
     """Delete every expired bounded-retention row, in batches, and report counts.
 
-    Anchor models are skipped entirely (`is_retention_anchor`), in dry runs too.
+    Anchor models are never deleted from (`is_retention_anchor`); instead their
+    expired rows are redacted in place (`_redact_expired`), which is how the
+    delete-on-delist obligation is met for a row the audit trail needs to keep.
 
-    With `dry_run=True` nothing is deleted and the counts are the matched-row
-    counts per table — cascade rows are NOT included, because they are only
-    discoverable by running the collector.
+    With `dry_run=True` nothing is deleted or redacted and the counts are the
+    matched-row counts per table — cascade rows are NOT included, because they
+    are only discoverable by running the collector.
     """
     now = now or timezone.now()
     report = SweepReport(dry_run=dry_run)
     for model in retention_governed_models():
-        if is_retention_anchor(model):
-            continue
         label = model._meta.label
+        if is_retention_anchor(model):
+            redacted = _redact_expired(model, now, dry_run=dry_run)
+            if redacted:
+                report.redactions[label] += redacted
+            continue
         expired = _expired(model, now)
         if dry_run:
             matched = expired.count()
@@ -171,13 +204,13 @@ def sweep_expired(
 
 
 class Command(BaseCommand):
-    help = "Delete rows whose bounded DR-001 retention window has expired."
+    help = "Retire rows whose bounded DR-001 retention window has expired."
 
     def add_arguments(self, parser: CommandParser) -> None:
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="report what would be deleted without deleting anything",
+            help="report what would be deleted and redacted, changing nothing",
         )
         parser.add_argument(
             "--batch-size",
@@ -195,3 +228,9 @@ class Command(BaseCommand):
         for label, count in sorted(report.counts.items()):
             self.stdout.write(f"{prefix} {count} row(s) from {label}")
         self.stdout.write(f"{prefix} {report.total} row(s) total")
+        # Redactions are reported on their own lines: an operator reading this
+        # output must be able to tell rows that are gone from rows that are still
+        # there minus their merchant content.
+        redact_prefix = "would redact" if report.dry_run else "redacted"
+        for label, count in sorted(report.redactions.items()):
+            self.stdout.write(f"{redact_prefix} {count} row(s) in {label}")

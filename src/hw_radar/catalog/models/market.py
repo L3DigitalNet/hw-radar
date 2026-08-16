@@ -5,17 +5,19 @@
 # string for the type-checker without subscripting the class at runtime.
 from __future__ import annotations
 
+from copy import copy
 from datetime import datetime
 from decimal import Decimal
 from typing import ClassVar
 
-from django.db import models
+from django.db import models, transaction
 from django.db.models.functions import Coalesce, Now
 from django.utils import timezone
 
 from hw_radar.catalog.models.base import (
     BOUNDED_RETENTION_CLASSES,
     ResolutionGrain,
+    RetentionClass,
     RetentionGoverned,
     TimeStamped,
     retention_constraints,
@@ -91,6 +93,16 @@ class DelistReason(models.TextChoices):
     # explicit end signal should use instead of inferring from absence.
     SOURCE_ENDED = "source_ended", "Source reported the listing ended"
     MANUAL = "manual", "Manually delisted"
+
+
+# Retention classes whose SOURCE carries the IR-002 / DR-008 delete-on-delist
+# obligation. The obligation is a property of the source contract, not of a
+# hostname, so it is scoped by retention class: eBay rows are already stamped
+# ebay_listing_observation everywhere in the pipeline, and a future source that
+# signs the same kind of contract joins by adding its class here rather than by
+# threading a new flag through the adapters. A class listed here MUST also be a
+# bounded class — an indefinite class cannot express "delete when it ends".
+DELETE_ON_DELIST_CLASSES: tuple[RetentionClass, ...] = (RetentionClass.EBAY_LISTING_OBSERVATION,)
 
 
 class ListingQuerySet(models.QuerySet["Listing"]):
@@ -173,11 +185,16 @@ class Listing(RetentionGoverned):
     listing_resolution (destroying the trail) or trips the superseded_by PROTECT
     and aborts the whole hourly pass.
 
-    Deferred (needs an owner ruling on IR-002 scope before implementing): a
-    delisted listing still keeps merchant-owned content — title_raw,
-    canonical_url, page_metadata_json. Retiring those means field-level redaction
-    of the anchor row, keeping the pk and the edges; it is a spec decision about
-    what "delete on delist" covers, not a sweeper behavior.
+    REDACTION — what "delete on delist" covers (owner ruling, 2026-08-16):
+    merchant-owned CONTENT goes, the anchor stays. For a source under the
+    obligation (DELETE_ON_DELIST_CLASSES) the fields in REDACTED_CONTENT_FIELDS
+    are blanked in place; pk, source_listing_key, resolution edges, delist marks
+    and retention metadata survive, so the DR-010 trail still reads as "this
+    listing existed, resolved to X, and ended at T" without holding the
+    merchant's title, URL or page payload. Two independent triggers converge on
+    that same end state — mark_delisted() redacts immediately, and redact_expired()
+    catches obligated rows whose TTL lapsed while delist detection missed them —
+    because absence-based detection is a heuristic and the obligation is not.
     """
 
     # Cross-file contract with catalog.management.commands.purge_expired
@@ -185,6 +202,34 @@ class Listing(RetentionGoverned):
     # deletes a model that sets it. Default is False, so a newly added
     # RetentionGoverned model is swept unless it opts out here deliberately.
     retention_anchor: ClassVar[bool] = True
+
+    # Merchant-owned content, mapped to the blank value redaction writes. Every
+    # entry must be a field whose column tolerates the blank at the database
+    # level, which is why no migration accompanies redaction: TextField/CharField
+    # take "" and the JSONField takes {}.
+    #
+    # url_hash goes WITH canonical_url rather than surviving as an identity aid:
+    # it is a digest of the very content the ruling retires, its only consumer is
+    # URL identity, and (source_site, source_listing_key) — the unique constraint
+    # the upsert actually keys on — already provides that. Keeping a hash of
+    # redacted content would buy nothing and leave us holding the content in
+    # derived form. listing_fingerprint goes for the same reason: it digests
+    # listing content for change detection that a terminal listing no longer does.
+    #
+    # NOT redacted, deliberately: source_listing_key (the marketplace item id is
+    # the audit trail's subject and the key a re-listing is matched on),
+    # is_international (a derived shipping-origin boolean, no merchant text), the
+    # resolution FKs and grain (our conclusions, not their content), and the
+    # first_seen/last_seen/delist/retention stamps (the audit metadata itself).
+    REDACTED_CONTENT_FIELDS: ClassVar[dict[str, object]] = {
+        "canonical_url": "",
+        "url_hash": "",
+        "title_raw": "",
+        "title_normalized": "",
+        "condition_label_raw": "",
+        "listing_fingerprint": "",
+        "page_metadata_json": {},
+    }
 
     source_site = models.ForeignKey(SourceSite, on_delete=models.PROTECT, related_name="listings")
     seller = models.ForeignKey(
@@ -293,28 +338,87 @@ class Listing(RetentionGoverned):
         RawPayload rows are deliberately NOT touched: one stored payload backs
         every listing in its batch, so expiring it per-listing would destroy the
         provenance of listings that are still live.
+
+        For a source under the delete-on-delist obligation this also redacts the
+        merchant content in the same transaction (see REDACTED_CONTENT_FIELDS).
+        The three writes are atomic so a crash cannot leave a listing marked
+        terminal while still holding content the mark says we have retired.
         """
         if self.delisted_at is not None:
             return False
         stamp = when or timezone.now()
-        self.delisted_at = stamp
-        self.delist_reason = reason
-        fields = ["delisted_at", "delist_reason"]
-        bounded = self.retention_class in {c.value for c in BOUNDED_RETENTION_CLASSES}
-        # A bounded row always has a non-NULL expires_at (retention_ttl_coherent),
-        # so this comparison is safe; only ever pull the TTL forward, never extend.
-        if bounded and self.expires_at > stamp:
-            self.expires_at = stamp
-            fields.append("expires_at")
-        # update_fields keeps last_seen (auto_now) where the source left it.
-        self.save(update_fields=fields)
-        if bounded:
-            OfferSnapshot.objects.filter(
-                listing=self,
-                retention_class__in=[c.value for c in BOUNDED_RETENTION_CLASSES],
-                expires_at__gt=stamp,
-            ).update(expires_at=stamp)
+        with transaction.atomic():
+            self.delisted_at = stamp
+            self.delist_reason = reason
+            fields = ["delisted_at", "delist_reason"]
+            bounded = self.retention_class in {c.value for c in BOUNDED_RETENTION_CLASSES}
+            # A bounded row always has a non-NULL expires_at (retention_ttl_coherent),
+            # so this comparison is safe; only ever pull the TTL forward, never extend.
+            if bounded and self.expires_at > stamp:
+                self.expires_at = stamp
+                fields.append("expires_at")
+            # update_fields keeps last_seen (auto_now) where the source left it.
+            self.save(update_fields=fields)
+            if bounded:
+                OfferSnapshot.objects.filter(
+                    listing=self,
+                    retention_class__in=[c.value for c in BOUNDED_RETENTION_CLASSES],
+                    expires_at__gt=stamp,
+                ).update(expires_at=stamp)
+            if self.retention_class in {c.value for c in DELETE_ON_DELIST_CLASSES}:
+                self.redact_merchant_content()
         return True
+
+    def redact_merchant_content(self) -> bool:
+        """Blank this row's merchant-owned content; return False if already blank.
+
+        Idempotent by construction — the blank state is the fixed point, so the
+        hourly sweeper re-reaching an already-redacted row is a no-op. Callers do
+        not need to check the obligation first only when they mean "redact this
+        specific row" (an operator honoring a takedown, say); the automatic paths
+        scope by DELETE_ON_DELIST_CLASSES before calling.
+
+        Writes only the content columns, so last_seen (auto_now) keeps the instant
+        the source last showed us the listing — the absence heuristics in
+        acquisition.pipeline read that column, and resetting it here would move
+        their clock.
+        """
+        if self.is_content_redacted():
+            return False
+        for name, blank in self.REDACTED_CONTENT_FIELDS.items():
+            # copy(): the JSON blank is a mutable dict living on the class, and
+            # assigning it directly would hand every redacted instance the same
+            # object to later mutate.
+            setattr(self, name, copy(blank))
+        self.save(update_fields=list(self.REDACTED_CONTENT_FIELDS))
+        return True
+
+    def is_content_redacted(self) -> bool:
+        return all(
+            getattr(self, name) == blank for name, blank in self.REDACTED_CONTENT_FIELDS.items()
+        )
+
+    @classmethod
+    def redact_expired(cls, now: datetime, *, dry_run: bool = False) -> int:
+        """Redact obligated anchors whose TTL lapsed; return how many rows changed.
+
+        The safety net behind mark_delisted: delist detection is absence-based and
+        can miss (a truncated sweep, a paused source, a poller outage), but the
+        obligation attaches to the freshness window regardless. Any row whose
+        expires_at has passed is one we may no longer show, so it is also one
+        whose merchant content we may no longer hold — delist mark or not.
+
+        Bulk .update() rather than per-row saves: this runs hourly over the whole
+        table, and .update() also leaves auto_now columns alone, which is exactly
+        what the absence clock needs (see redact_merchant_content).
+        """
+        obligated = cls.objects.filter(
+            retention_class__in=[c.value for c in DELETE_ON_DELIST_CLASSES],
+            expires_at__lt=now,
+        ).exclude(**cls.REDACTED_CONTENT_FIELDS)  # already-blank rows are skipped
+        if dry_run:
+            return obligated.count()
+        return obligated.update(**cls.REDACTED_CONTENT_FIELDS)
 
     def mark_relisted(self) -> bool:
         """Clear a terminal mark after the source showed the listing again.
@@ -329,6 +433,12 @@ class Listing(RetentionGoverned):
         fails the freshness clause. That is deliberate — an offer with no fresh
         observation must not be shown. The pipeline gets both halves because
         upsert_listing re-stamps expires_at just before calling this.
+
+        Redacted content is likewise not restored here — it is gone, and only a
+        new observation can supply it. The same upsert repopulates canonical_url,
+        url_hash, title_raw and condition_label_raw from the live payload;
+        title_normalized comes back on the next resolve, and listing_fingerprint /
+        page_metadata_json stay blank because no writer sets them today.
         """
         if self.delisted_at is None:
             return False
