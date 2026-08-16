@@ -327,8 +327,14 @@ def test_ebay_truncated_sweep_needs_the_absence_grace(loop: asyncio.AbstractEven
     assert run.detail_json["listings_delisted"] == 0
     assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
 
+    # A bounded eBay listing's expires_at advances in lockstep with last_seen,
+    # so it lapses at the same moment the row becomes stale-absence-eligible.
+    # Backdating only last_seen (leaving expires_at fresh) would hide this
+    # candidate from a delist query built on active(), which also filters on
+    # freshness, and so would miss the regression this test exists to pin.
     Listing.objects.filter(source_listing_key=DELISTED_KEY).update(
-        last_seen=timezone.now() - DELIST_ABSENCE_GRACE - timedelta(minutes=1)
+        last_seen=timezone.now() - DELIST_ABSENCE_GRACE - timedelta(minutes=1),
+        expires_at=timezone.now() - timedelta(minutes=1),
     )
     run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
 

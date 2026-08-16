@@ -107,14 +107,6 @@ class ListingQuerySet(models.QuerySet["Listing"]):
                        has to mark, and filtering it out first would make the
                        stale-absence path unreachable.
       delisted()     — carries a terminal mark.
-
-    FIXME(owned by the acquisition-pipeline leg, one-line change):
-    acquisition.pipeline._apply_delist still builds its candidate set from
-    active(). Since a bounded listing's expires_at and last_seen advance
-    together on every observation, a listing becomes grace-eligible for
-    DelistReason.ABSENT_STALE at the same moment its TTL lapses — so the
-    freshness clause hides exactly the rows that path exists to mark, and no
-    stale-absence delist is ever recorded. It must call not_delisted().
     """
 
     def active(self) -> ListingQuerySet:

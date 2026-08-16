@@ -116,7 +116,7 @@ def _apply_delist(site: SourceSite, scope: DelistScope) -> int:
     terminal while leaving their snapshots on the original freshness clock.
     """
     candidates = (
-        Listing.objects.active()
+        Listing.objects.not_delisted()
         .filter(source_site=site)
         .exclude(source_listing_key__in=scope.seen_keys)
     )
