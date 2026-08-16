@@ -5,6 +5,7 @@ rejection. No DB, no matcher — the schema layer is pure validation."""
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -123,6 +124,38 @@ def test_source_whitelist_tracks_the_adapter_registry() -> None:
     the real registry keys minus the `demo` test adapter, which never harvests."""
     assert frozenset(ADAPTERS) - {"demo"} == CORPUS_SOURCE_KEYS
     assert len(CORPUS_SOURCE_KEYS) == 5
+
+
+@pytest.mark.parametrize(
+    ("path", "field"),
+    [
+        # Public-repo hygiene (E-4): a stray harvested payload or seller handle must
+        # fail loading, not ride along unnoticed in a committed corpus. An unknown
+        # key on the label side is just as bad the other way: a silently ignored
+        # label field would be scored as if it had been asserted.
+        ((), "raw_payload"),
+        ((), "seller"),
+        (("listing",), "raw_payload"),
+        (("listing",), "seller_name"),
+        (("label",), "expected_variant"),
+        (("label", "expected_target"), "variant_string"),
+        (("label", "expected_target", "variant"), "warranty_months"),
+    ],
+)
+def test_unknown_fields_are_rejected_at_every_level(path: tuple[str, ...], field: str) -> None:
+    payload = _entry(expected_grain="variant", expected_target=_target(variant=dict(VARIANT)))
+    node: Any = payload
+    for step in path:
+        node = node[step]
+    node[field] = "smuggled"
+    with pytest.raises(ValidationError):
+        CorpusEntry.model_validate(payload)
+
+
+@pytest.mark.parametrize("field", ["harvest_notes", "raw_payload"])
+def test_unknown_manifest_fields_are_rejected(tmp_path: Path, field: str) -> None:
+    with pytest.raises(CorpusFormatError):
+        load_meta(_write_meta(tmp_path, **{field: "smuggled"}))
 
 
 def test_unknown_audit_status_is_rejected() -> None:
@@ -248,11 +281,23 @@ def test_meta_rejects_a_source_count_outside_the_whitelist(tmp_path: Path) -> No
         load_meta(_write_meta(tmp_path, source_counts={"amazon": 1}))
 
 
-def test_meta_requires_a_timezone_aware_observed_at(tmp_path: Path) -> None:
-    """A naive stamp would be interpreted against the runner's local zone, which is
-    exactly the wall-clock dependency observed_at exists to remove."""
+@pytest.mark.parametrize(
+    "observed_at",
+    [
+        "2026-07-02T00:00:00",  # naive: interpreted against the runner's local zone
+        "not-a-timestamp",  # malformed
+        "2026-07-02T00:00:00+02:00",  # non-UTC offset: shifts fx.stamp's rate date
+    ],
+)
+def test_meta_requires_a_utc_observed_at(tmp_path: Path, observed_at: str) -> None:
     with pytest.raises(CorpusFormatError):
-        load_meta(_write_meta(tmp_path, observed_at="2026-07-02T00:00:00"))
+        load_meta(_write_meta(tmp_path, observed_at=observed_at))
+
+
+@pytest.mark.parametrize("observed_at", ["2026-07-02T00:00:00Z", "2026-07-02T00:00:00+00:00"])
+def test_meta_accepts_either_utc_spelling(tmp_path: Path, observed_at: str) -> None:
+    meta = load_meta(_write_meta(tmp_path, observed_at=observed_at))
+    assert meta.observed_at.utcoffset() == timedelta(0)
 
 
 def test_meta_requires_observed_at(tmp_path: Path) -> None:

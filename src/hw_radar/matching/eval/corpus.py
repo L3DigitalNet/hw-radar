@@ -5,7 +5,12 @@ Pure validation and file I/O. The eval package deliberately holds NO matching
 logic (design §2): a second implementation of any normalization or matching rule
 here would be exactly the drift the Approach-A harness exists to prevent.
 
-Two conventions the schema enforces rather than trusts:
+Three conventions the schema enforces rather than trusts:
+
+- **Closed models (E-4).** Every level rejects unknown fields. The corpus is
+  committed to a PUBLIC repository, so an accidentally harvested `raw_payload`,
+  `seller`, or similar key must fail loading rather than ride along invisibly —
+  and an unknown key is equally likely to be a silently ignored label field.
 
 - **Source keys (SA-002).** `source` must be one of the five real adapter-registry
   keys; a parallel short-name namespace ("spd", "wd") would silently split the
@@ -30,7 +35,7 @@ import json
 import math
 import random
 from collections.abc import Iterable, Iterator
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from pathlib import Path
@@ -217,10 +222,13 @@ class CorpusMeta(BaseModel):
     corpus_version: str = Field(min_length=1)
     harvested_from: date
     harvested_to: date
-    # The single evaluation instant: every reconstructed snapshot is stamped with
-    # it, so a re-run months later produces byte-identical predictions instead of
-    # silently drifting with the wall clock (and, through fx.stamp's rate lookup,
-    # with the FX cache). It is corpus provenance, not a runtime option.
+    # The single evaluation instant, strictly UTC: every reconstructed snapshot is
+    # stamped with it, so a re-run months later produces byte-identical predictions
+    # instead of silently drifting with the wall clock (and, through fx.stamp's
+    # rate lookup, with the FX cache). It is corpus provenance, not a runtime
+    # option. A non-UTC offset is rejected rather than converted, because
+    # fx.stamp's observed_DATE is derived from it: a +02:00 stamp near midnight
+    # would pick a different rate date than the same instant written in UTC.
     observed_at: datetime
     source_counts: dict[SourceKey, int]
     matcher_version: str = Field(min_length=1)
@@ -230,8 +238,8 @@ class CorpusMeta(BaseModel):
     def _range_is_ordered(self) -> CorpusMeta:
         if self.harvested_to < self.harvested_from:
             raise ValueError("harvested_to precedes harvested_from")
-        if self.observed_at.tzinfo is None:
-            raise ValueError("observed_at must be timezone-aware (UTC)")
+        if self.observed_at.utcoffset() != timedelta(0):
+            raise ValueError("observed_at must be a timezone-aware UTC instant")
         return self
 
 

@@ -13,8 +13,18 @@ This module orchestrates; it decides nothing about matching. The only judgement 
 owns is label comparison (SA-003), which runs the production normalizers over the
 label's display values rather than reimplementing them.
 
-Callers are responsible for isolation: every write lands in the caller's
-transaction (the DB tests use a rolled-back test database).
+**Isolation is the caller's contract, deliberately.** This module opens, commits,
+and rolls back nothing: every write lands in whatever transaction the caller has
+open, so an evaluation is undone by rolling back that transaction (or a savepoint
+around it). Owning transactions here would fight the resolver, which runs its own
+`transaction.atomic` blocks and `select_for_update` locks, and would make a
+harness run indistinguishable from real ingestion in the database.
+
+The corollary matters for repeat runs: because `CorpusMeta.observed_at` is fixed,
+a second evaluation over leaked state from a first one would re-observe the same
+listings (rung 0) and collide on the snapshot's observation key. A repeat
+evaluation must therefore start from a rolled-back state — which is exactly what
+makes two runs bit-identical.
 """
 
 from __future__ import annotations
@@ -32,7 +42,7 @@ from hw_radar.catalog.models import (
     RetentionClass,
     SourceSite,
 )
-from hw_radar.matching.eval.corpus import CorpusEntry, GroundTruthLabel
+from hw_radar.matching.eval.corpus import CorpusEntry, CorpusMeta, GroundTruthLabel
 from hw_radar.matching.ladder import Outcome
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.matching.types import Grain
@@ -171,12 +181,16 @@ def _read_back(entry: CorpusEntry, listing: Listing) -> Prediction:
     )
 
 
-def evaluate_corpus(entries: Sequence[CorpusEntry], *, observed_at: datetime) -> list[Prediction]:
+def evaluate_corpus(entries: Sequence[CorpusEntry], meta: CorpusMeta) -> list[Prediction]:
     """Run every entry through the production path and return one Prediction each.
 
-    `observed_at` is the corpus manifest's fixed instant (`CorpusMeta.observed_at`),
-    not "now": every snapshot is stamped with it so a re-run on any later date
-    reproduces the same predictions bit for bit.
+    Observation time comes from `meta.observed_at` — the corpus manifest's fixed
+    UTC instant, never "now" — and is threaded to both the FX stamp's observation
+    date and every snapshot, so a re-run on any later date reproduces the same
+    predictions bit for bit.
+
+    Transaction management belongs to the caller (see the module docstring): this
+    function neither begins nor rolls back anything.
 
     Raises UnknownManufacturerError before writing anything if a label names an
     unseeded manufacturer — a seeding mistake must abort the run, not degrade it
@@ -186,7 +200,7 @@ def evaluate_corpus(entries: Sequence[CorpusEntry], *, observed_at: datetime) ->
     resolver = CatalogResolver()
     predictions: list[Prediction] = []
     for entry in entries:
-        listing = _ingest(entry, observed_at)
+        listing = _ingest(entry, meta.observed_at)
         resolver.resolve_listing(listing.pk)
         predictions.append(_read_back(entry, listing))
     return predictions
