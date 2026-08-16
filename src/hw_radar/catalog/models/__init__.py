@@ -34,6 +34,7 @@ from hw_radar.catalog.models.identity import (
     WarrantyChannel,
 )
 from hw_radar.catalog.models.market import (
+    DelistReason,
     Listing,
     OfferSnapshot,
     Seller,
@@ -73,6 +74,7 @@ __all__ = [
     "Category",
     "CheapSignal",
     "Condition",
+    "DelistReason",
     "DriveSpec",
     "DriveUnit",
     "FetchRequestStatus",

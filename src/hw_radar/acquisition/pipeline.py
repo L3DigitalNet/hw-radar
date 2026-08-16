@@ -1,8 +1,13 @@
-"""Stage runner: fetch → parse → normalize → resolve → persist, in a ScraperRun.
+"""Stage runner: fetch → parse → normalize → persist → delist → resolve, in a ScraperRun.
 
 Stages are independently re-runnable (§8.1); a resolver failure never blocks
 persistence (C.3 — the listing lands unresolved). ORM work runs through
 sync_to_async because the runner lives on the poller's event loop.
+
+The delist stage (CR-004) is opt-in per source: an adapter that can describe what
+its sweep proves implements DelistDetector, and listings this site owns that the
+sweep contradicts are soft-deleted (never row-deleted — see Listing.mark_delisted
+and the PROTECT on ListingResolution.superseded_by).
 """
 
 from __future__ import annotations
@@ -11,7 +16,9 @@ import asyncio
 import logging
 import statistics
 from collections.abc import Callable
-from datetime import date, datetime
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Protocol, runtime_checkable
 
 from asgiref.sync import sync_to_async
 from django.utils import timezone
@@ -30,6 +37,7 @@ from hw_radar.acquisition.persist import append_snapshot, store_raw, upsert_list
 from hw_radar.acquisition.scheduling.apply import RunOutcome
 from hw_radar.acquisition.scheduling.lifecycle import LifecycleEvent
 from hw_radar.catalog.models import (
+    DelistReason,
     Listing,
     RawPayload,
     ResolutionGrain,
@@ -61,6 +69,67 @@ class FetchFailure(Exception):
     def __init__(self, failure_class: RunFailureClass, message: str) -> None:
         super().__init__(message)
         self.failure_class = failure_class
+
+
+@dataclass(frozen=True)
+class DelistScope:
+    """What one sweep proves about the listings it did NOT contain (CR-004).
+
+    A source that can say "these keys are what exists right now" returns this from
+    delist_scope(); the pipeline turns it into soft-delete marks. The two fields
+    that matter are evidence-strength knobs, because absence is the weakest kind
+    of evidence there is:
+
+    complete — the sweep enumerated the ENTIRE result set for its query (no unseen
+        pages). Absence from a complete sweep is direct evidence and delists on the
+        spot. A source that cannot prove completeness must pass False; claiming it
+        falsely converts one truncated page into a mass delist.
+    absence_grace — for a truncated sweep, how long a listing must go unseen
+        across EVERY sweep before absence is believed. Set it from the source's
+        freshness obligation, not from the poll interval: the question it answers
+        is "how stale may this offer be before we must stop showing it".
+
+    Both paths are reversible — Listing.mark_relisted() clears the mark when the
+    source shows the listing again — so the failure mode of a wrong delist is a
+    temporarily hidden offer, not lost data.
+    """
+
+    seen_keys: frozenset[str]
+    observed_at: datetime
+    complete: bool
+    absence_grace: timedelta
+
+
+@runtime_checkable
+class DelistDetector(Protocol):
+    """Optional adapter capability, discovered structurally so that wiring a
+    source for delete-on-delist needs no change in the poller's run_source call."""
+
+    def delist_scope(self, batch: RawBatch, parsed: list[ParsedListing]) -> DelistScope | None: ...
+
+
+def _apply_delist(site: SourceSite, scope: DelistScope) -> int:
+    """Soft-delete this site's active listings that the sweep contradicts.
+
+    Deliberately per-row rather than a bulk .update(): mark_delisted also pulls the
+    DR-008 evidence TTLs forward, and a queryset update would mark the listings
+    terminal while leaving their snapshots on the original freshness clock.
+    """
+    candidates = (
+        Listing.objects.active()
+        .filter(source_site=site)
+        .exclude(source_listing_key__in=scope.seen_keys)
+    )
+    if scope.complete:
+        reason = DelistReason.ABSENT_FROM_SWEEP
+    else:
+        reason = DelistReason.ABSENT_STALE
+        candidates = candidates.filter(last_seen__lt=scope.observed_at - scope.absence_grace)
+    delisted = 0
+    for listing in candidates.iterator():
+        if listing.mark_delisted(reason, when=scope.observed_at):
+            delisted += 1
+    return delisted
 
 
 def _median_body_bytes(site: SourceSite) -> int | None:
@@ -134,6 +203,12 @@ def _persist_all(
     observed_at = batch.fetched_at
     for record in normalized:
         listing, _created = upsert_listing(site, record, retention_class, expires_at=expires_at)
+        # Seeing a listing is proof it is not delisted, so any terminal mark is
+        # cleared here rather than in the delist stage. This is what makes the
+        # absence heuristics (see DelistScope) self-healing: a listing wrongly
+        # delisted for missing a truncated sweep returns to the live set on its
+        # next appearance, keeping its pk, its history and its resolution edges.
+        listing.mark_relisted()
         # append_snapshot reads listing.expires_at (not the expires_at param
         # directly) so a snapshot's TTL always matches its listing's current
         # value, even if a future caller mutates the listing between calls.
@@ -215,6 +290,16 @@ async def run_source(
         listing_ids, upserted, appended = await sync_to_async(_persist_all)(
             site, batch, normalized, retention_class, expires_at
         )
+        # Delist stage — runs AFTER persistence so this sweep's listings are
+        # already revived/last_seen-bumped and cannot be delisted by their own
+        # sweep. Restricted to FULL runs: a PROBE is a recovery poke and a
+        # heartbeat is a cheap partial signal, so neither is entitled to conclude
+        # that everything it failed to return has ended.
+        delisted = 0
+        if effective_kind is RunKind.FULL and isinstance(adapter, DelistDetector):
+            scope = adapter.delist_scope(batch, parsed)
+            if scope is not None:
+                delisted = await sync_to_async(_apply_delist)(site, scope)
         resolver_errors = 0
         for listing_id in listing_ids:
             try:
@@ -231,6 +316,7 @@ async def run_source(
             "body_bytes": sum(len(item.payload_text or "") for item in batch.items),
             "resolver_errors": resolver_errors,
             "grain_counts": grain_counts,
+            "listings_delisted": delisted,
         }
         run.status = RunStatus.SUCCESS
         run.finished_at = timezone.now()
