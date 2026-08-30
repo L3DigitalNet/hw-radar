@@ -29,19 +29,12 @@ Instructions for AI agents:
 
 - [ ] Deliberately enable sources only after their operational and source-specific gates pass.
 
+- [ ] After deploying migration 0015, `SourceLaneState.continuous_since` starts NULL, so no
+  `ABSENT_STALE` delist is possible until each FULL lane has polled continuously for the 6h
+  grace — expected and safe; confirm in the first post-deploy sweep logs (`delist stage ...
+  skipping stale-absence marks`).
+
 - [ ] Give the Seller table a retention policy (currently always NULL); needed once IR-002
   redaction reaches merchant usernames.
-
-- [ ] Add a partial index on `expires_at` for retention-sweep efficiency (needs a migration).
-
-- [ ] Make refdata/refresh skip delisted rows via `not_delisted()`.
-
-- [ ] Add `report.redactions` to the poller retention-sweep log line.
-
-- [ ] Add a registry-level test pairing deletion-exemption with redaction for future anchor models.
-
-- [ ] Move `DelistScope`/`DelistDetector` and `adapter_retention()` to `acquisition/contracts.py`.
-
-- [ ] Add a cadence-aware guard for the 6h absence grace after long pauses.
 
 - [ ] Decide the WD Purple recert opt-in question.
