@@ -43,9 +43,8 @@ from typing import cast
 import httpx
 
 from hw_radar.acquisition import http
-from hw_radar.acquisition.contracts import ParsedListing, RawBatch, RawItem
+from hw_radar.acquisition.contracts import DelistScope, ParsedListing, RawBatch, RawItem
 from hw_radar.acquisition.heartbeat import HeartbeatReading
-from hw_radar.acquisition.pipeline import DelistScope
 from hw_radar.catalog.models import RetentionClass, RunKind
 
 DEFAULT_API_BASE = "https://api.ebay.com"

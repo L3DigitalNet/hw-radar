@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
-from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from typing import Protocol
 
@@ -18,7 +17,7 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition.classify import classify_exception
-from hw_radar.acquisition.contracts import ListingResolver, SourceAdapter
+from hw_radar.acquisition.contracts import ListingResolver, SourceAdapter, adapter_retention
 
 # _EVENT_BY_CLASS is the single source of truth for the failure-class -> lifecycle
 # event mapping; a heartbeat probe that raises must back the source off exactly as
@@ -43,37 +42,6 @@ from hw_radar.catalog.models import (
 logger = logging.getLogger(__name__)
 
 _UNKNOWN_STOCK = {"", "unknown"}
-
-
-@dataclass(frozen=True)
-class AdapterRetention:
-    """The DR-001 retention an adapter claims for every row one of its runs persists."""
-
-    retention_class: RetentionClass
-    expires_policy: Callable[[datetime], datetime | None] | None
-
-
-def adapter_retention(adapter: SourceAdapter) -> AdapterRetention:
-    """Read an adapter's declared retention, defaulting to indefinite merchant fact.
-
-    Both attributes are optional on the SourceAdapter protocol — only bounded
-    sources declare them (eBay: ebay_listing_observation + a <=6h expires_policy
-    per DR-008) — so they are read reflectively rather than being protocol
-    members every adapter must spell out.
-
-    EVERY run_source call site that fires a real adapter must forward this;
-    run_source's own defaults are merchant_fact with no TTL, so a call site that
-    forgets silently persists bounded evidence indefinitely, where the DR-001
-    sweeper can never reach it. Call sites: run_heartbeat below, and
-    poll_source / recovery_probe_job in hw_radar.poller.service.
-
-    Its home is this module only because contracts.py, where SourceAdapter
-    lives, is the natural owner but the pattern originated here.
-    """
-    return AdapterRetention(
-        retention_class=getattr(adapter, "retention_class", RetentionClass.MERCHANT_FACT),
-        expires_policy=getattr(adapter, "expires_policy", None),
-    )
 
 
 @dataclass(frozen=True)

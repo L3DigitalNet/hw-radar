@@ -16,9 +16,7 @@ import asyncio
 import logging
 import statistics
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from typing import Protocol, runtime_checkable
+from datetime import date, datetime
 
 from asgiref.sync import sync_to_async
 from django.utils import timezone
@@ -27,6 +25,8 @@ from pydantic import ValidationError
 from hw_radar.acquisition import fx
 from hw_radar.acquisition.classify import classify_exception, classify_response
 from hw_radar.acquisition.contracts import (
+    DelistDetector,
+    DelistScope,
     ListingResolver,
     NormalizedListing,
     ParsedListing,
@@ -69,43 +69,6 @@ class FetchFailure(Exception):
     def __init__(self, failure_class: RunFailureClass, message: str) -> None:
         super().__init__(message)
         self.failure_class = failure_class
-
-
-@dataclass(frozen=True)
-class DelistScope:
-    """What one sweep proves about the listings it did NOT contain (CR-004).
-
-    A source that can say "these keys are what exists right now" returns this from
-    delist_scope(); the pipeline turns it into soft-delete marks. The two fields
-    that matter are evidence-strength knobs, because absence is the weakest kind
-    of evidence there is:
-
-    complete — the sweep enumerated the ENTIRE result set for its query (no unseen
-        pages). Absence from a complete sweep is direct evidence and delists on the
-        spot. A source that cannot prove completeness must pass False; claiming it
-        falsely converts one truncated page into a mass delist.
-    absence_grace — for a truncated sweep, how long a listing must go unseen
-        across EVERY sweep before absence is believed. Set it from the source's
-        freshness obligation, not from the poll interval: the question it answers
-        is "how stale may this offer be before we must stop showing it".
-
-    Both paths are reversible — Listing.mark_relisted() clears the mark when the
-    source shows the listing again — so the failure mode of a wrong delist is a
-    temporarily hidden offer, not lost data.
-    """
-
-    seen_keys: frozenset[str]
-    observed_at: datetime
-    complete: bool
-    absence_grace: timedelta
-
-
-@runtime_checkable
-class DelistDetector(Protocol):
-    """Optional adapter capability, discovered structurally so that wiring a
-    source for delete-on-delist needs no change in the poller's run_source call."""
-
-    def delist_scope(self, batch: RawBatch, parsed: list[ParsedListing]) -> DelistScope | None: ...
 
 
 def _apply_delist(site: SourceSite, scope: DelistScope) -> int:

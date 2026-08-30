@@ -35,7 +35,8 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
-from hw_radar.acquisition.heartbeat import HeartbeatProbe, adapter_retention, run_heartbeat
+from hw_radar.acquisition.contracts import adapter_retention
+from hw_radar.acquisition.heartbeat import HeartbeatProbe, run_heartbeat
 from hw_radar.acquisition.pipeline import run_source
 from hw_radar.acquisition.scheduling.admission import check_admission
 from hw_radar.acquisition.scheduling.apply import apply_run_outcome
