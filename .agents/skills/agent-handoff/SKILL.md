@@ -43,7 +43,7 @@ Knowledge files under `docs/` belong to the consumer after creation. Preserve th
 
 The standard owns:
 
-- `.agents/skills/agent-handoff/**`;
+- `.agents/skills/agent-handoff/**` and its byte-identical copy `.claude/skills/agent-handoff/**`;
 - the optional `.agents/hooks/agent-handoff/session-start`;
 - only the exact marked blocks or semantic hook entries it installed;
 - its entries in the central `.standards/lock.toml` inventory.
@@ -63,22 +63,48 @@ For bugs, allocate the lowest unused three-digit ID and never renumber an existi
 
 ## Closeout
 
-Perform closeout when current work, current facts, or future work changed:
+Perform closeout when current work, current facts, or future work changed. Take the session-start OID from the first entry of the SessionStart `Last 5 commits` block; every `--since` below uses that OID.
 
+0. Survey the session before editing anything. Route the `delta` output instead of reconstructing the session with `grep` or `git log`: its commits become the session record, its touched handoff documents name what to update, and its issue references belong in `docs/STATUS.md` or `docs/TODO.md`.
 1. Update `docs/STATUS.md` with current outcomes that still orient the project.
 2. Preserve user-authored tasks and update the agent queue in `docs/TODO.md`.
 3. Remove completed or superseded detail from `docs/handoff/state.md`; leave only next-session focus and active incidents.
 4. Route deployment, architecture, credential-reference, convention, specification, and plan facts to their durable owners.
 5. Append a compact session record when it adds durable history.
 6. Create or update a numbered bug record when a cause, fix, or lesson should survive.
-7. Run the relevant validation commands and review the diff.
+7. Validate against the session boundary and review the diff.
 
 ```bash
-project-standards agent-handoff validate --repo .
+project-standards agent-handoff delta --repo . --since <session-start-oid>
+project-standards agent-handoff validate --repo . --since <session-start-oid>
 project-standards agent-handoff drift-check --repo .
 ```
 
+`--since` is the closeout form of validation: it suppresses warnings on lines the session did not add, so a warning this session introduced stands out instead of being buried under the pre-existing findings that append-only documents such as `docs/handoff/sessions/` accumulate. Errors are never suppressed by `--since`. Run the bare `validate --repo .` for a full repository audit.
+
 Use `size-report` or `shape-check` when eager content or document form changed.
+
+### Document caps
+
+Write to these caps the first time rather than discovering them by failing validation.
+
+| Document | Caps |
+| --- | --- |
+| `docs/handoff/state.md` | 2048 bytes hard, fatal; 1740 bytes target; 140 chars per bullet; 4 bullets per section; no paragraphs |
+| `docs/STATUS.md` | 60 lines target; 180 chars per bullet |
+| `docs/TODO.md` | 160 chars per bullet |
+| `docs/handoff/deployed.md` | 120 lines target |
+| `docs/handoff/architecture.md` | 200 lines target; 420 chars per paragraph |
+| `docs/handoff/conventions.md` | 180 chars per rule summary; 1200 chars per entry |
+| `docs/handoff/sessions/*.md` | 220 chars per table row; 20 words per row headline |
+| `docs/handoff/bugs/NNN-slug.md` | No size cap; sections Cause, Fix, and Lesson required |
+| Any other handoff document | 360 chars per paragraph; 180 chars per bullet |
+
+Caps count physical characters and bytes in the file. Visual wrapping in an editor is not a line break and does not satisfy a cap. Where this table and the installed policy could ever disagree, the validator wins: its finding reports the measured size and the applicable `max N`, and that number is authoritative.
+
+### Delegating closeout
+
+When the harness provides a dedicated closeout subagent, delegate closeout to it by default and keep the main thread on the remaining work. The brief carries the session-start OID, the `delta` output, the facts to record, and the caps above, because the subagent starts with no conversation context. The orchestrator reviews the resulting diff before the session ends; delegation moves the writing, not the responsibility. Where the harness has no such subagent, perform the same steps inline.
 
 ## Migration reconciliation
 
