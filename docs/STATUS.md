@@ -6,6 +6,9 @@
 - All marketplace sources ship disabled; scoring and alerting are not implemented.
 - Bounded-retention expiry enforcement, eBay listing-grain delete-on-delist (CR-004), and the
   per-lane scheduling-state split (ADR-0020) landed on `dev` (`5a7f5b7`, 2026-08-16).
+- Retention/delist follow-up fixes landed on `dev` (`db62b6f`, 2026-08-30): partial `expires_at`
+  indexes (migration 0014) and a continuity-aware CR-004 absence grace (migration 0015). Not yet
+  pushed, PR'd, or deployed.
 - Source go-live now remains gated by the SA-004 operations checklist and the MS-1e owner
   ratification step, not by missing code.
 - MS-1e's validation-corpus harness and harvest tooling are merged to `main` and DEPLOYED
