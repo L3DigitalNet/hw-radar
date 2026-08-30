@@ -36,5 +36,11 @@ Instructions for AI agents:
 
 - [ ] Give the Seller table a retention policy (currently always NULL); needed once IR-002
   redaction reaches merchant usernames.
+- [ ] `ProductModel`, `DriveSpec`, and `ProductAlias` inherit `RetentionGoverned` and are
+  visited by the sweep but declare neither `retention_constraints()` nor
+  `retention_indexes()` — no CHECK forces `expires_at` NULL for their indefinite classes
+  and each sweep sequential-scans them. Decide whether to add both (migration) or exclude
+  indefinite-only models from `retention_governed_models()`. (Found by the verifier pass
+  2026-08-30.)
 
 - [ ] Decide the WD Purple recert opt-in question.

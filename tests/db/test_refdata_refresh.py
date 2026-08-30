@@ -121,9 +121,10 @@ def test_run_refresh_imports_reconsiders_and_scans(site: SourceSite) -> None:
 
 
 def test_run_refresh_skips_delisted_listings(site: SourceSite) -> None:
-    # CR-004 redaction empties a delisted listing's title on delist, so
-    # reconsidering it against the fresh seed can only regress the grain —
-    # the refresh must exclude it entirely rather than waste a resolve pass.
+    # `gone` keeps its full title (MERCHANT_FACT is never redacted), so
+    # without the not_delisted() filter it would be reconsidered and
+    # upgraded exactly like `live`; the assertion below therefore isolates
+    # the filter, not redaction.
     live = _listing(site, "rr-live", "seagate exos st16000nm002c 16tb sata")
     gone = _listing(site, "rr-gone", "seagate exos st16000nm002c 16tb sata")
     gone.mark_delisted(DelistReason.ABSENT_FROM_SWEEP)
