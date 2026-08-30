@@ -100,7 +100,11 @@ class DelistScope:
     absence_grace — for a truncated sweep, how long a listing must go unseen
         across EVERY sweep before absence is believed. Set it from the source's
         freshness obligation, not from the poll interval: the question it answers
-        is "how stale may this offer be before we must stop showing it".
+        is "how stale may this offer be before we must stop showing it". It is
+        measured in POLLING time, not wall-clock time — the pipeline's delist
+        stage (see _record_sweep_continuity) refuses stale-absence marks unless
+        the lane actually swept continuously across the whole window, so a source
+        that was paused for a day does not delist its catalogue on resume.
 
     Both paths are reversible — Listing.mark_relisted() clears the mark when the
     source shows the listing again — so the failure mode of a wrong delist is a

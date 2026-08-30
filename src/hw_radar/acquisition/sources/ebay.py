@@ -59,6 +59,13 @@ _TOKEN_SKEW_S = 300
 # _expires_in_6h: DR-008 says an eBay observation older than 6h may not be shown,
 # so a listing that has missed every sweep across that whole window has no
 # defensible claim to still be live, whatever Browse's ranking did to it.
+#
+# "Missed every sweep" is the load-bearing clause, and this constant alone cannot
+# enforce it: 6h of wall clock with nothing polling is not 6h of misses. The
+# pipeline's delist stage supplies the other half by requiring the full lane to
+# have been sweeping continuously for this long (SourceLaneState.continuous_since),
+# so raising or lowering the value here changes the freshness bar only — it can
+# never turn a polling outage into a mass delist.
 DELIST_ABSENCE_GRACE = timedelta(hours=6)
 
 # Process-global cache keyed by API base → (token, expires_at). Mirrors http.py's

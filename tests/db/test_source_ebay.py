@@ -23,6 +23,10 @@ from hw_radar.catalog.models import (
     RetentionClass,
     RunKind,
     RunStatus,
+    SchedulingLane,
+    ScraperRun,
+    SourceConfig,
+    SourceLaneState,
     StockStatus,
 )
 
@@ -318,6 +322,27 @@ def test_ebay_complete_sweep_delists_missing_listing(loop: asyncio.AbstractEvent
     ] == ["v1|110500000001|0"]
 
 
+def _full_lane() -> SourceLaneState:
+    return SourceConfig.objects.get(source_site__normalized_name="ebay").lane_state(
+        SchedulingLane.FULL
+    )
+
+
+def _age_out_the_absent_listing(age: timedelta) -> None:
+    """Backdate DELISTED_KEY so it is unseen for `age`, expiry included.
+
+    A bounded eBay listing's expires_at advances in lockstep with last_seen, so it
+    lapses at the same moment the row becomes stale-absence-eligible. Backdating
+    only last_seen (leaving expires_at fresh) would hide this candidate from a
+    delist query built on active(), which also filters on freshness, and so would
+    miss the regression these tests exist to pin.
+    """
+    Listing.objects.filter(source_listing_key=DELISTED_KEY).update(
+        last_seen=timezone.now() - age,
+        expires_at=timezone.now() - timedelta(minutes=1),
+    )
+
+
 def test_ebay_truncated_sweep_needs_the_absence_grace(loop: asyncio.AbstractEventLoop) -> None:
     # One page of a 50-item result set: absence is pagination/ranking churn until
     # the listing has missed every sweep for the whole 6h freshness window.
@@ -327,20 +352,91 @@ def test_ebay_truncated_sweep_needs_the_absence_grace(loop: asyncio.AbstractEven
     assert run.detail_json["listings_delisted"] == 0
     assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
 
-    # A bounded eBay listing's expires_at advances in lockstep with last_seen,
-    # so it lapses at the same moment the row becomes stale-absence-eligible.
-    # Backdating only last_seen (leaving expires_at fresh) would hide this
-    # candidate from a delist query built on active(), which also filters on
-    # freshness, and so would miss the regression this test exists to pin.
-    Listing.objects.filter(source_listing_key=DELISTED_KEY).update(
-        last_seen=timezone.now() - DELIST_ABSENCE_GRACE - timedelta(minutes=1),
-        expires_at=timezone.now() - timedelta(minutes=1),
-    )
+    _age_out_the_absent_listing(DELIST_ABSENCE_GRACE + timedelta(minutes=1))
+    # The grace is measured in polling time, so the lane must also have been
+    # sweeping across the window; these runs are milliseconds apart, so the
+    # continuity run is backdated to stand in for a lane that has been up all day.
+    lane = _full_lane()
+    lane.continuous_since = timezone.now() - DELIST_ABSENCE_GRACE - timedelta(hours=1)
+    lane.save(update_fields=["continuous_since"])
     run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
 
     assert run.detail_json["listings_delisted"] == 1
     gone = Listing.objects.get(source_listing_key=DELISTED_KEY)
     assert gone.delist_reason == DelistReason.ABSENT_STALE
+
+
+def test_ebay_polling_pause_suspends_stale_absence(loop: asyncio.AbstractEventLoop) -> None:
+    # The go-live (2026-08-16) failure: the lane is down longer than the grace
+    # (deploy, outage, back-off, source disabled), so on resume EVERY listing not
+    # on the first truncated page looks 6h+ stale purely because nothing polled.
+    # With delete-on-delist plus IR-002 redaction that would destroy merchant
+    # content wholesale, so the sweep must decline to mark ABSENT_STALE at all.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+    _age_out_the_absent_listing(timedelta(hours=30))
+    pause = timedelta(hours=24)
+    ScraperRun.objects.all().update(started_at=timezone.now() - pause)
+    lane = _full_lane()
+    lane.continuous_since = timezone.now() - pause - timedelta(hours=6)
+    lane.save(update_fields=["continuous_since"])
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+
+    assert run.detail_json["listings_delisted"] == 0
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
+    # The pause restarted the continuity run, so the grace now runs from resume.
+    resumed = _full_lane().continuous_since
+    assert resumed is not None
+    assert resumed > timezone.now() - timedelta(minutes=5)
+
+
+def test_ebay_complete_sweep_delists_through_a_pause(loop: asyncio.AbstractEventLoop) -> None:
+    # Continuity gates the stale-absence heuristic only. A sweep that provably
+    # enumerated the whole result set is direct evidence of absence and owes
+    # nothing to polling history, so it still delists on the first run back.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+    ScraperRun.objects.all().update(started_at=timezone.now() - timedelta(hours=24))
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_COMPLETE_ONE))
+
+    assert run.detail_json["listings_delisted"] == 1
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delist_reason == (
+        DelistReason.ABSENT_FROM_SWEEP
+    )
+
+
+def test_ebay_slow_cadence_waits_for_continuity(loop: asyncio.AbstractEventLoop) -> None:
+    # A lane polling slower than the grace (8h interval vs a 6h grace) makes ONE
+    # missed sweep look stale, so the wall-clock rule alone would delist on a
+    # single ranking miss. The 8h gap is inside the cadence-derived tolerance
+    # (2 x interval), so continuity survives it — and the mark still waits until
+    # the lane has actually been sweeping for a full grace window.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+    _age_out_the_absent_listing(timedelta(hours=8))
+    lane = _full_lane()
+    lane.current_interval_s = int(timedelta(hours=8).total_seconds())
+    resumed_at = timezone.now() - timedelta(hours=3)
+    lane.continuous_since = resumed_at
+    lane.save(update_fields=["current_interval_s", "continuous_since"])
+    ScraperRun.objects.all().update(started_at=timezone.now() - timedelta(hours=8))
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+
+    assert run.detail_json["listings_delisted"] == 0
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
+    kept = _full_lane().continuous_since
+    assert kept is not None
+    assert abs((kept - resumed_at).total_seconds()) < 1  # the 8h gap did not break the run
+
+    lane = _full_lane()
+    lane.continuous_since = timezone.now() - DELIST_ABSENCE_GRACE - timedelta(minutes=1)
+    lane.save(update_fields=["continuous_since"])
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+
+    assert run.detail_json["listings_delisted"] == 1
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delist_reason == (
+        DelistReason.ABSENT_STALE
+    )
 
 
 def test_ebay_relisting_revives_the_same_row(loop: asyncio.AbstractEventLoop) -> None:

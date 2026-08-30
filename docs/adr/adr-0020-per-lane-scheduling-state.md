@@ -85,3 +85,35 @@ Migration `0013_source_lane_state` backfills both lanes from the pre-split colum
 
 - **Refines** [ADR 0015](adr-0015-availability-heartbeat-grain-volatility-scheduling.md) (the fast/slow lane split it introduced) and [ADR 0017](adr-0017-resilient-acquisition.md) (whose lifecycle and failure counters stay source-level here); scheduled by [ADR 0012](adr-0012-orchestration-apscheduler.md).
 - **Registry-as-settings-rows** framing follows [ADR 0016](adr-0016-search-api-self-governance.md): the numbers in both tables stay OQ9-provisional tunables changed by UPDATE, not deploy.
+
+## Amendment — 2026-08-30: `continuous_since` (CR-004 absence grace)
+
+`SourceLaneState` gains one nullable column, `continuous_since` (migration
+`0015_lane_continuous_since`): the instant this lane's current uninterrupted run
+of successful full sweeps began.
+
+It exists because the CR-004 absence grace is a *polling-time* budget that was
+being spent in wall-clock time. A lane that stopped polling for longer than the
+grace — outage, deploy, back-off, disabled source — came back to find every
+listing not on its first truncated page "unseen for 6h", and with
+delete-on-delist plus the IR-002 field redaction that mass-delist destroyed
+merchant content on a source that had not changed at all. The same hole opened
+whenever a lane's `current_interval_s` exceeded the grace, where a single missed
+sweep already looked terminal.
+
+Invariant, enforced in the pipeline's delist stage
+(`hw_radar.acquisition.pipeline`): a listing may be marked `ABSENT_STALE` only if
+it was last seen before `observed_at - absence_grace` **and** the full lane has
+been polling continuously for at least `absence_grace` ending at `observed_at`.
+"Continuously" means every gap between consecutive successful full sweeps stayed
+within `max(2 * current_interval_s, 15 minutes)`; a larger gap restarts the run
+at the sweep that follows it. When continuity is short the sweep skips
+stale-absence marking entirely and logs the resume timestamp at INFO.
+`ABSENT_FROM_SWEEP` on a complete sweep is untouched — enumerating the whole
+result set is direct evidence and owes nothing to polling history.
+
+The column is scheduling *state* by locality only: nothing in `check_admission`,
+`apply_run_outcome`, or `build_scheduler` reads it, so the cadence/health
+boundary this ADR draws is unchanged. It lives on the lane row because
+continuity is a property of one lane's polling, and the full lane is the only
+lane a delist decision may be founded on.

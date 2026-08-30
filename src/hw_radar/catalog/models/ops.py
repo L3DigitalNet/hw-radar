@@ -184,6 +184,15 @@ class SourceLaneState(TimeStamped):
     current_interval_s = models.PositiveIntegerField()
     clean_polls = models.PositiveIntegerField(default=0)
     backoff_until = models.DateTimeField(null=True, blank=True)
+    # Start of this lane's current UNINTERRUPTED run of successful full sweeps
+    # (ADR-0020 amendment 2026-08-30), maintained by the pipeline's delist stage.
+    # It is the polling-time clock the CR-004 absence grace is measured against:
+    # a listing may only be marked ABSENT_STALE once the lane has actually been
+    # polling for the whole grace window, so a downtime, back-off or deploy pause
+    # longer than the cadence tolerance cannot mass-delist a source. NULL means
+    # "no continuous run established yet" and blocks stale-absence delisting
+    # outright. Never read by the scheduler: it carries evidence, not cadence.
+    continuous_since = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "source_lane_state"
