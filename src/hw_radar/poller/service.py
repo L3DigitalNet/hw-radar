@@ -264,7 +264,12 @@ async def retention_sweep_job() -> None:
     per-table counts come back as data to log instead of command stdout.
     """
     report = await sync_to_async(sweep_expired)()
-    logger.info("retention sweep: %s row(s) deleted %s", report.total, dict(report.counts))
+    logger.info(
+        "retention sweep: %s row(s) deleted %s; redacted %s",
+        report.total,
+        dict(report.counts),
+        dict(report.redactions),
+    )
 
 
 @dataclass(frozen=True)

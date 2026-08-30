@@ -8,6 +8,7 @@ the DR-001 sweeper can never reclaim it, breaking IR-002/DR-008.
 """
 
 import asyncio
+from collections import Counter
 from collections.abc import Iterator
 from datetime import timedelta
 
@@ -21,6 +22,7 @@ from hw_radar.acquisition.sources.ebay import (
     _TOKEN_CACHE,  # pyright: ignore[reportPrivateUsage]
     EbayAdapter,
 )
+from hw_radar.catalog.management.commands.purge_expired import SweepReport
 from hw_radar.catalog.models import (
     LifecycleState,
     Listing,
@@ -33,6 +35,7 @@ from hw_radar.poller.service import (
     load_schedules,
     poll_source,
     recovery_probe_job,
+    retention_sweep_job,
 )
 
 # transaction=True: run_source writes from sync_to_async threads.
@@ -119,6 +122,29 @@ def test_scheduled_full_poll_persists_bounded_ebay_retention(
     scheduler = build_scheduler(registry, load_schedules([_ebay_config()]))
     asyncio.run(poll_source("ebay", registry, scheduler))
     _assert_bounded_ebay_rows()
+
+
+def test_retention_sweep_job_logs_redaction_counts(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    # CR-004 redaction is destructive merchant-content removal and must be
+    # observable per cycle; sweep_expired is stubbed so the assertion pins the
+    # log line's shape rather than re-deriving a real redaction scenario
+    # (already covered by tests/db/test_purge_expired.py and test_listing_delist.py).
+    report = SweepReport(
+        dry_run=False,
+        counts=Counter({"catalog.OfferSnapshot": 2}),
+        redactions=Counter({"catalog.Listing": 1}),
+    )
+    monkeypatch.setattr("hw_radar.poller.service.sweep_expired", lambda: report)
+
+    with caplog.at_level("INFO", logger="hw_radar.poller.service"):
+        asyncio.run(retention_sweep_job())
+
+    assert any(
+        "redacted" in record.getMessage() and "'catalog.Listing': 1" in record.getMessage()
+        for record in caplog.records
+    )
 
 
 def test_recovery_probe_persists_bounded_ebay_retention(monkeypatch: pytest.MonkeyPatch) -> None:
