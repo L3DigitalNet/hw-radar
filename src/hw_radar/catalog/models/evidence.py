@@ -9,7 +9,11 @@ from typing import ClassVar
 
 from django.db import models
 
-from hw_radar.catalog.models.base import RetentionGoverned, retention_constraints
+from hw_radar.catalog.models.base import (
+    RetentionGoverned,
+    retention_constraints,
+    retention_indexes,
+)
 from hw_radar.catalog.models.identity import DriveUnit
 from hw_radar.catalog.models.market import SourceSite
 
@@ -34,7 +38,8 @@ class RawPayload(RetentionGoverned):
     class Meta:
         db_table = "raw_payload"
         indexes: ClassVar[list[models.Index]] = [
-            models.Index(fields=["content_hash"], name="raw_payload_content_hash")
+            models.Index(fields=["content_hash"], name="raw_payload_content_hash"),
+            *retention_indexes("raw_payload_expires"),
         ]
         constraints: ClassVar[list[models.BaseConstraint]] = [*retention_constraints("raw_payload")]
 
@@ -60,6 +65,7 @@ class SearchObservation(RetentionGoverned):
 
     class Meta:
         db_table = "search_observation"
+        indexes: ClassVar[list[models.Index]] = [*retention_indexes("search_obs_expires")]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *retention_constraints("search_observation")
         ]
@@ -77,6 +83,7 @@ class VerificationEvent(RetentionGoverned):
 
     class Meta:
         db_table = "verification_event"
+        indexes: ClassVar[list[models.Index]] = [*retention_indexes("verif_event_expires")]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *retention_constraints("verification_event")
         ]
@@ -123,7 +130,8 @@ class AvailabilityHeartbeatObservation(RetentionGoverned):
         indexes: ClassVar[list[models.Index]] = [
             models.Index(
                 fields=["source_site", "source_sku", "-observed_at"], name="hb_obs_sku_time"
-            )
+            ),
+            *retention_indexes("avail_hb_obs_expires"),
         ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *retention_constraints("availability_heartbeat_observation")
@@ -147,7 +155,8 @@ class AvailabilityHeartbeatEvent(RetentionGoverned):
     class Meta:
         db_table = "availability_heartbeat_event"
         indexes: ClassVar[list[models.Index]] = [
-            models.Index(fields=["source_site", "-observed_at"], name="hb_event_site_time")
+            models.Index(fields=["source_site", "-observed_at"], name="hb_event_site_time"),
+            *retention_indexes("avail_hb_event_expires"),
         ]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *retention_constraints("availability_heartbeat_event")

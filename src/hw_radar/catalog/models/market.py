@@ -22,6 +22,7 @@ from hw_radar.catalog.models.base import (
     RetentionGoverned,
     TimeStamped,
     retention_constraints,
+    retention_indexes,
 )
 from hw_radar.catalog.models.identity import ProductFamily, ProductModel, ProductVariant
 
@@ -323,6 +324,7 @@ class Listing(RetentionGoverned):
                 condition=models.Q(delisted_at__isnull=True),
                 name="listing_active_by_site_key",
             ),
+            *retention_indexes("listing_expires"),
         ]
 
     def mark_delisted(self, reason: DelistReason, *, when: datetime | None = None) -> bool:
@@ -550,6 +552,7 @@ class OfferSnapshot(RetentionGoverned):
 
     class Meta:
         db_table = "offer_snapshot"
+        indexes: ClassVar[list[models.Index]] = [*retention_indexes("offer_snapshot_expires")]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *retention_constraints("offer_snapshot"),
             models.CheckConstraint(

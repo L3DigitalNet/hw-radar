@@ -7,6 +7,7 @@ from io import StringIO
 
 import pytest
 from django.core.management import call_command
+from django.db import connection
 from django.utils import timezone
 
 from hw_radar.catalog.management.commands import purge_expired
@@ -332,3 +333,18 @@ def test_no_expired_bounded_listing_keeps_its_content(site: SourceSite) -> None:
     assert survivors, "the eBay-class row must survive; an empty table would pass vacuously"
     for listing in survivors:
         assert listing.is_content_redacted(), listing.retention_class
+
+
+def test_listing_has_a_partial_expires_at_index() -> None:
+    # Shape witness for retention_indexes() (catalog/models/base.py): the sweep's
+    # WHERE ... AND expires_at < now clause (purge_expired._expired) needs an
+    # index on expires_at or it falls back to a sequential scan of every
+    # Listing row. One model stands in for the other six that call
+    # retention_indexes() — the index-building code path is shared, so this
+    # pins the shape rather than repeating the assertion per table.
+    with connection.cursor() as cursor:
+        constraints = connection.introspection.get_constraints(cursor, Listing._meta.db_table)
+
+    index = constraints.get("listing_expires")
+    assert index is not None, "expected a listing_expires index from retention_indexes()"
+    assert index["columns"] == ["expires_at"]

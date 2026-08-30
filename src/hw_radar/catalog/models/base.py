@@ -54,6 +54,28 @@ def retention_constraints(prefix: str) -> list[models.CheckConstraint]:
     ]
 
 
+def retention_indexes(name: str) -> list[models.Index]:
+    """Return the partial index that keeps the retention sweep an index scan.
+
+    The predicate mirrors purge_expired._expired()'s WHERE shape: only rows
+    with a non-NULL expires_at are eligible for deletion. Bounded retention
+    classes always set expires_at (enforced by _retention_ttl_coherent above);
+    indefinite classes leave it NULL and are excluded from the index, so the
+    index stays small relative to the mostly-NULL evidence tables it covers.
+    The name is passed explicitly because Django truncates/hashes index names
+    past 30 characters, and the DR-001 constraint prefixes used above already
+    exceed that budget.
+    """
+
+    return [
+        models.Index(
+            fields=["expires_at"],
+            condition=models.Q(expires_at__isnull=False),
+            name=name,
+        ),
+    ]
+
+
 class RetentionGoverned(models.Model):
     """DR-001 retention governance fields."""
 
