@@ -1,8 +1,8 @@
 [project_standards]
 schema_version = "1.1"
 catalog = "5"
-release = "5.25.0"
-catalog_digest = "sha256:468ad9ac31e8577a4c27922d47d17de4e678c63d9ab5a5308aaab62b400f508b"
+release = "5.26.0"
+catalog_digest = "sha256:430bce9c5353c17912e19e463f044b543e019f05807c1537abce4cde2b0caa4f"
 config_digest = "sha256:9f0f8f473427c3e326cbbeff6bf15235cda4db3cc75c6eb1acf847ca48f5cf98"
 
 [standards.agent-handoff]
