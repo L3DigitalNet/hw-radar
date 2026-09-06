@@ -29,8 +29,8 @@ Instructions for AI agents:
 
 - [ ] After deploying migration 0015, `SourceLaneState.continuous_since` starts NULL, so no
   `ABSENT_STALE` delist is possible until each FULL lane has polled continuously for the 6h
-  grace — expected and safe; confirm in the first post-deploy sweep logs (`delist stage ...
-  skipping stale-absence marks`).
+  grace — expected and safe; deployed 2026-09-06 (run 34056023371); confirm on the first
+  post-deploy sweep log (`delist stage ... skipping stale-absence marks`).
 
 - [ ] Give the Seller table a retention policy (currently always NULL); needed once IR-002
   redaction reaches merchant usernames.
@@ -39,4 +39,3 @@ Instructions for AI agents:
 - [ ] owner-gated choice: accept the in-house closure of the SA-009 wording residual on MS-2
   design revision 12 (`docs/superpowers/specs/2026-09-06-ms2-scoring-design.md`, `f3bc307`)
   and let the planner cut the MS-2a plan, OR open a third cross-agent audit against revision 12.
-- [ ] dev→main PR and deployment of migrations 0014-0017: PR in progress this session.

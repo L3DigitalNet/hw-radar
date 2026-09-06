@@ -12,8 +12,7 @@
 - OQ22 (resolver-learned-alias retention class) is resolved (owner option a): migration 0017
   (`8101504`) adds `RetentionClass.LISTING_DERIVED_ALIAS`, stamps it via the resolver, and lands
   the DR-001 CHECK pair on `ProductModel`/`DriveSpec`/`ProductAlias` with idempotent backfill.
-  Migrations 0014-0017 are on `dev` and pushed (2026-09-06) but undeployed pending the
-  dev→main PR (in progress).
+  Migrations 0014-0017 are DEPLOYED (PR #22, `f3303b1`, 2026-09-06).
 - Source go-live now remains gated by the SA-004 operations checklist and the MS-1e owner
   ratification step, not by missing code.
 - MS-2 scoring design revision 12 on `dev` (`f3bc307`), owner-ratified (§1.2 incl. S2-23
