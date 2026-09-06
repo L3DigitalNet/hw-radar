@@ -13,42 +13,19 @@
   - [Important Notes](#important-notes)
   - [Table of Contents](#table-of-contents)
   - [Open questions](#open-questions)
-    - [OQ22 — Retention class and `expires_at` policy for resolver-learned (`listing_derived`) `ProductAlias` rows](#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows)
   - [How to maintain this document](#how-to-maintain-this-document)
 
 ## Open questions
 
-One question is open (**OQ22**). All five questions raised by the **2026-07-04 spec gap
-analysis** (OQ16–OQ20) were owner-resolved 2026-07-04 and relocated to
+No question is open. All five questions raised by the **2026-07-04 spec gap analysis**
+(OQ16–OQ20) were owner-resolved 2026-07-04 and relocated to
 [`resolved-questions.md`](resolved-questions.md) (OQ17 and OQ20 research-backed). OQ21
 (`httpx` dependency, raised by the 2026-07-05 MS-1 brainstorm) was owner-resolved the same
-day and recorded directly in `resolved-questions.md`. The next question opened here takes
-the number **OQ23**.
-
-### OQ22 — Retention class and `expires_at` policy for resolver-learned (`listing_derived`) `ProductAlias` rows
-
-**From:** the migration-0016 retention-index follow-up (2026-09-06). **Decision needed:**
-`matching/resolver.py`'s `_emit_learned_aliases` creates `ProductAlias` rows with
-`retention_class=""`. DR-001 requires every row to carry a class, and the two candidates
-conflict: an indefinite class (`merchant_fact` / `manufacturer_reference`) persists a token
-extracted from an eBay title past DR-008's six-hour eBay deletion duty and stamps false
-provenance, while a bounded class (`ebay_listing_observation`) makes the hourly sweep delete
-learned aliases and destroys the self-shrinking review queue that ADR-0019 rule 7 relies on.
-Options: (a) a new indefinite class `listing_derived_alias` with explicit provenance
-semantics; (b) a bounded class, re-learned on the next observation; (c) treat learned aliases
-as `manufacturer_reference` once corroborated by two or more sources. Needed before the
-DR-001 CHECK pair can be added to `ProductModel`/`DriveSpec`/`ProductAlias`.
-
-#### Agent notes
-
-Until decided, the identity models carry only the partial `expires_at` index (migration
-0016) and not the DR-001 CHECK pair; 45 tests/db fixture sites also omit the class and need
-updating when the CHECK lands (see the `ProductModel.Meta` comment and `purge_expired.py`'s
-docstring).
-
-#### My Comments
-
-_(owner — pending)_
+day and recorded directly in `resolved-questions.md`. OQ22 (retention class for
+resolver-learned `ProductAlias` rows, raised by the migration-0016 follow-up) was
+owner-resolved 2026-09-06 and relocated to
+[`resolved-questions.md`](resolved-questions.md#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows).
+The next question opened here takes the number **OQ23**.
 
 ## How to maintain this document
 
