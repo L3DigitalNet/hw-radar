@@ -34,15 +34,9 @@ Instructions for AI agents:
 
 - [ ] Give the Seller table a retention policy (currently always NULL); needed once IR-002
   redaction reaches merchant usernames.
-- [ ] `ProductModel`, `DriveSpec`, and `ProductAlias` carry the partial `expires_at` index
-  (migration 0016) but still lack the DR-001 CHECK pair from `retention_constraints()`.
-  Add the CHECK pair and update the ~45 test/db fixture sites that omit `retention_class`
-  once the new resolver-learned-alias retention OQ (see `docs/open-questions.md`) is decided.
-
 - [ ] Decide the WD Purple recert opt-in question.
 
-- [ ] owner-gated choice: open a fresh cross-agent audit against MS-2 design revision 7
-  (`docs/superpowers/specs/2026-09-06-ms2-scoring-design.md`, `2a28656`) for peer confirmation
-  of SA-025/026/027/019, OR proceed directly to the planner cutting the MS-2a plan (then
-  cross-agent review-plan).
-- [ ] dev→main PR and deployment of migrations 0014/0015/0016 remains owner-gated.
+- [ ] owner-gated choice: accept the in-house closure of the SA-009 wording residual on MS-2
+  design revision 12 (`docs/superpowers/specs/2026-09-06-ms2-scoring-design.md`, `f3bc307`)
+  and let the planner cut the MS-2a plan, OR open a third cross-agent audit against revision 12.
+- [ ] dev→main PR and deployment of migrations 0014-0017: PR in progress this session.

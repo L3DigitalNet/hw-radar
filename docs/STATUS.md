@@ -8,16 +8,21 @@
   per-lane scheduling-state split (ADR-0020) landed on `dev` (`5a7f5b7`, 2026-08-16).
 - Retention/delist follow-up fixes landed on `dev` (`db62b6f`, 2026-08-30): partial `expires_at`
   indexes (migration 0014) and a continuity-aware CR-004 absence grace (migration 0015). A third
-  partial-index migration (0016, `6e68585`) covers `ProductModel`/`DriveSpec`/`ProductAlias`. All
-  three (0014/0015/0016) are on `dev` and pushed (2026-09-06) but undeployed pending
-  the dev→main PR.
+  partial-index migration (0016, `6e68585`) covers `ProductModel`/`DriveSpec`/`ProductAlias`.
+- OQ22 (resolver-learned-alias retention class) is resolved (owner option a): migration 0017
+  (`8101504`) adds `RetentionClass.LISTING_DERIVED_ALIAS`, stamps it via the resolver, and lands
+  the DR-001 CHECK pair on `ProductModel`/`DriveSpec`/`ProductAlias` with idempotent backfill.
+  Migrations 0014-0017 are on `dev` and pushed (2026-09-06) but undeployed pending the
+  dev→main PR (in progress).
 - Source go-live now remains gated by the SA-004 operations checklist and the MS-1e owner
   ratification step, not by missing code.
-- MS-2 scoring design revision 7 on `dev` (`2a28656`), owner-ratified (S2-1..S2-26, §1.2, 2026-09-06).
-  Codex cross-agent audit closed at the round-5 cap: 23/27 findings resolved, and revision 7's
-  fixes for the remaining SA-025/026/027/019 findings were confirmed in-house (no peer review yet).
-  Next step is owner-gated: open a fresh cross-agent audit against revision 7, or proceed directly
-  to cutting the MS-2a plan.
+- MS-2 scoring design revision 12 on `dev` (`f3bc307`), owner-ratified (§1.2 incl. S2-23
+  re-ratification, 2026-09-06). Fresh cross-agent audit b2eedc33 ran all five rounds against
+  revision 7-12: SA-001..SA-008 resolved by the peer (revisions 8-11); SA-009 partial at the
+  round-5 cap (mechanism accepted, two deliverable/coverage sentences inconsistent) and closed
+  in revision 12 with in-house verification only (no peer review of revision 12 yet).
+  Next step is owner-gated: accept the in-house SA-009 closure, or open a third audit against
+  revision 12; then the planner cuts the MS-2a plan.
 - Master-spec hygiene pass landed (`c3af4d7`, Revision History 0.15): score home = listing_score,
   $/TB computed in the scoring lib rather than an offer_snapshot generated column, lot-quantity
   wording, C.4 cap units 0.35/0.60, and ADR-0011 wording (q = price percentile, 1-q cheapness).

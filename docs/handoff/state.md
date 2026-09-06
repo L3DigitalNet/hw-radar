@@ -2,10 +2,10 @@
 
 ## Current focus
 
-- MS-2 design rev 7 on `dev` (`2a28656`) owner-ratified; Codex audit closed at cap (23/27 resolved).
-- Next: owner picks fresh cross-agent audit of rev 7 vs. cutting the MS-2a plan directly.
-- OQ22 (learned-alias retention class) still open; blocks the DR-001 CHECK pair on identity models.
-- Migrations 0014/0015/0016 on `dev`, pushed, undeployed, need dev→main PR; battery green at `25f994e` (548p/1s/95%).
+- MS-2 design rev 12 (`f3bc307`) owner-ratified; audit b2eedc33 closed at cap 8/9, SA-009 residual closed in-house.
+- Next: owner choice — accept in-house SA-009 closure vs. third audit — then planner cuts MS-2a plan.
+- OQ22 resolved (option a); DR-001 CHECK pair landed via migration 0017; resolved-questions.md updated.
+- dev→main PR for migrations 0014-0017 in progress; battery green at `8101504` (552p/1s/95%); CI green `5c65174`.
 
 ## Active incidents
 
