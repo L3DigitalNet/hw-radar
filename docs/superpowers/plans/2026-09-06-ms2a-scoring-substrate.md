@@ -436,10 +436,21 @@ Files: `src/hw_radar/catalog/models/scoring.py`,
   'tier')`** on `CohortBaseline` (§3 `:352`), which matters more there than anywhere
   else because the row is immutable — a malformed step can never be corrected in
   place, only pruned; C4 adds `count_basis IN ('total_count', 'net_score_proxy',
-  'unavailable')` (§3.2.5). That is **every** persisted closed-vocabulary scoring
-  enum this milestone creates (pass-3 finding 17); `retention_class` is excluded
-  because `retention_constraints()` already constrains it and C5's triggers pin its
-  source mapping. Each is asserted by a
+  'unavailable')` (§3.2.5). That is **every persisted closed-vocabulary enum this
+  milestone creates that a scoring decision is read from or written to** (pass-3
+  finding 17), and the scope is deliberately that narrow: `retention_class` is
+  excluded because `retention_constraints()` already constrains it and C5's triggers
+  pin its source mapping, and **`ScoringRun.status` / `ScoringRun.failure_class` are
+  excluded because they are run-lifecycle telemetry, not scoring vocabulary** —
+  §3.4.4 has `ScoringRun` reuse `RunStatus` / `RunFailureClass` (`ops.py:77-90`)
+  precisely to mirror `ScraperRun`, whose own `status` and `failure_class` carry
+  `choices` and **no** `CheckConstraint` today (`ops.py:206-226`: its `Meta` declares
+  indexes only). Adding a CHECK on the scoring copy alone would make two rows of the
+  same operational shape obey different rules, and `failure_class` is
+  `blank=True, default=""`, so the constraint would additionally have to admit the
+  empty string. If run-lifecycle enums should be constrained, that is one change
+  across both tables and it belongs to whoever owns `ScraperRun`, not to MS-2a.
+  Each scoring-enum CHECK is asserted by a
   **raw-SQL insert** of an off-enum value that must raise `IntegrityError` — a test
   going through the ORM alone would prove nothing, because the ORM never validates
   either.
@@ -821,7 +832,7 @@ it cites.
 | 6 | A duplicate `(cohort_key, baseline_digest)` is rejected; deleting a cited version raises `ProtectedError` | C2; C3 |
 | 7 | `CohortBaselineCurrent.current_version` and `next_window_exit_at` accept NULL and `price_event_digest` does not (§3.3.5i, SA-002) | C1 |
 | 8 | `Listing.current_offer_observed_at` and `ListingScore.offer_observed_at` persist with the §2.1 nullability, and `offer_observed_at` is absent from `inputs_json` (SA-001) | B1; C3 |
-| 9 | The three §3.3.5(c) CHECKs reject a `cohort`-basis score with a NULL baseline, a `capacity_unavailable` score carrying a baseline or a cohort key, and both directions of the `offer_observed_at` biconditional; each neutral path is accepted (S2-26) — **and every persisted closed-vocabulary scoring enum carries a database domain CHECK proved by a raw-SQL off-enum insert**: `price_basis`, `quantity_basis` and `matcher_grain` on `ListingScore`, `relaxation_step` on the immutable `CohortBaseline`, and `count_basis` on `SellerRatingObservation` (findings 17). Without the `price_basis` domain, an off-enum value satisfies all three biconditionals | C1; C3; C4 |
+| 9 | The three §3.3.5(c) CHECKs reject a `cohort`-basis score with a NULL baseline, a `capacity_unavailable` score carrying a baseline or a cohort key, and both directions of the `offer_observed_at` biconditional; each neutral path is accepted (S2-26) — **and every persisted closed-vocabulary enum a scoring decision is read from or written to carries a database domain CHECK proved by a raw-SQL off-enum insert**: `price_basis`, `quantity_basis` and `matcher_grain` on `ListingScore`, `relaxation_step` on the immutable `CohortBaseline`, and `count_basis` on `SellerRatingObservation` (finding 17). `ScoringRun.status` / `failure_class` are **out of scope by the stated rationale** — run-lifecycle telemetry mirroring `ScraperRun`, which has no such CHECK (`ops.py:206-226`). Without the `price_basis` domain, an off-enum value satisfies all three biconditionals | C1; C3; C4 |
 | 10 | `ingested_at` is assigned by the database, cannot be supplied by `append_snapshot`, and the migration backfills it from `observed_at` with `ingest_stamp_backfilled` set (§2.2.2, S2-24) | B2 |
 | 11 | `scoring_inputs_changed_at` advances for every `SCORING_INPUT_FIELDS` write and for no other — including **not** on `mark_delisted()` (asserted on a delete-on-delist listing, which is the only class that reaches `redact_merchant_content()`) and **not** on the bulk `redact_expired()` path, under revision 14's exception for an `update_fields` equal to the `REDACTED_CONTENT_FIELDS` key set (`:170`, `:291-292`) | B1 |
 | 12 | `lock_parents_for_delete` asserted per model against §3.4.2's lock order; the seller lock proved by a `FOR UPDATE NOWAIT` probe from a second connection with an unrelated-seller control, corroborated by a **third, genuinely blocking** connection whose ungranted `pg_locks` entry and `pg_blocking_pids()` name the sweep's backend (finding 10) | D3 |
