@@ -41,13 +41,8 @@ Instructions for AI agents:
 
 - [ ] Decide the WD Purple recert opt-in question.
 
-- [ ] owner-gated: ratify MS-2 design §1.2 (all S2 rows, S2-1..S2-26, ~26) per §1.1
-  (`docs/superpowers/specs/2026-09-06-ms2-scoring-design.md`, revision 5). Then the
-  orchestrator runs cross-agent review round 5 to converge the document. Note S2-2b is
-  counsel-adjacent.
-- [ ] Master-spec hygiene pass, editorial, owner-directed per revision-history convention:
-  `docs/specs/hw-radar-master-spec.md` lines 441/447/451 (score home / dollars_per_tb
-  row-local claim), line 1200 (lot quantity already required), lines 1255-1262 (mixed-unit
-  cap formula).
-- [ ] After owner ratification of MS-2 design §1.2, the planner derives the MS-2a
-  implementation plan, then cross-agent review-plan.
+- [ ] owner-gated choice: open a fresh cross-agent audit against MS-2 design revision 7
+  (`docs/superpowers/specs/2026-09-06-ms2-scoring-design.md`, `2a28656`) for peer confirmation
+  of SA-025/026/027/019, OR proceed directly to the planner cutting the MS-2a plan (then
+  cross-agent review-plan).
+- [ ] dev→main PR and deployment of migrations 0014/0015/0016 remains owner-gated.

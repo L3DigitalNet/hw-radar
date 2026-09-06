@@ -13,9 +13,14 @@
   the dev→main PR.
 - Source go-live now remains gated by the SA-004 operations checklist and the MS-1e owner
   ratification step, not by missing code.
-- MS-2 scoring design authored and under cross-agent (Codex) review, revision 5 on `dev`
-  (`ebcb71b`): rounds 1-4 complete, round 5 held pending owner ratification of S2-1..S2-26
-  (design §1.2). The MS-2a plan cannot be cut until that ratification lands.
+- MS-2 scoring design revision 7 on `dev` (`2a28656`), owner-ratified (S2-1..S2-26, §1.2, 2026-09-06).
+  Codex cross-agent audit closed at the round-5 cap: 23/27 findings resolved, and revision 7's
+  fixes for the remaining SA-025/026/027/019 findings were confirmed in-house (no peer review yet).
+  Next step is owner-gated: open a fresh cross-agent audit against revision 7, or proceed directly
+  to cutting the MS-2a plan.
+- Master-spec hygiene pass landed (`c3af4d7`, Revision History 0.15): score home = listing_score,
+  $/TB computed in the scoring lib rather than an offer_snapshot generated column, lot-quantity
+  wording, C.4 cap units 0.35/0.60, and ADR-0011 wording (q = price percentile, 1-q cheapness).
 - The scrapy CVE-2026-84366 dependency-audit red is cleared (`8cc3f10`, scrapy 2.16.0->2.18.0).
 - MS-1e's validation-corpus harness and harvest tooling are merged to `main` and DEPLOYED
   (PR #20, release `1099f766`, healthz-verified 2026-08-16): the Approach-A evaluator, `EvalReport`
