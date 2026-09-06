@@ -161,7 +161,7 @@ def test_seeded_sources_exist_and_are_disabled() -> None:
     # sources that aren't drop_prone-eligible (FR-002). eBay is heartbeat-native:
     # its Browse poll IS the heartbeat, so fast_lane=True (drop_prone ∩ ebay_browse).
     expected = {
-        # key: (tier, heartbeat_enabled, fast_lane)
+        # Each value is the tuple (tier, heartbeat_enabled, fast_lane).
         "wd-recertified": (SourceTier.T1_MANUFACTURER, True, True),
         "seagate-recertified": (SourceTier.T1_MANUFACTURER, True, True),
         "serverpartdeals": (SourceTier.T2_SPECIALIST, True, False),
