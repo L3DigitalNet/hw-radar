@@ -102,9 +102,12 @@ def test_existing_listing_derived_alias_same_target_is_adopted(docs: list[SeedDo
     model = ProductModel.objects.get(model_number="ST16000NE000")
     alias = ProductAlias.objects.get(normalized_alias_text=normalize_alias_text("ST16000NE000"))
     # Pre-existing listing_derived alias at the same target upgrades in place —
-    # simulate by downgrading, then re-importing.
+    # simulate by downgrading, then re-importing. The downgrade uses the real
+    # resolver-written shape (OQ22: listing_derived_alias, expires_at NULL), and
+    # this import is the ONE promotion to manufacturer_reference the class
+    # permits: a first-party datasheet corroborating the learned token.
     alias.source_kind = AliasSourceKind.LISTING_DERIVED
-    alias.retention_class = ""
+    alias.retention_class = RetentionClass.LISTING_DERIVED_ALIAS
     alias.save(update_fields=["source_kind", "retention_class"])
     report = import_documents(docs)
     alias.refresh_from_db()
@@ -129,6 +132,7 @@ def test_alias_pointing_at_a_different_target_fails_into_review(docs: list[SeedD
         normalized_alias_text=normalize_alias_text("WUH721818ALE6L4"),
         product_model=stranger,
         source_kind=AliasSourceKind.LISTING_DERIVED,
+        retention_class=RetentionClass.LISTING_DERIVED_ALIAS,
     )
     before = ProductModel.objects.count()
     with pytest.raises(ImportConflictError) as excinfo:
@@ -155,6 +159,7 @@ def test_brand_equivalent_collision_is_flagged_as_such(docs: list[SeedDocument])
         normalized_alias_text=normalize_alias_text("WUH721818ALE6L4"),
         product_model=rebrand,
         source_kind=AliasSourceKind.LISTING_DERIVED,
+        retention_class=RetentionClass.LISTING_DERIVED_ALIAS,
     )
     with pytest.raises(ImportConflictError) as excinfo:
         import_documents(docs)

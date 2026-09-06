@@ -13,6 +13,25 @@ class RetentionClass(models.TextChoices):
     MANUFACTURER_REFERENCE = "manufacturer_reference", "Manufacturer reference"
     AVAILABILITY_HEARTBEAT = "availability_heartbeat", "Availability heartbeat (30d)"
     AVAILABILITY_HEARTBEAT_EVENT = "availability_heartbeat_event", "Heartbeat event (365d)"
+    # Provenance semantics (owner-ratified 2026-09-06, OQ22 option (a)) — this
+    # class exists to keep learned aliases distinguishable from facts:
+    #   * The alias token was extracted from a merchant listing (often an eBay
+    #     title). It is an INFERENCE by matching.resolver._emit_learned_aliases,
+    #     not a manufacturer or merchant assertion, so it must never be promoted
+    #     to MANUFACTURER_REFERENCE without independent corroboration — the
+    #     refdata seed path (refdata/persist._import_alias) is the only writer
+    #     allowed to make that promotion, and it does so from a first-party
+    #     datasheet.
+    #   * Indefinite (expires_at NULL) because ADR-0019 rule 7's review queue
+    #     shrinks only if learned aliases persist: a bounded class would let the
+    #     hourly purge_expired sweep delete them and re-open every resolution the
+    #     alias had already settled.
+    #   * NOT subject to DR-008's six-hour eBay deletion duty. The row stores no
+    #     listing content — only a normalized identifier token and the model it
+    #     points at — so it is not an eBay observation record. That reading is
+    #     the owner's ratified position, recorded in docs/resolved-questions.md
+    #     under OQ22; do not narrow it silently.
+    LISTING_DERIVED_ALIAS = "listing_derived_alias", "Listing-derived alias (indefinite)"
 
 
 INDEFINITE_RETENTION_CLASSES: tuple[RetentionClass, ...] = (
@@ -20,6 +39,7 @@ INDEFINITE_RETENTION_CLASSES: tuple[RetentionClass, ...] = (
     RetentionClass.AMAZON_IDENTIFIER,
     RetentionClass.TAVILY_EXTRACT,
     RetentionClass.MANUFACTURER_REFERENCE,
+    RetentionClass.LISTING_DERIVED_ALIAS,
 )
 BOUNDED_RETENTION_CLASSES: tuple[RetentionClass, ...] = (
     RetentionClass.EBAY_LISTING_OBSERVATION,

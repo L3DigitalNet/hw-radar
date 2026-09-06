@@ -81,18 +81,21 @@ def exos_16tb() -> ProductModel:
         manufacturer=manufacturer,
         model_number="ST16000NM001G",
         normalized_model_number=normalize_alias_text("ST16000NM001G"),
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     DriveSpec.objects.create(
         product_model=model,
         media_type=MediaType.HDD,
         capacity_tb=Decimal("16.000"),
         interface="SATA 6Gb/s",
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     ProductAlias.objects.create(
         alias_type=AliasType.MPN,
         normalized_alias_text=normalize_alias_text("ST16000NM001G"),
         product_model=model,
         source_kind=AliasSourceKind.CATALOG_AUTHORITATIVE,
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     return model
 
@@ -123,24 +126,28 @@ def exos_family_split() -> ProductFamily:
         product_family=family,
         model_number="ST16000NM002C",
         normalized_model_number=normalize_alias_text("ST16000NM002C"),
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     DriveSpec.objects.create(
         product_model=model_a,
         media_type=MediaType.HDD,
         capacity_tb=Decimal("16.000"),
         interface="SATA 6Gb/s",
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     model_b = ProductModel.objects.create(
         manufacturer=manufacturer,
         product_family=family,
         model_number="ST18000NM003D",
         normalized_model_number=normalize_alias_text("ST18000NM003D"),
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     DriveSpec.objects.create(
         product_model=model_b,
         media_type=MediaType.HDD,
         capacity_tb=Decimal("18.000"),
         interface="SATA 6Gb/s",
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     return family
 

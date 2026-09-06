@@ -229,6 +229,7 @@ def test_import_refdata_command_fails_loudly_on_conflicts(db: None) -> None:
         normalized_alias_text="st16000nm002c",
         product_model=stranger,
         source_kind="listing_derived",
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     with pytest.raises(CommandError):
         call_command("import_refdata")

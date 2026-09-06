@@ -11,7 +11,12 @@ from typing import ClassVar
 
 from django.db import models
 
-from hw_radar.catalog.models.base import RetentionGoverned, TimeStamped, retention_indexes
+from hw_radar.catalog.models.base import (
+    RetentionGoverned,
+    TimeStamped,
+    retention_constraints,
+    retention_indexes,
+)
 
 
 class Condition(models.TextChoices):
@@ -135,24 +140,25 @@ class ProductModel(TimeStamped, RetentionGoverned):
 
     class Meta:
         db_table = "product_model"
-        # ProductModel, DriveSpec and ProductAlias take retention_indexes() but
-        # deliberately NOT the retention_constraints() CHECK pair that every
-        # other RetentionGoverned model carries, so the DR-001 invariant
-        # "retention_class is set, and it agrees with expires_at" is unenforced
-        # at the database on these three tables. The blocker is
-        # matching.resolver._emit_learned_aliases, which writes ProductAlias rows
-        # with an empty retention_class; the class those learned aliases should
-        # carry is an unresolved owner decision (DR-008's six-hour eBay deletion
-        # duty against ADR-0019 rule 7's durable learned aliases), tracked in
-        # docs/open-questions.md and docs/TODO.md. Adding the pair before that
-        # lands makes the resolver raise IntegrityError on every learned alias.
-        # The index is independent of that decision and is what keeps the hourly
-        # purge_expired sweep an index scan instead of three sequential scans.
+        # ProductModel, DriveSpec and ProductAlias carry the DR-001 CHECK pair
+        # (migration 0017, OQ22) like every other RetentionGoverned model: the
+        # class is non-empty and agrees with expires_at. Every writer to these
+        # three tables must therefore stamp a class — refdata.persist stamps
+        # MANUFACTURER_REFERENCE on seeded rows, and
+        # matching.resolver._emit_learned_aliases stamps LISTING_DERIVED_ALIAS
+        # (see RetentionClass in catalog/models/base.py for what that class
+        # asserts about provenance). An unstamped insert now raises
+        # IntegrityError instead of silently creating a row the retention sweep
+        # can never classify.
+        # The partial index below is independent of the CHECK pair: it keeps the
+        # hourly purge_expired sweep an index scan instead of three sequential
+        # scans.
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
                 fields=["manufacturer", "normalized_model_number"],
                 name="product_model_identity_anchor",
             ),
+            *retention_constraints("product_model"),
         ]
         indexes: ClassVar[list[models.Index]] = [*retention_indexes("product_model_expires")]
 
@@ -224,6 +230,9 @@ class DriveSpec(TimeStamped, RetentionGoverned):
 
     class Meta:
         db_table = "drive_spec"
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *retention_constraints("drive_spec"),
+        ]
         indexes: ClassVar[list[models.Index]] = [*retention_indexes("drive_spec_expires")]
 
 
@@ -308,6 +317,7 @@ class ProductAlias(RetentionGoverned):
                 name="product_alias_oem_multi_target_no_dupes",
                 nulls_distinct=False,
             ),
+            *retention_constraints("product_alias"),
         ]
         indexes: ClassVar[list[models.Index]] = [*retention_indexes("product_alias_expires")]
 

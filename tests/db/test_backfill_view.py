@@ -87,12 +87,14 @@ def test_model_grain_listings_are_not_in_the_queue(site: SourceSite) -> None:
         manufacturer=mfr,
         model_number="ST16000NM001G",
         normalized_model_number="st16000nm001g",
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     ProductAlias.objects.create(
         alias_type=AliasType.MPN,
         normalized_alias_text="st16000nm001g",
         product_model=model,
         source_kind=AliasSourceKind.CATALOG_AUTHORITATIVE,
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     _resolve(site, "b4", "Seagate 16TB ST16000NM001G Recertified")
     assert not UnknownModelBackfill.objects.filter(mpn_hypothesis="st16000nm001g").exists()

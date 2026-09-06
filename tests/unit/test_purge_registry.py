@@ -1,16 +1,22 @@
 """Registry-level invariants the retention sweep depends on but cannot check itself.
 
-Three properties, all derived from the app registry rather than a hand-written
+Four properties, all derived from the app registry rather than a hand-written
 list: the sweep must cover every RetentionGoverned table, now and after new
 models land; any model that claims expired rows against deletion must also
-declare what gets scrubbed from the rows it keeps; and every swept table must
-declare the partial expires_at index the sweep's own query plan depends on.
+declare what gets scrubbed from the rows it keeps; every swept table must
+declare the partial expires_at index the sweep's own query plan depends on; and
+every swept table must declare the DR-001 CHECK pair that makes the sweep's
+class/expires_at assumptions true at the database.
 """
 
-from django.db.models import Field, Model
+from django.db.models import CheckConstraint, Field, Model
 
 from hw_radar.catalog.management.commands.purge_expired import retention_governed_models
-from hw_radar.catalog.models.base import RetentionGoverned, retention_indexes
+from hw_radar.catalog.models.base import (
+    RetentionGoverned,
+    retention_constraints,
+    retention_indexes,
+)
 
 
 def _concrete_descendants(cls: type[Model]) -> set[type[Model]]:
@@ -130,4 +136,30 @@ def test_every_swept_model_declares_the_expires_at_partial_index() -> None:
         assert partial, f"{label}: no partial expires_at index from retention_indexes()"
         assert partial == retention_indexes(partial[0].name), (
             f"{label}: expires_at index predicate differs from retention_indexes()"
+        )
+
+
+def test_every_swept_model_declares_the_dr001_check_pair() -> None:
+    # The sweep's correctness rests on two facts it never verifies at runtime:
+    # every row carries a class, and an indefinite-class row has a NULL
+    # expires_at (see purge_expired._expired, which treats the class filter and
+    # the timestamp filter as independent guards). Only the CHECK pair makes
+    # those true — a table without it can hold a classless row that no sweep
+    # will ever retire, and the loss is silent. The prefix is read back off the
+    # constraint name rather than hardcoded per model, so this compares each
+    # model's pair against retention_constraints() itself: a change to the
+    # predicate that a model's migration never picked up fails here.
+    for model in retention_governed_models():
+        label = model._meta.label  # pyright: ignore[reportPrivateUsage]
+        checks = {
+            c.name: c
+            for c in model._meta.constraints  # pyright: ignore[reportPrivateUsage]
+            if isinstance(c, CheckConstraint)
+        }
+        class_set = [n for n in checks if n.endswith("_retention_class_set")]
+        assert class_set, f"{label}: no *_retention_class_set CHECK from retention_constraints()"
+        prefix = class_set[0].removesuffix("_retention_class_set")
+        expected = retention_constraints(prefix)
+        assert [checks.get(c.name) for c in expected] == expected, (
+            f"{label}: DR-001 CHECK pair differs from retention_constraints({prefix!r})"
         )
