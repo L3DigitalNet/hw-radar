@@ -19,7 +19,12 @@ day it is added; `tests/unit/test_purge_registry.py` pins that property.
 The sweep deletes only rows whose `retention_class` is in
 BOUNDED_RETENTION_CLASSES *and* whose `expires_at` is in the past. Indefinite
 classes carry NULL `expires_at` (enforced by the `*_retention_ttl_coherent`
-CHECK) and can never match; see `_expired`.
+CHECK) and can never match; see `_expired`. That CHECK pair is absent on the
+identity models `product_model`, `drive_spec`, and `product_alias` — their
+retention class for resolver-learned aliases is an open owner decision (see
+the comment on `ProductModel.Meta` in `catalog/models/identity.py` and
+`docs/open-questions.md`), so those three tables carry only the partial
+`expires_at` index and rely on the write-time stamp alone.
 
 Delete or redact, decided PER ROW, never per table. Most expired rows are simply
 deleted. A row is kept only if its model claims it through `deletion_exempt_q`
