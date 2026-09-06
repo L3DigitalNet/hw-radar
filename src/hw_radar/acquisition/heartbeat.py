@@ -17,7 +17,7 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition.classify import classify_exception
-from hw_radar.acquisition.contracts import ListingResolver, SourceAdapter
+from hw_radar.acquisition.contracts import ListingResolver, SourceAdapter, adapter_retention
 
 # _EVENT_BY_CLASS is the single source of truth for the failure-class -> lifecycle
 # event mapping; a heartbeat probe that raises must back the source off exactly as
@@ -224,11 +224,12 @@ async def run_heartbeat(
         # A clean probe with no transition is still a successful poll: it feeds
         # auto-ramp so a stable source widens its cadence over time.
         return RunOutcome(LifecycleEvent.SUCCESS)
+    retention = adapter_retention(adapter)
     _run, outcome = await run_source(
         adapter,
         resolver,
-        retention_class=getattr(adapter, "retention_class", RetentionClass.MERCHANT_FACT),
-        expires_policy=getattr(adapter, "expires_policy", None),
+        retention_class=retention.retention_class,
+        expires_policy=retention.expires_policy,
         run_kind=RunKind.FULL,
     )
     return outcome

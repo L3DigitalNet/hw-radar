@@ -5,17 +5,24 @@
 # string for the type-checker without subscripting the class at runtime.
 from __future__ import annotations
 
+from copy import copy
+from datetime import datetime
 from decimal import Decimal
 from typing import ClassVar
 
-from django.db import models
-from django.db.models.functions import Coalesce
+from django.apps import apps
+from django.db import models, transaction
+from django.db.models.functions import Coalesce, Now
+from django.utils import timezone
 
 from hw_radar.catalog.models.base import (
+    BOUNDED_RETENTION_CLASSES,
     ResolutionGrain,
+    RetentionClass,
     RetentionGoverned,
     TimeStamped,
     retention_constraints,
+    retention_indexes,
 )
 from hw_radar.catalog.models.identity import ProductFamily, ProductModel, ProductVariant
 
@@ -74,8 +81,161 @@ class Seller(TimeStamped):
         return self.name
 
 
+class DelistReason(models.TextChoices):
+    """Why a listing was marked terminal (CR-004). The two absence reasons record
+    the STRENGTH of the evidence, not just the fact — a complete-sweep miss and a
+    stale-absence inference have different false-positive rates, and keeping them
+    apart is what makes a later audit of delist decisions possible."""
+
+    ABSENT_FROM_SWEEP = "absent_from_sweep", "Absent from a complete source sweep"
+    ABSENT_STALE = "absent_stale", "Absent for longer than the source freshness window"
+    # No adapter reports SOURCE_ENDED yet (no current source payload carries an
+    # item-ended flag). It is declared up front because widening a choices= list
+    # costs an AlterField migration, and this is the reason a source with an
+    # explicit end signal should use instead of inferring from absence.
+    SOURCE_ENDED = "source_ended", "Source reported the listing ended"
+    MANUAL = "manual", "Manually delisted"
+
+
+# Retention classes whose SOURCE carries the IR-002 / DR-008 delete-on-delist
+# obligation. The obligation is a property of the source contract, not of a
+# hostname, so it is scoped by retention class: eBay rows are already stamped
+# ebay_listing_observation everywhere in the pipeline, and a future source that
+# signs the same kind of contract joins by adding its class here rather than by
+# threading a new flag through the adapters. A class listed here MUST also be a
+# bounded class — an indefinite class cannot express "delete when it ends".
+DELETE_ON_DELIST_CLASSES: tuple[RetentionClass, ...] = (RetentionClass.EBAY_LISTING_OBSERVATION,)
+
+
+class ListingQuerySet(models.QuerySet["Listing"]):
+    """Live-offer read path. Every caller that means "offers a user could buy"
+    must go through active(): a delisted listing keeps its row, its snapshots and
+    its resolution edges (DR-010 audit trail) and is excluded by predicate only.
+
+    The three predicates are NOT interchangeable:
+      active()       — showable to a user: neither delisted nor past its
+                       freshness window.
+      not_delisted() — no terminal mark, freshness irrelevant. This, not
+                       active(), is the delist-CANDIDATE set: a listing whose
+                       TTL lapsed is precisely the one an absence sweep still
+                       has to mark, and filtering it out first would make the
+                       stale-absence path unreachable.
+      delisted()     — carries a terminal mark.
+    """
+
+    def active(self) -> ListingQuerySet:
+        # Two independent ways to stop being a live offer, and the second is not
+        # redundant with the retention sweeper: the sweep runs hourly, so between
+        # two passes a bounded eBay listing can sit hours past the DR-008 six-hour
+        # freshness window. Showing it would breach the very obligation the TTL
+        # encodes, so the read path enforces the window itself.
+        #
+        # Now() rather than timezone.now(): the comparison is made by the database
+        # when the query executes. A Python timestamp is frozen at the moment
+        # active() was called, which a cached or reused queryset outlives.
+        return self.not_delisted().filter(
+            models.Q(expires_at__isnull=True) | models.Q(expires_at__gt=Now())
+        )
+
+    def not_delisted(self) -> ListingQuerySet:
+        # NULL expires_at means an indefinite retention class (DR-001 CHECK), so
+        # merchant facts are never aged out by the freshness clause in active().
+        return self.filter(delisted_at__isnull=True)
+
+    def delisted(self) -> ListingQuerySet:
+        return self.filter(delisted_at__isnull=False)
+
+
+class ListingManager(models.Manager["Listing"]):
+    # Written out rather than ListingQuerySet.as_manager(): django-types types
+    # as_manager() as a plain BaseManager, which loses active()/delisted() at the
+    # type level and would push every call site to an untyped escape hatch.
+    def get_queryset(self) -> ListingQuerySet:
+        return ListingQuerySet(self.model, using=self._db)
+
+    def active(self) -> ListingQuerySet:
+        return self.get_queryset().active()
+
+    def not_delisted(self) -> ListingQuerySet:
+        return self.get_queryset().not_delisted()
+
+    def delisted(self) -> ListingQuerySet:
+        return self.get_queryset().delisted()
+
+
 class Listing(RetentionGoverned):
-    """One merchant offer page at the ADR-0010 listing grain."""
+    """One merchant offer page at the ADR-0010 listing grain.
+
+    Delisting (IR-002 / DR-008, CR-004) is a SOFT delete: delisted_at + a
+    DelistReason mark the row terminal, and the row itself stays. Delisting never
+    deletes, because a listing with resolution history cannot be destroyed without
+    taking that history with it — ListingResolution.superseded_by is PROTECT and
+    the edges are the DR-010 audit trail, so the delete either fails outright or
+    cascades the trail away. The mark is reversible (mark_relisted): an
+    absence-based delist that turns out to be wrong self-heals the moment the
+    source shows the listing again, which is what makes the absence heuristics in
+    acquisition.pipeline safe to run.
+
+    RETENTION ROLE — ENTITY, not observation. DR-008 demands that expired eBay
+    data be physically deleted; DR-010 demands that resolution edges survive. The
+    two are reconciled by splitting the anchor row from the evidence hanging off
+    it: the physical-deletion obligation is carried by the OBSERVATION tables
+    (OfferSnapshot, RawPayload, the heartbeat tables), each stamped with its own
+    expires_at and swept independently, so an offer's prices, payloads and
+    heartbeat rows are gone within its TTL whether or not the listing was ever
+    marked delisted. What survives is the identity skeleton the audit trail hangs
+    from.
+
+    That survival is EARNED PER ROW, not granted to the table — see
+    deletion_exempt_q(), which is the authority on which rows the retention sweep
+    keeps and which it deletes outright. A blanket table-wide exemption (the
+    earlier shape of this rule) let a bounded class with no delete-on-delist
+    contract — amazon_ephemeral at 24h, transient_discovery at TTL 0 — sit here
+    forever, which is exactly what DR-001 forbids.
+
+    REDACTION — what "delete on delist" covers (owner ruling, 2026-08-16):
+    merchant-owned CONTENT goes, the anchor stays. The fields in
+    REDACTED_CONTENT_FIELDS are blanked in place; pk, source_listing_key,
+    resolution edges, delist marks and retention metadata survive, so the DR-010
+    trail still reads as "this listing existed, resolved to X, and ended at T"
+    without holding the merchant's title, URL or page payload. Redaction is what
+    every KEPT expired row gets, so a row is never retained with its content:
+      - mark_delisted() redacts immediately, for sources under the
+        delete-on-delist obligation (DELETE_ON_DELIST_CLASSES).
+      - redact_expired() catches every deletion-exempt row whose TTL lapsed —
+        obligated rows whose delist detection missed them, and rows kept only
+        because deleting them would destroy resolution history.
+    Two triggers rather than one because absence-based detection is a heuristic
+    and the obligation is not.
+    """
+
+    # Merchant-owned content, mapped to the blank value redaction writes. Every
+    # entry must be a field whose column tolerates the blank at the database
+    # level, which is why no migration accompanies redaction: TextField/CharField
+    # take "" and the JSONField takes {}.
+    #
+    # url_hash goes WITH canonical_url rather than surviving as an identity aid:
+    # it is a digest of the very content the ruling retires, its only consumer is
+    # URL identity, and (source_site, source_listing_key) — the unique constraint
+    # the upsert actually keys on — already provides that. Keeping a hash of
+    # redacted content would buy nothing and leave us holding the content in
+    # derived form. listing_fingerprint goes for the same reason: it digests
+    # listing content for change detection that a terminal listing no longer does.
+    #
+    # NOT redacted, deliberately: source_listing_key (the marketplace item id is
+    # the audit trail's subject and the key a re-listing is matched on),
+    # is_international (a derived shipping-origin boolean, no merchant text), the
+    # resolution FKs and grain (our conclusions, not their content), and the
+    # first_seen/last_seen/delist/retention stamps (the audit metadata itself).
+    REDACTED_CONTENT_FIELDS: ClassVar[dict[str, object]] = {
+        "canonical_url": "",
+        "url_hash": "",
+        "title_raw": "",
+        "title_normalized": "",
+        "condition_label_raw": "",
+        "listing_fingerprint": "",
+        "page_metadata_json": {},
+    }
 
     source_site = models.ForeignKey(SourceSite, on_delete=models.PROTECT, related_name="listings")
     seller = models.ForeignKey(
@@ -122,7 +282,21 @@ class Listing(RetentionGoverned):
         default=dict, blank=True
     )
     first_seen = models.DateTimeField(auto_now_add=True)
+    # auto_now: bumped by every full save() of the row, so "the source last showed
+    # us this listing" only holds because the delist path below saves with
+    # update_fields (which skips auto_now for excluded fields). The absence
+    # heuristics in acquisition.pipeline compare against this column — a stray
+    # full save() of a delisted listing would silently reset its absence clock.
     last_seen = models.DateTimeField(auto_now=True)
+    # NULL delisted_at == active. A timestamp (rather than a boolean) because
+    # delete-on-delist is an obligation with a clock: DR-008 cares when the offer
+    # stopped existing, not merely that it did.
+    delisted_at = models.DateTimeField(null=True, blank=True)
+    delist_reason = models.CharField(
+        max_length=20, choices=DelistReason.choices, blank=True, default=""
+    )
+
+    objects: ClassVar[ListingManager] = ListingManager()
 
     class Meta:
         db_table = "listing"
@@ -131,7 +305,206 @@ class Listing(RetentionGoverned):
             models.UniqueConstraint(
                 fields=["source_site", "source_listing_key"], name="listing_unique_per_site_key"
             ),
+            # Timestamp and reason move together, in the database: a delisted row
+            # with no reason is unauditable, and a reason with no timestamp would
+            # read as active through active()/delisted() while claiming otherwise.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(delisted_at__isnull=True, delist_reason="")
+                    | (models.Q(delisted_at__isnull=False) & ~models.Q(delist_reason=""))
+                ),
+                name="listing_delist_reason_coherent",
+            ),
         ]
+        indexes: ClassVar[list[models.Index]] = [
+            # Partial index on the live-offer predicate: reads are almost always
+            # active()-filtered, while delisted rows accumulate as history.
+            models.Index(
+                fields=["source_site", "source_listing_key"],
+                condition=models.Q(delisted_at__isnull=True),
+                name="listing_active_by_site_key",
+            ),
+            *retention_indexes("listing_expires"),
+        ]
+
+    def mark_delisted(self, reason: DelistReason, *, when: datetime | None = None) -> bool:
+        """Mark this listing terminal; return False if it already was.
+
+        Also pulls the DR-008 evidence TTLs forward to the delist instant for
+        BOUNDED retention classes, so the retention sweeper physically removes the
+        offer SNAPSHOTS at its next pass instead of up to a full freshness window
+        later. Indefinite classes (merchant facts) are left alone — their
+        retention CHECK requires expires_at IS NULL, and delisting an offer is not
+        licence to drop a merchant fact.
+
+        The listing's own expires_at moves with them, but for a different reason:
+        the Listing is a retention ANCHOR (see the class docstring) and is never
+        row-deleted by the sweeper, so on this row expires_at is a freshness bound
+        that active() reads, not a deletion trigger.
+
+        RawPayload rows are deliberately NOT touched: one stored payload backs
+        every listing in its batch, so expiring it per-listing would destroy the
+        provenance of listings that are still live.
+
+        For a source under the delete-on-delist obligation this also redacts the
+        merchant content in the same transaction (see REDACTED_CONTENT_FIELDS).
+        The three writes are atomic so a crash cannot leave a listing marked
+        terminal while still holding content the mark says we have retired.
+        """
+        if self.delisted_at is not None:
+            return False
+        stamp = when or timezone.now()
+        with transaction.atomic():
+            self.delisted_at = stamp
+            self.delist_reason = reason
+            fields = ["delisted_at", "delist_reason"]
+            bounded = self.retention_class in {c.value for c in BOUNDED_RETENTION_CLASSES}
+            # A bounded row always has a non-NULL expires_at (retention_ttl_coherent),
+            # so this comparison is safe; only ever pull the TTL forward, never extend.
+            if bounded and self.expires_at > stamp:
+                self.expires_at = stamp
+                fields.append("expires_at")
+            # update_fields keeps last_seen (auto_now) where the source left it.
+            self.save(update_fields=fields)
+            if bounded:
+                OfferSnapshot.objects.filter(
+                    listing=self,
+                    retention_class__in=[c.value for c in BOUNDED_RETENTION_CLASSES],
+                    expires_at__gt=stamp,
+                ).update(expires_at=stamp)
+            if self.retention_class in {c.value for c in DELETE_ON_DELIST_CLASSES}:
+                self.redact_merchant_content()
+        return True
+
+    def redact_merchant_content(self) -> bool:
+        """Blank this row's merchant-owned content; return False if already blank.
+
+        Idempotent by construction — the blank state is the fixed point, so the
+        hourly sweeper re-reaching an already-redacted row is a no-op. Callers do
+        not need to check the obligation first only when they mean "redact this
+        specific row" (an operator honoring a takedown, say); the automatic paths
+        scope by DELETE_ON_DELIST_CLASSES before calling.
+
+        Writes only the content columns, so last_seen (auto_now) keeps the instant
+        the source last showed us the listing — the absence heuristics in
+        acquisition.pipeline read that column, and resetting it here would move
+        their clock.
+        """
+        if self.is_content_redacted():
+            return False
+        for name, blank in self.REDACTED_CONTENT_FIELDS.items():
+            # copy(): the JSON blank is a mutable dict living on the class, and
+            # assigning it directly would hand every redacted instance the same
+            # object to later mutate.
+            setattr(self, name, copy(blank))
+        self.save(update_fields=list(self.REDACTED_CONTENT_FIELDS))
+        return True
+
+    def is_content_redacted(self) -> bool:
+        return all(
+            getattr(self, name) == blank for name, blank in self.REDACTED_CONTENT_FIELDS.items()
+        )
+
+    @classmethod
+    def deletion_exempt_q(cls) -> models.Q:
+        """Which expired rows the retention sweeper must keep instead of deleting.
+
+        Cross-file contract with catalog.management.commands.purge_expired
+        (_deletion_exempt_q, _deletable): the sweeper holds no policy of its own —
+        it deletes every expired bounded row this predicate does not claim, and
+        hands the claimed ones to redact_expired(). The two consumers share this
+        one predicate deliberately, so no expired row can fall between them: an
+        expired bounded listing is either deleted or redacted, never left whole.
+
+        Two ways to earn the exemption, and neither is "because this is a Listing":
+
+        1. The delete-on-delist contract (DELETE_ON_DELIST_CLASSES). eBay requires
+           the offer's data to go when the offer does, and redaction plus a kept
+           audit skeleton is how that was settled (see the REDACTION paragraph).
+           A bounded class WITHOUT such a contract — amazon_ephemeral at 24h,
+           transient_discovery at TTL 0 — gets DR-001's plain reading instead: the
+           row expires and is deleted.
+
+        2. Existing resolution history. Deleting such a row cascades into
+           listing_resolution and destroys the DR-010 append-only trail, or trips
+           the superseded_by PROTECT and aborts the whole hourly pass. Redacting
+           and keeping it is the deliberate trade: DR-001's actual concern is that
+           we stop holding the data, which redaction satisfies in full, while the
+           audit trail is unrecoverable once cascaded away. The rejected
+           alternative was catching ProtectedError per row and falling back — that
+           makes the outcome depend on WHICH shape of history a row happens to
+           have, and leaves plain (unsuperseded) edges silently destroyed.
+
+        Clause 2 is also what makes the sweeper's delete path PROTECT-safe: the
+        only FKs into Listing are OfferSnapshot and ListingResolution (both
+        CASCADE) and SearchObservation.matched_listing (SET_NULL), so a row with
+        no resolution edges cannot raise ProtectedError when collected.
+        """
+        # apps.get_model, not an import: resolution.py imports this module, so a
+        # module-level import of ListingResolution here would be circular.
+        resolution = apps.get_model("catalog", "ListingResolution")
+        return models.Q(retention_class__in=[c.value for c in DELETE_ON_DELIST_CLASSES]) | models.Q(
+            # Exists, not a `resolutions__isnull=False` join: a join multiplies
+            # the row once per edge, which would over-count the dry run and make
+            # the redaction update need a distinct() that .update() rejects.
+            models.Exists(resolution.objects.filter(listing=models.OuterRef("pk")))
+        )
+
+    @classmethod
+    def redact_expired(cls, now: datetime, *, dry_run: bool = False) -> int:
+        """Redact expired rows the sweeper keeps; return how many rows changed.
+
+        The safety net behind mark_delisted: delist detection is absence-based and
+        can miss (a truncated sweep, a paused source, a poller outage), but the
+        obligation attaches to the freshness window regardless. Any row whose
+        expires_at has passed is one we may no longer show, so it is also one
+        whose merchant content we may no longer hold — delist mark or not.
+
+        Scoped to the deletion-exempt set, so a kept row never keeps its content:
+        rows outside it are deleted outright by the sweeper and need no redaction.
+
+        Bulk .update() rather than per-row saves: this runs hourly over the whole
+        table, and .update() also leaves auto_now columns alone, which is exactly
+        what the absence clock needs (see redact_merchant_content).
+        """
+        kept = (
+            cls.objects.filter(
+                retention_class__in=[c.value for c in BOUNDED_RETENTION_CLASSES],
+                expires_at__lt=now,
+            )
+            .filter(cls.deletion_exempt_q())
+            .exclude(**cls.REDACTED_CONTENT_FIELDS)  # already-blank rows are skipped
+        )
+        if dry_run:
+            return kept.count()
+        return kept.update(**cls.REDACTED_CONTENT_FIELDS)
+
+    def mark_relisted(self) -> bool:
+        """Clear a terminal mark after the source showed the listing again.
+
+        Return False if it was not delisted. The already-expired evidence TTLs set
+        by mark_delisted are NOT restored: the next observation writes fresh
+        snapshots under the current policy, and reviving a TTL would resurrect
+        evidence the delete-on-delist obligation already retired.
+
+        Consequence worth knowing: clearing the mark does not by itself put the
+        row back in active(), because this listing's backdated expires_at still
+        fails the freshness clause. That is deliberate — an offer with no fresh
+        observation must not be shown. The pipeline gets both halves because
+        upsert_listing re-stamps expires_at just before calling this.
+
+        Redacted content is likewise not restored here — it is gone, and only a
+        new observation can supply it. The same upsert repopulates canonical_url,
+        url_hash, title_raw and condition_label_raw from the live payload;
+        title_normalized comes back on the next resolve, and listing_fingerprint /
+        page_metadata_json stay blank because no writer sets them today.
+        """
+        if self.delisted_at is None:
+            return False
+        self.delisted_at = None
+        self.delist_reason = ""
+        self.save(update_fields=["delisted_at", "delist_reason"])
+        return True
 
 
 class OfferSnapshot(RetentionGoverned):
@@ -179,6 +552,7 @@ class OfferSnapshot(RetentionGoverned):
 
     class Meta:
         db_table = "offer_snapshot"
+        indexes: ClassVar[list[models.Index]] = [*retention_indexes("offer_snapshot_expires")]
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *retention_constraints("offer_snapshot"),
             models.CheckConstraint(

@@ -37,3 +37,4 @@ Write one for a **significant** and **costly-to-reverse** decision — datastore
 | [0017](adr-0017-resilient-acquisition.md) | Resilient acquisition — per-source isolation + circuit-break lifecycle | Accepted | 2026-07-04 |
 | [0018](adr-0018-manufacturer-spec-catalog.md) | Manufacturer spec catalog — a first-class reference-data source | Accepted | 2026-07-04 |
 | [0019](adr-0019-listing-catalog-matching-layer.md) | Listing→catalog matching layer — grain-elastic resolution against the MPN matrix | Proposed | 2026-07-04 |
+| [0020](adr-0020-per-lane-scheduling-state.md) | Per-lane scheduling state — one state row per (source, lane) | Accepted | 2026-08-16 |

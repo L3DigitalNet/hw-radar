@@ -46,6 +46,7 @@
     - [OQ19 — Accessibility & i18n declaration](#oq19--accessibility--i18n-declaration)
     - [OQ20 — OSS license-compliance posture](#oq20--oss-license-compliance-posture)
     - [OQ21 — `httpx` dependency for API/FX/heartbeat HTTP paths](#oq21--httpx-dependency-for-apifxheartbeat-http-paths)
+    - [OQ22 — Retention class and `expires_at` policy for resolver-learned (`listing_derived`) `ProductAlias` rows](#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows)
 
 ---
 
@@ -530,3 +531,14 @@ _Recommendation ratified as presented (2026-07-04): `dependency-review-action` g
 - **Politeness parity:** heartbeat probes still honor the C-007 posture — robots verified at source registration, honest UA, hard timeouts, cadence ≥ crawl-delay (Seagate: 20 s).
 
 **My Comments:** Approved 2026-07-05 during the MS-1 brainstorm (substrate section ratified "Approve incl. httpx").
+
+### OQ22 — Retention class and `expires_at` policy for resolver-learned (`listing_derived`) `ProductAlias` rows
+
+**✅ Resolved (owner-ratified 2026-09-06) — no ADR; this is the record.** Raised by the migration-0016 retention-index follow-up: `matching/resolver.py`'s `_emit_learned_aliases` wrote `ProductAlias` rows with `retention_class=""`, which blocked the DR-001 CHECK pair on `product_model` / `drive_spec` / `product_alias`. The two obvious classes both lose: an existing indefinite class (`merchant_fact` / `manufacturer_reference`) stamps false provenance on a token scraped out of a merchant title, and a bounded class (`ebay_listing_observation`) lets the hourly `purge_expired` sweep delete learned aliases and re-opens every resolution the ADR-0019 rule 7 review queue had already settled.
+
+- **Decision: option (a) — a new indefinite retention class `listing_derived_alias`** (`RetentionClass.LISTING_DERIVED_ALIAS`, `expires_at` NULL), stamped by `_emit_learned_aliases` on every row it creates. Option (b) (bounded, re-learned on the next observation) was rejected because the review queue only shrinks if learned aliases persist; option (c) (promote to `manufacturer_reference` once two or more sources corroborate) was rejected as a separate, unbuilt corroboration mechanism — the class keeps that promotion possible later without pretending it has happened.
+- **Provenance semantics (the point of the separate class):** the alias token is an **inference from a merchant listing**, not a manufacturer or merchant assertion. It must never be promoted to `manufacturer_reference` without corroboration; today the only writer allowed to promote it is the refdata seed path, which corroborates against a first-party datasheet (`refdata/persist.py::_import_alias`).
+- **DR-008 reading (owner's ratified position):** a learned alias is **not** subject to eBay's six-hour deletion duty. The row stores no listing content — only a normalized identifier token and the catalog target it points at — so it is not an eBay observation record. DR-008 continues to govern the `listing` / `offer_snapshot` / heartbeat rows unchanged.
+- **Consequence:** the DR-001 CHECK pair now covers **every** `RetentionGoverned` table (migration `0017_identity_retention_checks`, with an idempotent provenance-derived backfill for pre-existing empty-class rows); `tests/unit/test_purge_registry.py` pins that as a registry-derived property.
+
+**My Comments:** "I agree and ratify all, use sane defaults." (2026-09-06, ratifying option (a) with the provenance and DR-008 semantics above.)

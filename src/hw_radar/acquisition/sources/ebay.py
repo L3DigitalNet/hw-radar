@@ -11,10 +11,10 @@ satisfies the source_config_fast_lane_eligible CHECK. There is no separate cheap
 tier here: the Browse poll IS the heartbeat (probe() reuses the same search
 response), so this source is heartbeat-native.
 
-Retention (DR-008, partial): observations are RetentionClass.EBAY_LISTING_OBSERVATION
-with a <=6h TTL via expires_policy. This bounds observation STALENESS but is NOT
-the delete-on-delist path — eBay `enabled=True` go-live stays BLOCKED (CR-004)
-pending a separate Listing-grain soft-delete plan. C5 ships the connector only.
+Retention (DR-008): observations are RetentionClass.EBAY_LISTING_OBSERVATION with
+a <=6h TTL via expires_policy, which bounds observation STALENESS. Delete-on-
+delist is the separate obligation, and delist_scope() below is this source's half
+of it — the pipeline's delist stage turns the sweep into Listing soft-deletes.
 
 OAuth2 (CR-007):
   - Token is minted with a client-credentials POST to /identity/v1/oauth2/token
@@ -43,7 +43,7 @@ from typing import cast
 import httpx
 
 from hw_radar.acquisition import http
-from hw_radar.acquisition.contracts import ParsedListing, RawBatch, RawItem
+from hw_radar.acquisition.contracts import DelistScope, ParsedListing, RawBatch, RawItem
 from hw_radar.acquisition.heartbeat import HeartbeatReading
 from hw_radar.catalog.models import RetentionClass, RunKind
 
@@ -55,6 +55,18 @@ SEARCH_PARAMS = {"q": "recertified enterprise hard drive", "limit": "200"}
 # Mint the token this many seconds before its stated expiry so a request never
 # rides an about-to-expire token across the eBay boundary.
 _TOKEN_SKEW_S = 300
+# CR-004 absence grace for a TRUNCATED sweep. Deliberately the same 6h as
+# _expires_in_6h: DR-008 says an eBay observation older than 6h may not be shown,
+# so a listing that has missed every sweep across that whole window has no
+# defensible claim to still be live, whatever Browse's ranking did to it.
+#
+# "Missed every sweep" is the load-bearing clause, and this constant alone cannot
+# enforce it: 6h of wall clock with nothing polling is not 6h of misses. The
+# pipeline's delist stage supplies the other half by requiring the full lane to
+# have been sweeping continuously for this long (SourceLaneState.continuous_since),
+# so raising or lowering the value here changes the freshness bar only — it can
+# never turn a polling outage into a mass delist.
+DELIST_ABSENCE_GRACE = timedelta(hours=6)
 
 # Process-global cache keyed by API base → (token, expires_at). Mirrors http.py's
 # _ROBOTS_CACHE: a long-lived poller reuses the token until it nears expiry
@@ -252,6 +264,56 @@ class EbayAdapter:
                     )
                 )
         return out
+
+    def _sweep_is_complete(self, batch: RawBatch) -> bool:
+        # A sweep is complete only if we can PROVE we saw the whole result set:
+        # every payload must be a page with no `next` href and a `total` no larger
+        # than the summaries it carried. Browse's `total` is an estimate for broad
+        # queries, so for SEARCH_PARAMS' sweep this is normally False and the
+        # absence-grace path applies — that is the intended conservative default,
+        # not an oversight. A parse drop also forfeits the claim: a summary we
+        # could not read is not a listing that ended.
+        if self.last_parse_skipped:
+            return False
+        for item in batch.items:
+            data = item.payload_json
+            if not isinstance(data, dict):
+                return False
+            if data.get("next"):
+                return False
+            raw_summaries = data.get("itemSummaries")
+            seen = (
+                len(cast("list[object]", raw_summaries)) if isinstance(raw_summaries, list) else 0
+            )
+            total = data.get("total")
+            if not isinstance(total, int) or total > seen:
+                return False
+        return True
+
+    def delist_scope(self, batch: RawBatch, parsed: list[ParsedListing]) -> DelistScope | None:
+        """Describe what this sweep proves about eBay listings it did not return.
+
+        Semantics (CR-004 / IR-002 delete-on-delist): the Browse search returns
+        only active, buyable items, so a key the sweep omitted is a delist
+        CANDIDATE — never a certainty. Absence is believed immediately only when
+        the page provably enumerated the entire result set; otherwise the listing
+        must go unseen for DELIST_ABSENCE_GRACE first. Both marks are reversible
+        on re-sight, so the false-positive cost is a temporarily hidden offer.
+
+        Returns None when there is nothing to conclude from (an empty sweep would
+        otherwise "prove" that every eBay listing we track has ended).
+
+        Call this only with the batch that was just parsed: the completeness test
+        consults last_parse_skipped, which parse() resets per batch.
+        """
+        if not parsed:
+            return None
+        return DelistScope(
+            seen_keys=frozenset(p.source_listing_key for p in parsed),
+            observed_at=batch.fetched_at,
+            complete=self._sweep_is_complete(batch),
+            absence_grace=DELIST_ABSENCE_GRACE,
+        )
 
     async def probe(self) -> list[HeartbeatReading]:
         # The Browse poll doubles as the heartbeat (fast_lane): reuse fetch+parse

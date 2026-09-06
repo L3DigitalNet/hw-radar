@@ -1,16 +1,24 @@
 # Deployed State
 
-Last updated: 2026-07-06
+Last updated: 2026-08-16
 
 ## Current Deployment
 
 - The service deploys from `main` via the GitHub Actions Deploy workflow.
-  Latest confirmed deployed increment: MS-1b (PR #10). The MS-1c merge (PR #11)
-  deploy run was in progress at the 2026-07-06 session end — verify its outcome
-  before relying on refdata features in production.
+  Latest confirmed deployed increment: MS-1e (PR #20, dev→main merge commit
+  `1099f766`, deploy run 31952349044). Verified 2026-08-16 via `/healthz` at
+  `https://hw-radar.l3digital.net`, reporting release `1099f766`, `database: true`.
 - Production runtime uses the deployment assets under `deploy/` and the Django
-  settings in `src/hw_radar/settings.py`.
-- The app exposes `/healthz` for release and database health checks.
+  settings in `src/hw_radar/settings.py`; the app exposes `/healthz` for
+  release and database health checks.
+- The Deploy workflow's GitHub production environment requires a manual
+  reviewer approval before it runs on each push to `main`. An unapproved run
+  sits pending and dies at GitHub's 30-day cap; this caused production to go
+  stale at MS-1b from 2026-07-05 until this session, when PR #20's run
+  succeeded only after an owner-authorized approval. Every future merge to
+  `main` needs the same approval or the deploy will not run.
+- PR #15's deploy run separately failed the pip-audit gate on `cryptography`
+  49.0.0 (PYSEC-2026-3552); fixed this session by upgrading to 50.0.0.
 
 ## Public-Safe Boundary
 
@@ -48,17 +56,11 @@ none of it is checkable from this repo.
 - [ ] The restore path for the dump above is documented (runbook §18.6) and
       has been read by whoever is about to flip the first source live.
 - [ ] **Bounded-retention TTL enforcement exists for the class being enabled.**
-      `expires_at` is stamped on bounded-class rows but nothing physically
-      deletes rows where `expires_at < now` today (pre-existing substrate
-      gap across all `RetentionGoverned` tables). The only physical purge is
-      TimescaleDB's 30-day chunk-retention policy on
-      `availability_heartbeat_observation`; the `availability_heartbeat_event`
-      table (365-day intent) and any per-source shorter TTL are **not**
-      swept. **This gates eBay specifically:** eBay heartbeat/listing rows
-      carry a 6h `expires_at` (DR-008), but that ≤6h bound is not physically
-      enforced until a sweeper (or a per-source hypertable retention policy)
-      lands. Do not flip eBay `enabled=True` until the sweeper exists — this
-      is in addition to the CR-004 delist-path block below.
+      Landed 2026-08-16 (dev `5a7f5b7`, pending owner ratification): `purge_expired` plus an hourly
+      poller job physically deletes bounded-class rows past `expires_at`, with a per-row
+      deletion-exemption policy — delete-on-delist classes and rows with resolution history are
+      redacted/kept, other bounded classes are hard-deleted.
+      Re-verify against the live system before the first `enabled=True` flip.
 
 Do not flip any source's `enabled` to `True` until every box above is
 checked by an operator against the live system, not from this document.
@@ -92,21 +94,18 @@ After each flip:
 Enable order: **ServerPartDeals → goHardDrive → WD → Seagate → eBay.**
 eBay is last and, per below, stays blocked after the other four are live.
 
-### eBay go-live block (CR-004) — blocked independent of SA-004
+### eBay go-live block (CR-004) — status update 2026-08-16
 
-The eBay connector (fetch/parse/persist/heartbeat) ships fully in MS-1d.
-Its `enabled=True` flip does **not** ship with it and stays **blocked**,
-gated on a separate piece of work, not on the SA-004 checklist above:
+The eBay delete-on-delist soft-delete path (DR-008) landed on `dev` (`5a7f5b7`): `delisted_at` /
+`delist_reason` fields (migration 0012), a 6h absence grace before delisting, and revive-on-sight.
+Owner-ruled IR-002 merchant-content redaction (7 fields, class-scoped via
+`DELETE_ON_DELIST_CLASSES`) landed alongside it.
 
-- eBay's delete-on-delist obligation (DR-008) requires a Listing-grain
-  soft-delete / terminal-state mechanism (mirroring the existing
-  `RetentionGoverned` + `is_current` pattern) that does not relax the
-  `superseded_by` `PROTECT` on the resolution edge. `Listing` has no such
-  field today — this is a schema addition tracked separately (TODO IR-002),
-  outside MS-1d's adapter scope.
-- The heartbeat's ≤6h TTL bounds how stale an eBay listing can appear to be,
-  but TTL expiry is not the delete-on-delist path and does not by itself
-  satisfy DR-008.
-- ServerPartDeals, goHardDrive, WD, and Seagate gate only on the SA-004
-  checklist above. eBay additionally requires the Listing-grain soft-delete
-  plan to land and ship before its `enabled=True` flip is in scope.
+eBay's `enabled=True` flip is **still blocked**, now on ratification and deliberate enable, not on
+missing code:
+
+- The MS-1e owner-in-the-loop ratification step (design §6) must complete and `ADR-0019` must flip
+  to accepted before any source is enabled.
+- ServerPartDeals, goHardDrive, WD, and Seagate gate only on the SA-004 checklist above.
+- eBay additionally requires this ratification step; per the enable order in this document, it is
+  enabled last regardless.

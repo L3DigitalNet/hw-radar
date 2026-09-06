@@ -17,11 +17,12 @@ shape belongs in repo docs; private fleet details belong outside this repo.
 
 ## Current Product State
 
-MS-0 is implemented and deployed: Django 6, TimescaleDB, ADR-0010 identity
-ladder, `accounts` / `web` / `poller`, deploy artifacts, and the full Python
-verification gate. MS-1 ingestion substrate and matching work have begun; the
-next major work is the catalog seed and connector path described in the MS-1
-design and plans under `docs/superpowers/`.
+MS-0 and MS-1a..MS-1d are implemented and deployed: Django 6, TimescaleDB,
+ADR-0010 identity ladder, ingestion substrate, matching, catalog seed, five
+connectors, and availability heartbeat. MS-1e's evaluation harness and harvest
+tooling are merged and deployed; the owner-in-the-loop ratification step is
+pending, so all sources still ship disabled. MS-2 scoring is designed and
+ratified but not implemented; MS-3 (UI) and MS-4 (alerts) are not implemented.
 
 ## Read First
 

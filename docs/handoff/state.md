@@ -2,10 +2,10 @@
 
 ## Current focus
 
-- Write the MS-1e implementation plan from the converged validation-corpus design.
-- Implement the evaluation harness and harvest tooling while keeping ratification owner-gated.
-- Clear bounded-retention and source-specific go-live gates before enabling any source.
-- Use `HW_RADAR_DB_PORT=5433` when the local TimescaleDB container maps to port 5433.
+- MS-2 design rev 12 (`f3bc307`) owner-ratified; audit b2eedc33 closed at cap 8/9, SA-009 residual closed in-house.
+- Next: owner choice — accept in-house SA-009 closure vs. third audit — then planner cuts MS-2a plan.
+- OQ22 resolved (option a); DR-001 CHECK pair landed via migration 0017; resolved-questions.md updated.
+- dev→main PR for migrations 0014-0017 in progress; battery green at `8101504` (552p/1s/95%); CI green `5c65174`.
 
 ## Active incidents
 

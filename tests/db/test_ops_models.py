@@ -35,7 +35,6 @@ def make_config(site: SourceSite, **overrides: object) -> SourceConfig:
         "domain": "example.com",
         "cadence_baseline_s": 3600,
         "cadence_ceiling_s": 900,
-        "current_interval_s": 3600,
     }
     defaults.update(overrides)
     return SourceConfig.objects.create(**defaults)
@@ -50,7 +49,6 @@ def test_source_config_defaults_are_safe() -> None:
     assert config.volatility_profile == VolatilityProfile.STABLE
     assert config.cheap_signal == CheapSignal.NONE
     assert config.consecutive_failures == 0
-    assert config.clean_polls == 0
 
 
 def test_ceiling_must_not_be_slower_than_baseline() -> None:
@@ -163,7 +161,7 @@ def test_seeded_sources_exist_and_are_disabled() -> None:
     # sources that aren't drop_prone-eligible (FR-002). eBay is heartbeat-native:
     # its Browse poll IS the heartbeat, so fast_lane=True (drop_prone ∩ ebay_browse).
     expected = {
-        # key: (tier, heartbeat_enabled, fast_lane)
+        # Each value is the tuple (tier, heartbeat_enabled, fast_lane).
         "wd-recertified": (SourceTier.T1_MANUFACTURER, True, True),
         "seagate-recertified": (SourceTier.T1_MANUFACTURER, True, True),
         "serverpartdeals": (SourceTier.T2_SPECIALIST, True, False),

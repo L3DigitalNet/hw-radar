@@ -3,9 +3,11 @@
 # The MS-0 foundation is built and deployed (Django project + ADR-0010 schema +
 # accounts/web/poller apps); the verification gate is LIVE and green (uv · Ruff ·
 # BasedPyright strict · pytest + coverage · pip-audit; run `uv run python -m scripts.check`).
-# The MS-1+ product surface (fetch→…→alert pipeline, connectors, scoring) is not built yet.
+# MS-1a..MS-1d (ingestion substrate, matching, catalog seed, connectors, heartbeat) are
+# also built and deployed; MS-1e's harness/harvest tooling is merged and deployed pending
+# owner ratification. MS-2 scoring is designed but not implemented; MS-3/MS-4 are not built.
 # See AGENTS.md for the toolchain contract and docs/specs/hw-radar-master-spec.md for the design.
-# Remaining standard deviation (.vscode/ and CLAUDE.md kept git-ignored) is recorded in
+# Remaining standard deviation (.vscode/ kept git-ignored) is recorded in
 # docs/adr/adr-0002-python-tooling-standard-local-deviations.md.
 
 [project]
@@ -21,7 +23,7 @@ dependencies = [
     "httpx>=0.28.1",
     "psycopg[binary]>=3.3",
     "pydantic>=2.13.4",
-    "scrapy>=2.16.0",
+    "scrapy>=2.18",
 ]
 
 [dependency-groups]

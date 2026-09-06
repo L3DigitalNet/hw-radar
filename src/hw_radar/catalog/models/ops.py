@@ -5,9 +5,11 @@
 
 SourceConfig is the C.2 per-source scheduling registry as settings rows
 (ADR-0016 pattern): every number here is an OQ9-provisional tunable, changed
-by UPDATE, not deploy. ScraperRun is the §18.5 observability substrate.
-FxRateDaily is the ADR-0008 daily-rate cache. SchedulerCheckpoint persists
-in-memory admission state for ERR-007 crash recovery.
+by UPDATE, not deploy. It holds identity, policy and source-wide health only —
+the mutable per-lane cadence state lives in SourceLaneState (ADR-0020).
+ScraperRun is the §18.5 observability substrate. FxRateDaily is the ADR-0008
+daily-rate cache. SchedulerCheckpoint persists in-memory admission state for
+ERR-007 crash recovery.
 """
 
 from __future__ import annotations
@@ -52,6 +54,19 @@ class LifecycleState(models.TextChoices):
     SKIP = "skip", "Skip (permanent)"
 
 
+class SchedulingLane(models.TextChoices):
+    """The two independently-scheduled paths of one source (ADR-0020).
+
+    Values mirror the RunKind vocabulary on purpose: a RunKind.FULL or
+    RunKind.PROBE run belongs to FULL (a probe replays the full pipeline),
+    a RunKind.HEARTBEAT run belongs to HEARTBEAT. RunKind.REFERENCE has no
+    SourceConfig and therefore no lane.
+    """
+
+    FULL = "full", "Full-pipeline lane"
+    HEARTBEAT = "heartbeat", "Availability-heartbeat lane"
+
+
 class RunKind(models.TextChoices):
     FULL = "full", "Full pipeline"
     HEARTBEAT = "heartbeat", "Availability heartbeat"
@@ -82,7 +97,6 @@ class SourceConfig(TimeStamped):
     domain = models.CharField(max_length=255)
     cadence_baseline_s = models.PositiveIntegerField()
     cadence_ceiling_s = models.PositiveIntegerField()
-    current_interval_s = models.PositiveIntegerField()
     volatility_profile = models.CharField(
         max_length=20, choices=VolatilityProfile.choices, default=VolatilityProfile.STABLE
     )
@@ -97,10 +111,12 @@ class SourceConfig(TimeStamped):
     lifecycle_state = models.CharField(
         max_length=20, choices=LifecycleState.choices, default=LifecycleState.ACTIVE
     )
+    # Source-wide health axis (ADR-0020): both lanes poll the same site, so a
+    # failure anywhere is evidence about the SOURCE. These counters and the
+    # lifecycle stay shared; only cadence state is per-lane. Splitting them too
+    # would let each lane fail just under the escalation threshold forever.
     consecutive_failures = models.PositiveIntegerField(default=0)
     consecutive_parser_rot = models.PositiveIntegerField(default=0)
-    clean_polls = models.PositiveIntegerField(default=0)
-    backoff_until = models.DateTimeField(null=True, blank=True)
     last_run_at = models.DateTimeField(null=True, blank=True)
     last_success_at = models.DateTimeField(null=True, blank=True)
     bucket_rate_per_min = models.FloatField(default=6.0)
@@ -129,6 +145,62 @@ class SourceConfig(TimeStamped):
 
     def __str__(self) -> str:
         return f"{self.source_site.normalized_name} [{self.tier}]"
+
+    def lane_state(self, lane: SchedulingLane) -> SourceLaneState:
+        """Return this source's scheduling state for `lane`, creating it if absent.
+
+        Creating on read is deliberate: flipping heartbeat_enabled on a live
+        source must not require a migration to materialize its second lane. A
+        fresh row starts at cadence_baseline_s — the slowest sanctioned cadence,
+        which auto-ramp then earns down.
+        """
+        state, _created = SourceLaneState.objects.get_or_create(
+            source_config=self,
+            lane=lane,
+            defaults={"current_interval_s": self.cadence_baseline_s},
+        )
+        return state
+
+
+class SourceLaneState(TimeStamped):
+    """Mutable scheduling state for ONE lane of one source (ADR-0020).
+
+    The fast (heartbeat) and slow (full-pipeline) lanes of a heartbeat-enabled
+    source are separate APScheduler jobs with separate cadences, so they need
+    separate ramp/back-off state: with a single shared row, a slow-lane repair
+    crawl failing reset the fast lane's earned interval and imposed its back-off
+    window on the heartbeat, and vice versa. Rows exist for both lanes of every
+    source; the heartbeat row of a non-heartbeat source is inert (never read,
+    never mutated) and becomes live the moment heartbeat_enabled is flipped on.
+
+    Policy (cadence_baseline_s, cadence_ceiling_s) stays on SourceConfig and is
+    shared by both lanes; only the state that a run outcome mutates lives here.
+    """
+
+    source_config = models.ForeignKey(
+        SourceConfig, on_delete=models.CASCADE, related_name="lane_states"
+    )
+    lane = models.CharField(max_length=20, choices=SchedulingLane.choices)
+    current_interval_s = models.PositiveIntegerField()
+    clean_polls = models.PositiveIntegerField(default=0)
+    backoff_until = models.DateTimeField(null=True, blank=True)
+    # Start of this lane's current UNINTERRUPTED run of successful full sweeps
+    # (ADR-0020 amendment 2026-08-30), maintained by the pipeline's delist stage.
+    # It is the polling-time clock the CR-004 absence grace is measured against:
+    # a listing may only be marked ABSENT_STALE once the lane has actually been
+    # polling for the whole grace window, so a downtime, back-off or deploy pause
+    # longer than the cadence tolerance cannot mass-delist a source. NULL means
+    # "no continuous run established yet" and blocks stale-absence delisting
+    # outright. Never read by the scheduler: it carries evidence, not cadence.
+    continuous_since = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "source_lane_state"
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["source_config", "lane"], name="source_lane_state_unique_lane"
+            )
+        ]
 
 
 class ScraperRun(models.Model):

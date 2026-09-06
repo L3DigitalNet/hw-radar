@@ -42,6 +42,7 @@ def model(db: None) -> ProductModel:
         manufacturer=mfr,
         model_number="ST16000NM001G",
         normalized_model_number="st16000nm001g",
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
 
 

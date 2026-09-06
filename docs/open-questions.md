@@ -17,7 +17,15 @@
 
 ## Open questions
 
-**None currently open.** All five questions raised by the **2026-07-04 spec gap analysis** (OQ16–OQ20) were owner-resolved 2026-07-04 and relocated to [`resolved-questions.md`](resolved-questions.md) (OQ17 and OQ20 research-backed). OQ21 (`httpx` dependency, raised by the 2026-07-05 MS-1 brainstorm) was owner-resolved the same day and recorded directly in `resolved-questions.md`. The next question opened here takes the number **OQ22**.
+No question is open. All five questions raised by the **2026-07-04 spec gap analysis**
+(OQ16–OQ20) were owner-resolved 2026-07-04 and relocated to
+[`resolved-questions.md`](resolved-questions.md) (OQ17 and OQ20 research-backed). OQ21
+(`httpx` dependency, raised by the 2026-07-05 MS-1 brainstorm) was owner-resolved the same
+day and recorded directly in `resolved-questions.md`. OQ22 (retention class for
+resolver-learned `ProductAlias` rows, raised by the migration-0016 follow-up) was
+owner-resolved 2026-09-06 and relocated to
+[`resolved-questions.md`](resolved-questions.md#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows).
+The next question opened here takes the number **OQ23**.
 
 ## How to maintain this document
 

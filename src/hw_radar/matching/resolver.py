@@ -47,6 +47,7 @@ from hw_radar.catalog.models import (
     ProductVariant,
     RecertChannel,
     ResolutionGrain,
+    RetentionClass,
     WarrantyChannel,
 )
 from hw_radar.matching import MATCHER_VERSION, ladder, mpn, vocab
@@ -369,6 +370,14 @@ def _emit_learned_aliases(
     if model_id is None:
         return
     has_manufacturer_token = any(c.kind is TokenKind.MANUFACTURER_MPN for c in candidates)
+    # DR-001 stamp for every row this function creates (OQ22, owner-ratified
+    # 2026-09-06): LISTING_DERIVED_ALIAS with expires_at NULL. The class is
+    # indefinite because ADR-0019 rule 7's review queue only shrinks if learned
+    # aliases survive, and it is deliberately NOT MANUFACTURER_REFERENCE — these
+    # tokens are inferred from a merchant listing, not asserted by a datasheet,
+    # and only refdata.persist may promote a row to the authoritative class. The
+    # product_alias CHECK pair (migration 0017) rejects an unstamped insert, so
+    # both branches below must carry these two keys.
     for candidate in candidates:
         if candidate.kind is TokenKind.OEM_PN and has_manufacturer_token:
             # Dual-labeled listing: OEM token + resolved MPN → learned alias at
@@ -379,7 +388,11 @@ def _emit_learned_aliases(
                 source_site=None,
                 product_model_id=model_id,
                 product_family=None,
-                defaults={"source_kind": AliasSourceKind.LISTING_DERIVED},
+                defaults={
+                    "source_kind": AliasSourceKind.LISTING_DERIVED,
+                    "retention_class": RetentionClass.LISTING_DERIVED_ALIAS,
+                    "expires_at": None,
+                },
             )
         elif candidate.kind is TokenKind.HOUSE_SKU:
             ProductAlias.objects.get_or_create(
@@ -389,6 +402,8 @@ def _emit_learned_aliases(
                 defaults={
                     "product_model_id": model_id,
                     "source_kind": AliasSourceKind.LISTING_DERIVED,
+                    "retention_class": RetentionClass.LISTING_DERIVED_ALIAS,
+                    "expires_at": None,
                 },
             )
 

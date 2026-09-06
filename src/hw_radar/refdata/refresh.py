@@ -59,10 +59,13 @@ def run_refresh(seed_dir: Path | None = None) -> RefreshReport:
         report.conflicts = exc.conflicts
         logger.error("refdata import failed into review: %s conflict(s)", len(exc.conflicts))
     resolver = CatalogResolver()
+    # Delisted rows are excluded: delete-on-delist redaction (CR-004) empties
+    # their title, so reconsidering them can only regress the grain, never
+    # improve it.
     pending = list(
-        Listing.objects.filter(
-            resolution_grain__in=[ResolutionGrain.NONE, ResolutionGrain.FAMILY]
-        ).values_list("pk", "resolution_grain")
+        Listing.objects.not_delisted()
+        .filter(resolution_grain__in=[ResolutionGrain.NONE, ResolutionGrain.FAMILY])
+        .values_list("pk", "resolution_grain")
     )
     for pk, grain_before in pending:
         try:

@@ -1,23 +1,32 @@
 import asyncio
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 import httpx
 import pytest
+from django.utils import timezone
 
 from hw_radar.acquisition.contracts import NullResolver, RawBatch, RawItem
 from hw_radar.acquisition.pipeline import run_source
 from hw_radar.acquisition.sources.ebay import (
     _TOKEN_CACHE,  # pyright: ignore[reportPrivateUsage]
+    DELIST_ABSENCE_GRACE,
     EbayAdapter,
 )
 from hw_radar.catalog.models import (
+    DelistReason,
     FxRateDaily,
     Listing,
     OfferSnapshot,
     RetentionClass,
+    RunKind,
     RunStatus,
+    SchedulingLane,
+    ScraperRun,
+    SourceConfig,
+    SourceLaneState,
     StockStatus,
 )
 
@@ -49,6 +58,25 @@ SEARCH_RESULT: dict[str, object] = {
         },
     ]
 }
+
+# CR-004 delist fixtures. USD-only so no FX rate has to be seeded, and `total`
+# is what makes a sweep provably complete: total <= summaries returned and no
+# `next` page means the sweep enumerated the whole result set.
+US_ITEM: dict[str, object] = cast("list[dict[str, object]]", SEARCH_RESULT["itemSummaries"])[0]
+SECOND_ITEM = {
+    "itemId": "v1|110500000003|0",
+    "title": "HGST He10 10TB Recertified",
+    "itemWebUrl": "https://www.ebay.com/itm/110500000003",
+    "price": {"value": "99.00", "currency": "USD"},
+    "itemLocation": {"country": "US"},
+    "seller": {"username": "diskdeals_us"},
+}
+SWEEP_BOTH: dict[str, object] = {"itemSummaries": [US_ITEM, SECOND_ITEM], "total": 2}
+SWEEP_COMPLETE_ONE: dict[str, object] = {"itemSummaries": [US_ITEM], "total": 1}
+# Same page, but the source says 50 items match: absence here proves nothing on
+# its own, so only the freshness-window grace can retire a listing.
+SWEEP_TRUNCATED_ONE: dict[str, object] = {"itemSummaries": [US_ITEM], "total": 50}
+DELISTED_KEY = "v1|110500000003|0"
 
 TOKEN_BODY = {
     "access_token": "SYNTH-TOKEN",
@@ -103,7 +131,26 @@ def _mock(
     return httpx.MockTransport(handler)
 
 
-def _run_ebay(loop: asyncio.AbstractEventLoop, transport: httpx.MockTransport):
+def _mock_body(body: dict[str, object]) -> httpx.MockTransport:
+    """MockTransport serving one specific search body (delist tests drive the
+    sweep contents; _mock's fixed SEARCH_RESULT can't express a shrinking sweep)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/identity/v1/oauth2/token":
+            return httpx.Response(200, json=TOKEN_BODY)
+        if request.url.path == "/buy/browse/v1/item_summary/search":
+            return httpx.Response(200, json=body)
+        return httpx.Response(404)
+
+    return httpx.MockTransport(handler)
+
+
+def _run_ebay(
+    loop: asyncio.AbstractEventLoop,
+    transport: httpx.MockTransport,
+    *,
+    run_kind: RunKind | None = None,
+):
     adapter = EbayAdapter(client=httpx.AsyncClient(transport=transport))
     return loop.run_until_complete(
         run_source(
@@ -111,6 +158,7 @@ def _run_ebay(loop: asyncio.AbstractEventLoop, transport: httpx.MockTransport):
             NullResolver(),
             retention_class=EbayAdapter.retention_class,
             expires_policy=EbayAdapter.expires_policy,
+            run_kind=run_kind,
         )
     )
 
@@ -253,6 +301,219 @@ def test_ebay_parse_skips_malformed_summaries() -> None:
     assert only.shipping_price is None
     assert only.ships_from_country == "US"
     assert only.seller_name == ""
+
+
+def test_ebay_complete_sweep_delists_missing_listing(loop: asyncio.AbstractEventLoop) -> None:
+    # CR-004 / IR-002: the Browse search returns only active items, so once a sweep
+    # proves it enumerated the whole result set, a tracked key it omits has ended.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+    assert Listing.objects.active().filter(source_site__normalized_name="ebay").count() == 2
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_COMPLETE_ONE))
+
+    assert run.detail_json["listings_delisted"] == 1
+    gone = Listing.objects.get(source_listing_key=DELISTED_KEY)
+    assert gone.delisted_at is not None
+    assert gone.delist_reason == DelistReason.ABSENT_FROM_SWEEP
+    assert gone.expires_at == gone.delisted_at  # DR-008: evidence due immediately
+    assert [
+        listing.source_listing_key
+        for listing in Listing.objects.active().filter(source_site__normalized_name="ebay")
+    ] == ["v1|110500000001|0"]
+
+
+def _full_lane() -> SourceLaneState:
+    return SourceConfig.objects.get(source_site__normalized_name="ebay").lane_state(
+        SchedulingLane.FULL
+    )
+
+
+def _age_out_the_absent_listing(age: timedelta) -> None:
+    """Backdate DELISTED_KEY so it is unseen for `age`, expiry included.
+
+    A bounded eBay listing's expires_at advances in lockstep with last_seen, so it
+    lapses at the same moment the row becomes stale-absence-eligible. Backdating
+    only last_seen (leaving expires_at fresh) would hide this candidate from a
+    delist query built on active(), which also filters on freshness, and so would
+    miss the regression these tests exist to pin.
+    """
+    Listing.objects.filter(source_listing_key=DELISTED_KEY).update(
+        last_seen=timezone.now() - age,
+        expires_at=timezone.now() - timedelta(minutes=1),
+    )
+
+
+def test_ebay_truncated_sweep_needs_the_absence_grace(loop: asyncio.AbstractEventLoop) -> None:
+    # One page of a 50-item result set: absence is pagination/ranking churn until
+    # the listing has missed every sweep for the whole 6h freshness window.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+    assert run.detail_json["listings_delisted"] == 0
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
+
+    _age_out_the_absent_listing(DELIST_ABSENCE_GRACE + timedelta(minutes=1))
+    # The grace is measured in polling time, so the lane must also have been
+    # sweeping across the window; these runs are milliseconds apart, so the
+    # continuity run is backdated to stand in for a lane that has been up all day.
+    lane = _full_lane()
+    lane.continuous_since = timezone.now() - DELIST_ABSENCE_GRACE - timedelta(hours=1)
+    lane.save(update_fields=["continuous_since"])
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+
+    assert run.detail_json["listings_delisted"] == 1
+    gone = Listing.objects.get(source_listing_key=DELISTED_KEY)
+    assert gone.delist_reason == DelistReason.ABSENT_STALE
+
+
+def test_ebay_polling_pause_suspends_stale_absence(loop: asyncio.AbstractEventLoop) -> None:
+    # The go-live (2026-08-16) failure: the lane is down longer than the grace
+    # (deploy, outage, back-off, source disabled), so on resume EVERY listing not
+    # on the first truncated page looks 6h+ stale purely because nothing polled.
+    # With delete-on-delist plus IR-002 redaction that would destroy merchant
+    # content wholesale, so the sweep must decline to mark ABSENT_STALE at all.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+    _age_out_the_absent_listing(timedelta(hours=30))
+    pause = timedelta(hours=24)
+    ScraperRun.objects.all().update(started_at=timezone.now() - pause)
+    lane = _full_lane()
+    lane.continuous_since = timezone.now() - pause - timedelta(hours=6)
+    lane.save(update_fields=["continuous_since"])
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+
+    assert run.detail_json["listings_delisted"] == 0
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
+    # The pause restarted the continuity run, so the grace now runs from resume.
+    resumed = _full_lane().continuous_since
+    assert resumed is not None
+    assert resumed > timezone.now() - timedelta(minutes=5)
+
+
+def test_ebay_complete_sweep_delists_through_a_pause(loop: asyncio.AbstractEventLoop) -> None:
+    # Continuity gates the stale-absence heuristic only. A sweep that provably
+    # enumerated the whole result set is direct evidence of absence and owes
+    # nothing to polling history, so it still delists on the first run back.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+    ScraperRun.objects.all().update(started_at=timezone.now() - timedelta(hours=24))
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_COMPLETE_ONE))
+
+    assert run.detail_json["listings_delisted"] == 1
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delist_reason == (
+        DelistReason.ABSENT_FROM_SWEEP
+    )
+
+
+def test_ebay_slow_cadence_waits_for_continuity(loop: asyncio.AbstractEventLoop) -> None:
+    # A lane polling slower than the grace (8h interval vs a 6h grace) makes ONE
+    # missed sweep look stale, so the wall-clock rule alone would delist on a
+    # single ranking miss. The 8h gap is inside the cadence-derived tolerance
+    # (2 x interval), so continuity survives it — and the mark still waits until
+    # the lane has actually been sweeping for a full grace window.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+    _age_out_the_absent_listing(timedelta(hours=8))
+    lane = _full_lane()
+    lane.current_interval_s = int(timedelta(hours=8).total_seconds())
+    resumed_at = timezone.now() - timedelta(hours=3)
+    lane.continuous_since = resumed_at
+    lane.save(update_fields=["current_interval_s", "continuous_since"])
+    ScraperRun.objects.all().update(started_at=timezone.now() - timedelta(hours=8))
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+
+    assert run.detail_json["listings_delisted"] == 0
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
+    kept = _full_lane().continuous_since
+    assert kept is not None
+    assert abs((kept - resumed_at).total_seconds()) < 1  # the 8h gap did not break the run
+
+    lane = _full_lane()
+    lane.continuous_since = timezone.now() - DELIST_ABSENCE_GRACE - timedelta(minutes=1)
+    lane.save(update_fields=["continuous_since"])
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+
+    assert run.detail_json["listings_delisted"] == 1
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delist_reason == (
+        DelistReason.ABSENT_STALE
+    )
+
+
+def test_ebay_relisting_revives_the_same_row(loop: asyncio.AbstractEventLoop) -> None:
+    # The self-healing half of the absence heuristics: a listing that reappears
+    # comes back as the SAME row, so its history and resolution edges are intact.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+    _run_ebay(loop, _mock_body(SWEEP_COMPLETE_ONE))
+    delisted = Listing.objects.get(source_listing_key=DELISTED_KEY)
+    pk = delisted.pk
+    # Delisting an eBay listing redacts its merchant content (IR-002 ruling), so
+    # the revive path has to repopulate it from the new observation, not merely
+    # clear the terminal mark.
+    assert delisted.is_content_redacted()
+    snapshots_before = OfferSnapshot.objects.filter(listing_id=pk).count()
+
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+
+    revived = Listing.objects.get(source_listing_key=DELISTED_KEY)
+    assert revived.pk == pk
+    assert revived.delisted_at is None
+    assert revived.delist_reason == ""
+    assert revived.expires_at is not None and revived.expires_at > timezone.now()
+    assert OfferSnapshot.objects.filter(listing_id=pk).count() == snapshots_before + 1
+    assert not revived.is_content_redacted()
+    assert revived.title_raw == "HGST He10 10TB Recertified"
+    assert revived.canonical_url == "https://www.ebay.com/itm/110500000003"
+    assert revived.url_hash != ""
+
+
+def test_ebay_probe_run_never_delists(loop: asyncio.AbstractEventLoop) -> None:
+    # A PROBE is a recovery poke, not a census: it may not conclude that the
+    # listings it did not return have ended, even from a "complete" page.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_COMPLETE_ONE), run_kind=RunKind.PROBE)
+
+    assert run.detail_json["listings_delisted"] == 0
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
+
+
+def test_ebay_parse_drop_forfeits_the_completeness_claim() -> None:
+    # A summary we could not parse is not a listing that ended: last_parse_skipped
+    # downgrades the sweep to the grace path even when the page looks complete.
+    adapter = EbayAdapter()
+    body: dict[str, object] = {"itemSummaries": [US_ITEM, {"itemId": "no-price"}], "total": 2}
+    batch = RawBatch(
+        source="ebay",
+        fetched_at=datetime.now(UTC),
+        items=[RawItem(url="https://api.ebay.com/s", payload_json=body)],
+    )
+    parsed = adapter.parse(batch)
+    scope = adapter.delist_scope(batch, parsed)
+    assert scope is not None
+    assert scope.complete is False
+
+    clean_batch = RawBatch(
+        source="ebay",
+        fetched_at=datetime.now(UTC),
+        items=[RawItem(url="https://api.ebay.com/s", payload_json=SWEEP_COMPLETE_ONE)],
+    )
+    clean_scope = adapter.delist_scope(clean_batch, adapter.parse(clean_batch))
+    assert clean_scope is not None
+    assert clean_scope.complete is True
+
+
+def test_ebay_empty_sweep_concludes_nothing() -> None:
+    # Guard against the catastrophic case: an empty result set must not "prove"
+    # that every tracked eBay listing has ended.
+    adapter = EbayAdapter()
+    batch = RawBatch(
+        source="ebay",
+        fetched_at=datetime.now(UTC),
+        items=[
+            RawItem(url="https://api.ebay.com/s", payload_json={"itemSummaries": [], "total": 0})
+        ],
+    )
+    assert adapter.delist_scope(batch, adapter.parse(batch)) is None
 
 
 def test_ebay_token_never_logged(

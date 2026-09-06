@@ -13,19 +13,26 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from hw_radar.acquisition.scheduling.buckets import BucketRegistry
 from hw_radar.catalog.models import CheapSignal, SourceConfig, SourceSite
-from hw_radar.poller.service import HEARTBEAT_SECONDS, build_scheduler, heartbeat, run
+from hw_radar.poller.service import (
+    HEARTBEAT_SECONDS,
+    SourceSchedule,
+    build_scheduler,
+    heartbeat,
+    run,
+)
 
 
-def _mem_config(
+def _mem_schedule(
     key: str,
     *,
     heartbeat_enabled: bool,
     cheap_signal: CheapSignal,
-    current_interval_s: int,
-    cadence_baseline_s: int,
-) -> SourceConfig:
-    # In-memory (never saved) config: build_scheduler is sync and only reads
-    # attributes + config.source_site.normalized_name, so no DB is touched.
+    heartbeat_interval_s: int,
+    full_interval_s: int,
+) -> SourceSchedule:
+    # In-memory (never saved) config + explicit lane intervals: build_scheduler is
+    # sync, reads only attributes and config.source_site.normalized_name, and
+    # (ADR-0020) must never resolve a lane row itself, so no DB is touched.
     config = SourceConfig()
     site = SourceSite()
     site.normalized_name = key
@@ -33,12 +40,15 @@ def _mem_config(
     config.source_site = site
     config.heartbeat_enabled = heartbeat_enabled
     config.cheap_signal = cheap_signal
-    config.current_interval_s = current_interval_s
-    config.cadence_baseline_s = cadence_baseline_s
+    config.cadence_baseline_s = full_interval_s
     config.misfire_grace_s = 60
     config.bucket_rate_per_min = 6.0
     config.bucket_burst = 3
-    return config
+    return SourceSchedule(
+        config=config,
+        full_interval_s=full_interval_s,
+        heartbeat_interval_s=heartbeat_interval_s,
+    )
 
 
 def test_poller_package_init_is_import_light() -> None:
@@ -66,7 +76,7 @@ def test_poller_package_init_is_import_light() -> None:
 
 
 def empty_scheduler() -> AsyncIOScheduler:
-    return build_scheduler(BucketRegistry(), configs=[])
+    return build_scheduler(BucketRegistry(), schedules=[])
 
 
 def test_heartbeat_logs(caplog: pytest.LogCaptureFixture) -> None:
@@ -129,31 +139,32 @@ def test_refdata_refresh_job_registered_on_utc_cron() -> None:
 
 def test_heartbeat_sources_get_fast_and_slow_repair_jobs() -> None:
     # CR-006: non-eBay heartbeat sources run TWO jobs — a fast heartbeat probe at
-    # current_interval_s AND a slow full-pipeline repair crawl at cadence_baseline_s.
-    configs = [
-        _mem_config(
+    # the heartbeat lane's interval AND a slow full-pipeline repair crawl at the
+    # full lane's, which ADR-0020 pins at cadence_baseline_s.
+    schedules = [
+        _mem_schedule(
             "wd-recertified",
             heartbeat_enabled=True,
             cheap_signal=CheapSignal.OCC_JSON,
-            current_interval_s=300,
-            cadence_baseline_s=1800,
+            heartbeat_interval_s=300,
+            full_interval_s=1800,
         ),
-        _mem_config(
+        _mem_schedule(
             "seagate-recertified",
             heartbeat_enabled=True,
             cheap_signal=CheapSignal.BOOTSTRAP_JSON,
-            current_interval_s=300,
-            cadence_baseline_s=1800,
+            heartbeat_interval_s=300,
+            full_interval_s=1800,
         ),
-        _mem_config(
+        _mem_schedule(
             "serverpartdeals",
             heartbeat_enabled=True,
             cheap_signal=CheapSignal.SHOPIFY_PRODUCTS_JSON,
-            current_interval_s=900,
-            cadence_baseline_s=3600,
+            heartbeat_interval_s=900,
+            full_interval_s=3600,
         ),
     ]
-    scheduler = build_scheduler(BucketRegistry(), configs)
+    scheduler = build_scheduler(BucketRegistry(), schedules)
     for key, fast, slow in (
         ("wd-recertified", 300, 1800),
         ("seagate-recertified", 300, 1800),
@@ -171,31 +182,31 @@ def test_heartbeat_sources_get_fast_and_slow_repair_jobs() -> None:
 def test_ebay_gets_single_heartbeat_job_only() -> None:
     # eBay's Browse poll IS both heartbeat and full fetch (natively-both source),
     # so a separate poll-ebay repair job would double-poll.
-    configs = [
-        _mem_config(
+    schedules = [
+        _mem_schedule(
             "ebay",
             heartbeat_enabled=True,
             cheap_signal=CheapSignal.EBAY_BROWSE,
-            current_interval_s=120,
-            cadence_baseline_s=600,
+            heartbeat_interval_s=120,
+            full_interval_s=600,
         )
     ]
-    scheduler = build_scheduler(BucketRegistry(), configs)
+    scheduler = build_scheduler(BucketRegistry(), schedules)
     assert scheduler.get_job("poll-heartbeat-ebay") is not None
     assert scheduler.get_job("poll-ebay") is None
 
 
 def test_heartbeat_disabled_source_gets_single_full_job() -> None:
-    configs = [
-        _mem_config(
+    schedules = [
+        _mem_schedule(
             "goharddrive",
             heartbeat_enabled=False,
             cheap_signal=CheapSignal.NONE,
-            current_interval_s=900,
-            cadence_baseline_s=3600,
+            heartbeat_interval_s=3600,
+            full_interval_s=900,
         )
     ]
-    scheduler = build_scheduler(BucketRegistry(), configs)
+    scheduler = build_scheduler(BucketRegistry(), schedules)
     assert scheduler.get_job("poll-goharddrive") is not None
     assert scheduler.get_job("poll-heartbeat-goharddrive") is None
 

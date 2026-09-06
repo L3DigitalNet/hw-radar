@@ -96,11 +96,20 @@ SPD_PRODUCTS: dict[str, object] = {
     ]
 }
 
-# --- wd-recertified: synthetic OCC search sweep + per-product bodies ----------
-WD_SEARCH: dict[str, object] = {"products": [{"code": "WDBBGB0040HBK"}, {"code": "WDBBGB0080HBK"}]}
+# --- wd-recertified: synthetic OCC search sweeps + per-product bodies ---------
+# The WD adapter now runs three independent search sweeps (consumer query +
+# cat_data_center_drives + cat_nas_hdd category selectors; see
+# hw_radar/acquisition/sources/wd.py module docstring) since the OCC catalog
+# has no recert facet for enterprise SKUs. Codes surviving all three sweeps
+# are merged, deduped, and filtered to the `-recertified` suffix before the
+# per-product fetch, so every code below must carry that suffix or the
+# adapter drops it and the acceptance run degrades to parser_rot (0 records).
+WD_SEARCH_CONSUMER: dict[str, object] = {"products": [{"code": "WDBBGB0040HBK-recertified"}]}
+WD_SEARCH_DATA_CENTER: dict[str, object] = {"products": [{"code": "wd-gold-sata-hdd-recertified"}]}
+WD_SEARCH_NAS: dict[str, object] = {"products": [{"code": "wd-red-sata-hdd-recertified"}]}
 WD_PRODUCTS: dict[str, dict[str, object]] = {
-    "WDBBGB0040HBK": {
-        "code": "WDBBGB0040HBK",
+    "WDBBGB0040HBK-recertified": {
+        "code": "WDBBGB0040HBK-recertified",
         "name": "WD My Book 4TB Recertified",
         "variantOptions": [
             {
@@ -111,15 +120,27 @@ WD_PRODUCTS: dict[str, dict[str, object]] = {
             }
         ],
     },
-    "WDBBGB0080HBK": {
-        "code": "WDBBGB0080HBK",
-        "name": "WD My Book 8TB Recertified",
+    "wd-gold-sata-hdd-recertified": {
+        "code": "wd-gold-sata-hdd-recertified",
+        "name": "WD Gold 8TB Recertified",
         "variantOptions": [
             {
-                "code": "RWDBBGB0080HBK-NESN",
+                "code": "WD-GOLD-8TB-RECERT",
                 "priceData": {"value": 129.99, "currency": "USD"},
                 "stock": {"stockLevelStatus": "inStock"},
                 "saleable": False,
+            }
+        ],
+    },
+    "wd-red-sata-hdd-recertified": {
+        "code": "wd-red-sata-hdd-recertified",
+        "name": "WD Red 4TB Recertified",
+        "variantOptions": [
+            {
+                "code": "WD-RED-4TB-RECERT",
+                "priceData": {"value": 99.99, "currency": "USD"},
+                "stock": {"stockLevelStatus": "inStock"},
+                "saleable": True,
             }
         ],
     },
@@ -223,7 +244,15 @@ def _wd_transport() -> httpx.MockTransport:
         if path == "/robots.txt":
             return httpx.Response(404)
         if path.endswith("/products/search"):
-            return httpx.Response(200, json=WD_SEARCH)
+            # Route by category selector (see hw_radar.acquisition.sources.wd
+            # SEARCH_PARAMS_LIST): mirrors the three-sweep contract that
+            # tests/db/test_source_wd.py's _mock() also implements.
+            query = request.url.params.get("query", "")
+            if "cat_data_center_drives" in query:
+                return httpx.Response(200, json=WD_SEARCH_DATA_CENTER)
+            if "cat_nas_hdd" in query:
+                return httpx.Response(200, json=WD_SEARCH_NAS)
+            return httpx.Response(200, json=WD_SEARCH_CONSUMER)
         return httpx.Response(200, json=WD_PRODUCTS[path.rsplit("/", 1)[-1]])
 
     return httpx.MockTransport(handler)

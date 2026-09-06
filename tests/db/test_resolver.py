@@ -46,9 +46,14 @@ def exos_16tb(seagate: Manufacturer) -> ProductModel:
         manufacturer=seagate,
         model_number="ST16000NM001G",
         normalized_model_number="st16000nm001g",
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     DriveSpec.objects.create(
-        product_model=model, media_type=MediaType.HDD, capacity_tb="16.000", interface="SATA 6Gb/s"
+        product_model=model,
+        media_type=MediaType.HDD,
+        capacity_tb="16.000",
+        interface="SATA 6Gb/s",
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     # Catalog alias seeded THROUGH the shared normalizer, from a deliberately
     # messy catalog-side rendering — this is the parity contract in action.
@@ -57,6 +62,7 @@ def exos_16tb(seagate: Manufacturer) -> ProductModel:
         normalized_alias_text=normalize_alias_text("ST16000NM-001G "),
         product_model=model,
         source_kind=AliasSourceKind.CATALOG_AUTHORITATIVE,
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     return model
 
@@ -204,18 +210,25 @@ def test_dual_labeled_listing_emits_learned_oem_alias(
         manufacturer=hgst,
         model_number="HUS724040ALS640",
         normalized_model_number="hus724040als640",
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     ProductAlias.objects.create(
         alias_type=AliasType.MPN,
         normalized_alias_text="hus724040als640",
         product_model=model,
         source_kind=AliasSourceKind.CATALOG_AUTHORITATIVE,
+        retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     listing = _listing(site, "l6", "NetApp X477A-R6 4TB 7.2K SAS HDD HUS724040ALS640")
     CatalogResolver().resolve_listing(listing.pk)
     learned = ProductAlias.objects.get(alias_type=AliasType.OEM_PN, normalized_alias_text="x477ar6")
     assert learned.product_model == model  # model grain max — never variant (rule 7)
     assert learned.source_kind == AliasSourceKind.LISTING_DERIVED
+    # OQ22: the row is stamped indefinite so the hourly purge_expired sweep can
+    # never retire it, and it is NOT the authoritative manufacturer class — the
+    # token came out of a merchant title.
+    assert learned.retention_class == RetentionClass.LISTING_DERIVED_ALIAS
+    assert learned.expires_at is None
 
 
 def test_matcher_crash_writes_error_edge_and_never_raises(
