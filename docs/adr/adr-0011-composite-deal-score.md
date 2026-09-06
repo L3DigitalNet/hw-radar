@@ -6,7 +6,7 @@ description: 'Score each listing 0–100 as a weighted geometric mean of four no
 doc_type: 'adr'
 status: 'active'
 created: '2026-07-04'
-updated: '2026-07-04'
+updated: '2026-09-06'
 reviewed: null
 owner: ''
 consumer: 'mix'
@@ -58,7 +58,7 @@ Chosen option: **Option 1**, validated by the mock-data test (all three vetoes b
 
 **Four subscores → weighted geometric mean.** Each subscore is normalized to `[0,1]`; the base score is the weighted product `Π_k max(s_k, 0.02)^{w_k}` at weights **price 0.50 · fitness 0.25 · seller 0.15 · availability 0.10**. The geometric mean is chosen over an arithmetic sum precisely because it is **multiplicative**: a weak dimension bites harder and cannot be fully washed out by one strong dimension, which matches how a careful buyer weighs a risky storage listing.
 
-- **Price** — a **cohort-relative weighted cheapness percentile** on `ln($/TB)`, not an absolute threshold. Cohort key = capacity · tier · interface/form · condition; 90-day rolling window with **30-day half-life** decay. Warm-up shrinkage `s_price = λ·(1−q) + (1−λ)·0.5` pulls a thin cohort toward neutral.
+- **Price** — a **cohort-relative weighted price percentile** on `ln($/TB)`, not an absolute threshold: `q` is the ascending price rank (low `q` = cheap), so `1−q` is the cheapness term the formula applies. Cohort key = capacity · tier · interface/form · condition; 90-day rolling window with **30-day half-life** decay. Warm-up shrinkage `s_price = λ·(1−q) + (1−λ)·0.5` pulls a thin cohort toward neutral.
 - **Seller trust** — cross-marketplace positive-equivalent rate with **Beta-Binomial shrinkage** (prior μ₀ = 0.95, κ = 20) plus a **Wilson lower bound** (z = 1.2816): `s_seller = 0.6·p_post + 0.4·LB`. No ratings → conservative policy prior (0.60 major marketplace, 0.50 otherwise), treated as an explicit missing-data state.
 - **Fitness** — an explicit rubric `s_fit = 0.5·T + 0.3·W + 0.2·C` over suitability (enterprise/CMR … consumer/SMR), verified warranty tier, and condition bucket.
 - **Availability** — a bounded rubric (in-stock 1.0 → out-of-stock 0.0).
