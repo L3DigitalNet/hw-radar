@@ -2,13 +2,19 @@
 
 > For the executing agent: work top to bottom within a phase; every task is TDD
 > (failing test → implement → green → signed commit). Design source of truth:
-> `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` (revision 12,
+> `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` (**revision 13**,
 > owner-ratified 2026-09-06 — all 27 §1.2 rows `accept`). Every `S2-*` / `SA-*` ID
-> and every `§` below refers to that document; every `file:line` was read at
-> `cfb3a744` before it was written down. Deviations from the design go to the spec
-> Deviations Log / OQ process, never silently — the "Open at plan time" list at the
-> end is the only place this plan admits an unsettled question, and none of them may
-> be closed by inventing design.
+> and every bare `§` or `:line` below refers to that document at revision 13;
+> every repository `file:line` was re-read and re-verified when this revision was
+> written. Deviations from the design go to the spec Deviations Log / OQ process,
+> never silently.
+>
+> **Review lineage:** Codex `delegate` second opinion
+> `a626c2f0-5919-4fe2-a480-2c51f8f15c1b` (2026-09-06) round 1 → **revision 2** (this
+> document), closing findings 1–14 plus three in-house verifier corrections. Findings
+> 3, 5 and the five "Open at plan time" items were returned to the design and are
+> settled by **design revision 13**, whose rules this revision implements verbatim;
+> the plan now carries **no blocking open question**.
 
 **Goal:** the data model, retention wiring, and clearing/serialization contract that
 scoring needs, per design §3 "MS-2a — Scoring substrate": `catalog/models/scoring.py`
@@ -102,12 +108,18 @@ observable behavior**.
 
 ## Phases
 
-Phase A is DB-free and file-disjoint from everything; it may run in a parallel
-worktree from the start. Phases B and C are disjoint in product source
-(`market.py` / `identity.py` / `ops.py` versus the new `scoring.py`) and may be
-authored in parallel, but the migration chain is linear, so a parallel C leg rebases
-onto B's merged head before generating `0022`. Phase D needs B and C. Phases E and F
-close.
+Phase A is DB-free and shares no file with any other phase; it may run in a parallel
+worktree from the start. **Phases B and C are not file-disjoint** (finding 13): both
+edit `src/hw_radar/catalog/models/__init__.py` (the model re-exports) and
+`src/hw_radar/catalog/admin.py`, and the migration chain is linear, so they **run
+sequentially in one worktree** — B, then C, then D. The two shared files are owned
+task by task in the order below; nothing else in the plan grants concurrent write
+access to them. Phase D needs B and C; E and F close.
+
+Task-size note (finding 13): each lettered task below is one migration **or** one
+model **or** one hook, and the two concurrency fixtures (D4a, D4b) are separate
+commits, so no task carries two schema objects. D3 and D4 are the largest and are
+split accordingly.
 
 ### Phase A — `scoring/contracts.py`
 
@@ -119,12 +131,15 @@ Files: `src/hw_radar/scoring/__init__.py`, `src/hw_radar/scoring/contracts.py`,
   `src/hw_radar/acquisition/contracts.py`'s style. It is a **current-version façade
   only**: §3.4.3 item 1 forbids any released `scoring/versions/v<N>/` package from
   importing it, so this module imports nothing from `scoring/` and nothing from
-  Django. Field membership is taken from the design where the design fixes it —
-  `SubscoreSet` = the four subscores in `[0,1]` (§3.2.1); `CohortStats` = `n_eff`,
-  `lambda_shrinkage`, `q`, `q25`, `q50`, `q75`, `margin_iqr`, `relaxation_step`,
-  `relaxation_exhausted`, `baseline_digest` with §3.4.1 group-4 nullability (`n_eff`
-  and `λ` never null, the rest nullable); `ScoredListing` = the DR-004 payload shape
-  of §3.4.2's decision list. See "Open at plan time" #4 before widening this.
+  Django. **Scope is settled by design revision 13 (`:99-102`): MS-2a lands the five
+  *names* plus exactly the fields its own schema already fixes; MS-2b widens them
+  with computed fields.** Concretely: `SubscoreSet` = the four subscore columns in
+  `[0,1]` (C3's CHECKs); `CohortStats` = the persisted `n_eff` /
+  `lambda_shrinkage` (never null) plus the §3.4.1 group-4 nullable `q`, `q25`, `q50`,
+  `q75`, `margin_iqr`, `relaxation_step`, `relaxation_exhausted`, `baseline_digest`;
+  `CohortKey` = the `cohort_key` string plus its `price_basis` companion;
+  `ScoredListing` = the `ListingScore` column set of C3; `ScoreExplanation` = the
+  `explanation_json` / `explanation_text` pair. Nothing computed, nothing MS-2b owns.
   Tests: `test_scoring_contracts.py` — each model validates a well-formed instance;
   out-of-range subscores and a negative `n_eff` are rejected; `extra="forbid"`
   rejects an unknown key; the neutral `CohortStats` shape (`n_eff = 0`, `λ = 0`,
@@ -139,6 +154,7 @@ Files: `src/hw_radar/catalog/models/market.py`,
 `src/hw_radar/catalog/migrations/0018_listing_scoring_columns.py`,
 `0019_offer_snapshot_ingest_stamp.py`, `0020_market_tier_enum.py`,
 `0021_scoring_run_seller_prior.py`, `src/hw_radar/catalog/admin.py`,
+`src/hw_radar/refdata/persist.py` (B3's loader normalization only),
 `tests/db/test_scoring_listing_fields.py`, `tests/db/test_ingest_stamp.py`,
 `tests/db/test_market_tier.py`, `tests/db/test_scoring_run.py`.
 
@@ -154,14 +170,28 @@ Files: `src/hw_radar/catalog/models/market.py`,
   Declares `SCORING_INPUT_FIELDS = {extracted_attrs_json, returns_policy,
   returns_window_days, seller, source_site}` and the **first `save()` override in
   this repository** (no model overrides `save()` today — the only `def save*` in
-  `src/hw_radar` is `scheduling/checkpoint.py:17 save_buckets`, a module function),
-  advancing `scoring_inputs_changed_at` when a member is written — full
-  save **or** `update_fields`. Tests (`test_scoring_listing_fields.py`): the stamp
-  advances on a full save that changes a member, on `save(update_fields=["seller"])`,
-  and **not** on `save(update_fields=["last_seen"])` or on a member-free full save;
-  the five `current_*` columns persist and accept NULL; `extracted_attrs_json` blanks
-  to `{}` through `redact_expired()`; `current_offer_observed_at` round-trips a
-  timezone-aware value. See "Open at plan time" #2 for the delist/redaction half.
+  `src/hw_radar` is `src/hw_radar/acquisition/scheduling/checkpoint.py:17
+  save_buckets`, a module function), advancing `scoring_inputs_changed_at` when a
+  member is written — full save **or** `update_fields` — **and on nothing else.**
+  **The delist and redaction paths deliberately do *not* advance it** (design
+  revision 13, §2.1 `:168` and the §2.3(b) rows at `:289-290`): revision 5's "plus
+  the delist/redaction paths" is withdrawn as an error. `redact_expired()` is a bulk
+  `QuerySet.update()` that bypasses `save()` entirely (`market.py:453-480`), so a
+  `save()`-driven stamp could not fire there in any case; and it does not need to,
+  because both paths remove the listing from `P` and §2.3(b) clears `current_*` in
+  the same transaction, so re-entry is carried by **C1**
+  (`current_scored_at IS NULL`, unconditional), which is strictly stronger than C3's
+  stamp comparison. D1 owns the five `current_*` columns on those paths; B1 owns only
+  the stamp.
+  Tests (`test_scoring_listing_fields.py`): the stamp advances on a full save that
+  changes a member and on `save(update_fields=["seller"])`; it does **not** advance
+  on `save(update_fields=["last_seen"])`, on a member-free full save, on
+  `mark_delisted()`, or on the bulk `redact_expired()` path — the last two asserted
+  explicitly rather than assumed, because `redact_expired()` blanks
+  `extracted_attrs_json`, which *is* a `SCORING_INPUT_FIELDS` member (`:290`); the
+  five `current_*` columns persist and accept NULL; `extracted_attrs_json` blanks to
+  `{}` through `redact_expired()`; `current_offer_observed_at` round-trips a
+  timezone-aware value.
 - **B2 — `OfferSnapshot`: landed USD price + the §2.2.2 ingestion stamp.**
   Migration `0019`, with a `RunPython` backfill. Adds the stored generated column
   `usd_total_landed_price = total_landed_price × fx_rate` beside `usd_item_price`
@@ -179,23 +209,48 @@ Files: `src/hw_radar/catalog/models/market.py`,
   `total_landed_price × fx_rate` otherwise. **No B1 cursor, no high-water mark** —
   that is MS-2d.
 - **B3 — `DriveSpec.market_tier` → `MarketTier` TextChoices + the §3.3.2 parent
-  map.** Migration `0020` (`AlterField` + `RunPython` data migration). Values
-  `enterprise` / `nas` / `surveillance` / `consumer` / `unknown` (§2.1). The data
-  migration normalizes existing free text and lands the §3.3.2 parent map as the
-  versioned constant it is: `enterprise|nas|surveillance → high_duty`,
-  `consumer|unknown → client`; the map is **total** and every parent has ≥ 2 members.
-  `refdata/contracts.py:72` keeps its `str` shape and the refdata loader path is
-  **not** changed — §2.1 assigns the conversion to the field plus its data migration,
-  and a later import writes through the same `AlterField`. Tests (`test_market_tier.py`): a
-  round-trip through the migration maps each seeded spelling to its enum member and
-  an unrecognized spelling to `unknown`; the parent map is total over
-  `MarketTier.values` and each parent has ≥ 2 members (derived from the map, not
-  hardcoded); a `DriveSpec` refuses an off-enum value at validation.
-  **The map is data only — `scoring/cohort.py` and the ladder are MS-2b/MS-2c.**
+  map.** Migration `0020` (`AlterField` + `RunPython` data migration + a database
+  CHECK). Values `enterprise` / `nas` / `surveillance` / `consumer` / `unknown`
+  (§2.1). The data migration normalizes existing free text; an unrecognized spelling
+  becomes `unknown`, which is the value §2.1 already assigns to an unclassifiable
+  listing ("tier is not extractable from a title … `unknown` by construction").
+  **Django `choices` are not a database constraint and the loader is not typed
+  (finding 6):** `SeedSpec.market_tier` is a bare `str = ""`
+  (`src/hw_radar/refdata/contracts.py:72`, in `SeedSpec` at `:56-74`) and
+  `refdata/persist.py:205-208` writes it straight into
+  `DriveSpec.objects.update_or_create(..., defaults=spec_defaults)`, so a future
+  import would reinstate free text after the migration. B3 therefore lands **both**
+  halves: a `CheckConstraint` on `market_tier ∈ MarketTier.values` (the enforcement)
+  and a loader-side normalization in `refdata/persist.py` mapping an unrecognized
+  spelling to `unknown` before the `update_or_create` (the ergonomic half, so an
+  import fails cleanly rather than at the CHECK). `refdata/contracts.py` keeps its
+  `str` shape — narrowing the Pydantic type is a refdata-schema change this
+  sub-milestone does not own.
+  **Where the parent map lives.** §3.3.2 (`:748`) calls it "a versioned constant
+  under S2-6; landed by the §2.1 `MarketTier` migration", while §3.4.3 item 4
+  (`:1508`) lists "the parent-tier map" in the constant set a **released version**
+  owns — i.e. `scoring/versions/v1/`, which is MS-2b. This plan takes the reading
+  that avoids two authoritative copies: **B3 lands the map as inert data in the
+  `0020` migration module** (`enterprise|nas|surveillance → high_duty`,
+  `consumer|unknown → client`) so §3.3.2's "landed by" is satisfied and the values
+  are auditable at the point the enum is created, and **MS-2b's `versions/v1/`
+  constant is the copy the ladder reads**, with an MS-2b task asserting the two
+  agree. See the non-blocking reconciliation recorded under "Open at plan time".
+  Tests (`test_market_tier.py`): a round-trip through the migration maps each seeded
+  spelling to its enum member and an unrecognized spelling to `unknown`; the CHECK
+  **rejects** an off-enum value written by raw SQL (the negative control that a
+  `choices=` list cannot give); a post-migration `import_refdata` run carrying an
+  unrecognized `market_tier` lands `unknown` and leaves the CHECK satisfied
+  (the loader negative test finding 6 asks for); the parent map is total over
+  `MarketTier.values` and each parent has ≥ 2 members, derived from the map itself
+  rather than hardcoded. **No ladder logic — `scoring/cohort.py` is MS-2b/MS-2c.**
 - **B4 — `ScoringRun` (§3.4.4, S2-19) + `SourceConfig.seller_policy_prior`
-  (S2-12).** Migration `0021`, including a `RunPython` seeding eBay's row to `0.60`
-  and every other source to the `0.50` default (the `0005_seed_sources.py` seeding
-  precedent). `ScoringRun` is a plain `models.Model` in `ops.py` beside `ScraperRun`,
+  (S2-12).** Migration `0021`. It adds the **column and its `0.50` default only**:
+  seeding eBay's row to `0.60` is expressly an **MS-2e** deliverable
+  (design `:1580`, "`seller_policy_prior` seeding (S2-12)", and the MS-2e row at
+  `:345`), so no `RunPython` seeding and no eBay-value test lands here (finding 11).
+  §2.1 (`:172`) states the target values; MS-2e applies them.
+  `ScoringRun` is a plain `models.Model` in `ops.py` beside `ScraperRun`,
   **not** `RetentionGoverned` (it holds counts, not merchant content), with exactly
   the §3.4.4 field table — `started_at`, `finished_at`, `status` (reusing
   `RunStatus`, `ops.py:77`), `failure_class` (reusing `RunFailureClass`, `:83`),
@@ -203,24 +258,97 @@ Files: `src/hw_radar/catalog/models/market.py`,
   `listings_rescored`, `score_writes`, `baseline_versions_pruned`, `error`,
   `detail_json` — `db_table = "scoring_run"`, one index on `("-started_at",)`, **no
   `source_site` field and no run-kind discriminator**. `RunKind.SCORE` is **not**
-  added. Register it in the admin beside `ScraperRun` (`admin.py:37`). Tests
+  added. **Admin registration is a plan-level convention choice, not design scope**
+  (finding 14): §3.4.4 (`:1538-1573`) says nothing about the admin, unlike §3.3.5(a)
+  which mandates a read-only `CohortBaseline` registration. The executor registers
+  `ScoringRun` beside `ScraperRun` (`admin.py:37`) for operator parity and may drop
+  it without touching an exit criterion; no test asserts it. Tests
   (`test_scoring_run.py`): a `ScoringRun` persists with no source at all and defaults
   the six counts to 0; the **negative control** — constructing a `ScraperRun` without
-  `source_site` still raises (§3.4.4 test 3); `seller_policy_prior` defaults to
-  `0.50` and eBay's seeded row reads `0.60`.
+  `source_site` still raises (§3.4.4 test 3); `seller_policy_prior` exists on every
+  `SourceConfig` row and defaults to `0.50` — **including eBay's**, whose `0.60` is
+  MS-2e's to write.
 
 ### Phase C — `catalog/models/scoring.py`
 
 Files: `src/hw_radar/catalog/models/scoring.py`,
 `src/hw_radar/catalog/models/__init__.py`, `src/hw_radar/catalog/admin.py`,
-`src/hw_radar/catalog/migrations/0022_listing_score.py`,
-`0023_cohort_baseline.py`, `0024_seller_rating_observation.py`,
-`tests/db/test_listing_score_model.py`, `tests/db/test_cohort_baseline.py`,
+`src/hw_radar/catalog/migrations/0022_cohort_baseline.py`,
+`0023_cohort_baseline_immutable.py`, `0024_listing_score.py`,
+`0025_seller_rating_observation.py`, `tests/db/test_cohort_baseline.py`,
+`tests/db/test_listing_score_model.py`,
 `tests/db/test_seller_rating_observation.py`.
 
-- **C1 — `ListingScore` (§3, §3.3.5c, S2-1, S2-2a).** Migration `0022`: the model,
-  then a `RunSQL` `create_hypertable('listing_score', by_range('scored_at', INTERVAL
-  '1 month'))` with `reverse_sql=migrations.RunSQL.noop` on the `0003` precedent.
+**Order matters and finding 1 is why:** `ListingScore.cohort_baseline` is a
+`PROTECT` FK to `CohortBaseline`, and a linear Django chain cannot resolve a model a
+*later* migration introduces. The referenced model therefore lands **first** —
+`CohortBaseline` in `0022`, its trigger in `0023`, `ListingScore` in `0024`,
+`SellerRatingObservation` in `0025`.
+- **C1 — the two baseline tables (§3.3.5a/b/e, S2-20).** Migration `0022`, models
+  only. `CohortBaseline`: `UniqueConstraint(cohort_key, baseline_digest)`, columns
+  `cohort_key`,
+  `baseline_digest`, `computed_at`, `price_event_count`, `oldest_event_at`,
+  `anchor_event_at`, `n_eff`, `q25`, `q50`, `q75`, `observation_vector`,
+  `source_composition`, `window_days`, `half_life_days`, `relaxation_step`,
+  `relaxation_exhausted`, `algorithm_version`. **No detection stamp and no
+  `raw_snapshot_count` on this table** (SA-025). `CohortBaselineCurrent`: PK
+  `cohort_key`, `current_version` FK (`PROTECT`, **`null=True`**),
+  `last_evaluated_at`, `last_promoted_at`, `ingest_high_water`,
+  `next_window_exit_at` (**nullable**), `price_event_digest` (**NOT NULL**),
+  `member_projection_digest`, `raw_snapshot_count`, `source_raw_snapshot_counts`.
+  **Both tables are `RetentionGoverned`** (finding 7) — §3's "plain table" (`:350`)
+  means *not a hypertable*, in contrast with `ListingScore`, and not *ungoverned*:
+  §3 (`:350-351`)
+  gives each `retention_class = merchant_fact`, indefinite, and §3.3.5(e) (`:1034`)
+  restates it for the version while the pointer "inherits the same class". They
+  therefore inherit `RetentionGoverned` (`base.py:99`) and **must** declare
+  `retention_constraints("cohort_baseline")` /
+  `retention_constraints("cohort_baseline_current")` and
+  `retention_indexes("cohort_baseline_expires")` /
+  `retention_indexes("cohort_baseline_current_expires")`, because
+  `tests/unit/test_purge_registry.py:124-164` asserts the partial index and the CHECK
+  pair for **every** model in `retention_governed_models()` and would otherwise go red
+  the moment these models land. `retention_class` defaults to `merchant_fact` on both
+  models and `expires_at` stays NULL, which the `_retention_ttl_coherent` CHECK then
+  enforces — the pair is what makes "these rows are never swept" a database fact
+  rather than a convention, and `purge_expired._expired` (`:150`) can never select
+  them because the class filter and the NULL `expires_at` are independent guards.
+  Tests (`test_cohort_baseline.py`, C1's half): a version and a pointer persist with
+  `merchant_fact` / NULL `expires_at`; setting `expires_at` on either is **rejected by
+  the CHECK**; a duplicate `(cohort_key, baseline_digest)` is rejected;
+  `current_version` and `next_window_exit_at` accept NULL while `price_event_digest`
+  does not, so the §3.3.5(i) baseline-void state is representable and its
+  empty-projection digest is not confusable with an absent one (SA-002).
+- **C2 — the immutability trigger and the read-only admin (§3.3.5a, SA-003).**
+  Migration `0023`: a `RunSQL` pair creating `cohort_baseline_no_update()` and the
+  `BEFORE UPDATE ... FOR EACH ROW` trigger `cohort_baseline_immutable` exactly as
+  §3.3.5(a) writes them, with a reversing `DROP` in **trigger-then-function** order
+  (dropping the function first fails while the trigger depends on it) — the
+  `0001`/`0003`/`0007`/`0010` RunSQL precedent. A `CohortBaseline.save()` override
+  refuses updates in Python with a message naming §3.3.5(a) — defence in depth and
+  the error message, **not** the guarantee — and `django.contrib.admin` registers the
+  model read-only (`has_add_permission`, `has_change_permission`,
+  `has_delete_permission` all `False`, via the `@admin.register` class form at
+  `admin.py:41`). Tests (`test_cohort_baseline.py`, C2's half), which are SA-003's
+  `suggested_validation`: a released version refuses `UPDATE` through **each** of
+  `Model.save()`, `QuerySet.update()`, `bulk_update()`, an admin change POST, and raw
+  SQL on the ordinary application connection under the runtime role
+  (`settings.py:92`) — and the bulk and raw refusals are asserted to come from **the
+  database** (the trigger's `RAISE EXCEPTION` message / `psycopg` error class), not
+  from Python, because a test that only proves "it raised" passes against the
+  `save()`-only mechanism the finding is about; the row is byte-identical afterwards;
+  the admin registration reports no add, change or delete permission. **Negative
+  controls, so the trigger is proven not to be over-broad:** an `INSERT` of a new
+  version succeeds, a `DELETE` of an uncited version succeeds (§3.3.5f needs it), and
+  an `UPDATE` of the `cohort_baseline_current` pointer succeeds. Forward **and
+  reverse** migration tests: `0023` applies, the trigger and function exist
+  (`pg_trigger` / `pg_proc`), and `migrate catalog 0022` drops them in
+  trigger-then-function order without error (finding 1's second half).
+
+- **C3 — `ListingScore` (§3, §3.3.5c, S2-1, S2-2a).** Migration `0024` (after C1/C2,
+  so the FK target exists): the model, then a `RunSQL`
+  `create_hypertable('listing_score', by_range('scored_at', INTERVAL '1 month'))`
+  with `reverse_sql=migrations.RunSQL.noop` on the `0003` precedent.
   Composite PK `(listing_id, scored_at)`. Columns exactly as §3 enumerates —
   `deal_score` (smallint 0–100), `base_score`, the four subscores, `cohort_key`,
   `cohort_baseline` FK (`PROTECT`, nullable), `n_eff`, `lambda_shrinkage`,
@@ -235,78 +363,70 @@ Files: `src/hw_radar/catalog/models/scoring.py`,
   `dollars_per_tb`, `cohort_key`, `cohort_baseline_id`, `cap_applied` and
   `offer_observed_at` are nullable under the rules below; **every other column is NOT
   NULL**. `q`, `q25`, `q50`, `q75` and `margin_iqr` are **not columns** — they live in
-  `inputs_json` group 4. The three §3.3.5(c) CHECKs land here verbatim:
+  `inputs_json` group 4.
+  **`quantity` and `quantity_basis` are NOT NULL on every path, neutral paths
+  included** (design revision 13 `:441`, `:1227`): revision 12's `—` cells in
+  §3.2.2's last row were a documentation error, not a nullability exception.
+  `matching/vocab.py` `_quantity(title)` is a pure title-regex read that never
+  consults capacity, so a `capacity_unavailable` row still carries the ladder's own
+  outcome — `1` / `default_single` / the `quantity_assumed` flag when the title bears
+  no quantity signal. **No nullability, no sentinel, and no fifth `quantity_basis`
+  value.**
+  The three §3.3.5(c) CHECKs land here verbatim:
   `(cohort_baseline_id IS NULL) = (price_basis IN ('capacity_unavailable',
   'price_unavailable', 'no_cohort_evidence'))`, `(cohort_key IS NULL) = (price_basis =
   'capacity_unavailable')`, `(offer_observed_at IS NULL) = (price_basis =
-  'price_unavailable')`. The FK ordering means `0022` follows `0023` if authored in
-  the other order — keep the pinned numbering and let `CohortBaseline` land first if
-  the executor prefers; the plan's dependency is on the model, not the file name.
+  'price_unavailable')`.
+  **Range enforcement is database-level and explicit** (finding 9): §3 names
+  `deal_score` 0–100 and `base_score` / the four subscores / `cap_applied` in `[0,1]`,
+  and a plan that only names a range lets a migration omit it silently. C3 adds
+  `CheckConstraint`s — `deal_score BETWEEN 0 AND 100`, `base_score BETWEEN 0 AND 1`,
+  one per subscore, and `cap_applied IS NULL OR cap_applied BETWEEN 0 AND 1` (§3.2.1:
+  NULL when no veto fired) — plus the matching Django validators for form-level
+  feedback.
   Tests (`test_listing_score_model.py`): `listing_score` is a hypertable (the
   `timescaledb_information.hypertables` query of `tests/db/test_market.py:43`);
   `retention_constraints("listing_score")` proves an `ebay_listing_observation` row
   **must** carry `expires_at` and a `merchant_fact` row **must not** (both
   directions); one row per neutral `price_basis` value persists with the exact stored
   FK (NULL), `cohort_key` (NULL only for `capacity_unavailable`), `n_eff = 0` and
-  `lambda_shrinkage = 0` **as stored zeros** (SA-027's MS-2a half); each CHECK is
-  asserted **in both directions** — a `cohort`-basis row with a NULL FK is rejected
-  **by the database**, a `capacity_unavailable` row carrying a FK or a cohort key is
-  rejected, a `price_unavailable` row carrying an `offer_observed_at` is rejected, and
-  a `cohort`-basis row with a NULL `offer_observed_at` is rejected (§3.3.5c revision
-  9); `offer_observed_at` is absent from `inputs_json` (SA-001); deleting a cited
+  `lambda_shrinkage = 0` **as stored zeros** (SA-027's MS-2a half).
+  **The CHECK tests are a truth table, not four spot checks** (finding 8): for each
+  of the four `price_basis` values × each of the three constrained columns
+  (`cohort_baseline_id`, `cohort_key`, `offer_observed_at`) × {NULL, non-NULL}, assert
+  accept or reject **against the database**, so the parametrization covers the cases
+  revision 1 missed — a non-NULL baseline FK on `price_unavailable` and on
+  `no_cohort_evidence`, and a NULL `cohort_key` on `cohort`, `price_unavailable` and
+  `no_cohort_evidence`. The twelve accepting cells are the row shapes §3.3.5(c) and
+  §3.4.1 group 4 fix; every other cell must raise `IntegrityError`.
+  Range tests: `deal_score` accepts 0 and 100 and rejects −1 and 101; `base_score`
+  and each subscore accept `0` and `1` and reject just outside; `cap_applied` accepts
+  NULL, 0 and 1 and rejects 1.0001 — each rejection asserted at the database, so a
+  validator-only implementation goes red.
+  Also: `offer_observed_at` is absent from `inputs_json` (SA-001); deleting a cited
   `CohortBaseline` raises `ProtectedError`.
-- **C2 — `CohortBaseline` versions + the immutability trigger (§3.3.5a/b, S2-20).**
-  Migration `0023`: the two models plus a `RunSQL` pair creating
-  `cohort_baseline_no_update()` and the `BEFORE UPDATE ... FOR EACH ROW` trigger
-  `cohort_baseline_immutable` exactly as §3.3.5(a) writes them, with a reversing
-  `DROP` (the `0001`/`0003`/`0007`/`0010` RunSQL precedent). `CohortBaseline`: plain
-  table, `UniqueConstraint(cohort_key, baseline_digest)`, columns `cohort_key`,
-  `baseline_digest`, `computed_at`, `price_event_count`, `oldest_event_at`,
-  `anchor_event_at`, `n_eff`, `q25`, `q50`, `q75`, `observation_vector`,
-  `source_composition`, `window_days`, `half_life_days`, `relaxation_step`,
-  `relaxation_exhausted`, `algorithm_version`; `retention_class = merchant_fact`,
-  indefinite. **No detection stamp and no `raw_snapshot_count` on this table**
-  (SA-025). A `save()` override refuses updates in Python with a message naming
-  §3.3.5(a) — defence in depth and the error message, **not** the guarantee — and
-  `django.contrib.admin` registers the model read-only (`has_add_permission`,
-  `has_change_permission`, `has_delete_permission` all `False`, via the
-  `@admin.register` class form at `admin.py:41`). `CohortBaselineCurrent`: PK
-  `cohort_key`, `current_version` FK (`PROTECT`, **`null=True`**),
-  `last_evaluated_at`, `last_promoted_at`, `ingest_high_water`,
-  `next_window_exit_at` (**nullable**), `price_event_digest` (**NOT NULL**),
-  `member_projection_digest`, `raw_snapshot_count`, `source_raw_snapshot_counts`;
-  `merchant_fact`, indefinite. Tests (`test_cohort_baseline.py`), which are SA-003's
-  `suggested_validation`: a released version refuses `UPDATE` through **each** of
-  `Model.save()`, `QuerySet.update()`, `bulk_update()`, an admin change POST, and raw
-  SQL on the ordinary application connection under the runtime role
-  (`settings.py:92`) — and the bulk and raw refusals are asserted to come from **the
-  database** (the trigger's `RAISE EXCEPTION` message / `psycopg` error class), not
-  from Python, because a test that only proves "it raised" passes against the
-  `save()`-only mechanism the finding is about; the row is byte-identical afterwards;
-  the admin registration reports no add, change or delete permission. **Negative
-  controls, so the trigger is proven not to be over-broad:** an `INSERT` of a new
-  version succeeds, a `DELETE` of an uncited version succeeds (§3.3.5f needs it), and
-  an `UPDATE` of the `cohort_baseline_current` pointer succeeds. Also: a duplicate
-  `(cohort_key, baseline_digest)` is rejected; `current_version` and
-  `next_window_exit_at` accept NULL while `price_event_digest` does not, so the
-  §3.3.5(i) baseline-void state is representable and its empty-projection digest is
-  not confusable with an absent one (SA-002).
-- **C3 — `SellerRatingObservation` (§3, §3.2.5, S2-21).** Migration `0024`.
+- **C4 — `SellerRatingObservation` (§3 `:352`, §3.2.5, S2-21).** Migration `0025`.
   Append-only, `RetentionGoverned`, `retention_constraints` /`retention_indexes`,
   `UniqueConstraint(seller, observed_at)`. Fields per §3.2.5: `seller` FK,
   `observed_at`, `source_site`, `rating_percent_raw` and `feedback_count_raw` (both
   nullable, stored verbatim as received), `p_obs` (`numeric(5,4)`), `n`
   (`PositiveIntegerField`), `y` (`numeric(12,4)`), `count_basis`
   (`total_count` / `net_score_proxy` / `unavailable`), `is_usable` (bool),
-  `raw_payload` FK. eBay-sourced rows carry `ebay_listing_observation` (IR-002); see
-  "Open at plan time" #1 for the non-eBay class. **No normalization arithmetic here**
-  — `p_obs`/`n`/`y` are written by MS-2e under the §3.2.5(b) contract. Tests
-  (`test_seller_rating_observation.py`): a row persists and round-trips its `Decimal`
-  values without float drift; a duplicate `(seller, observed_at)` is rejected; the
-  retention CHECK pair holds in both directions for the bounded eBay class and an
-  indefinite class; `count_basis` refuses an off-enum value.
+  `raw_payload` FK. **The retention class is per row and follows the row's
+  `source_site`** — the S2-2a rule applied to seller evidence, settled in design
+  revision 13 (`:352`): an eBay-sourced row carries `ebay_listing_observation`
+  (IR-002) with a **non-NULL `expires_at`** on the six-hour clock, and a row from any
+  of the four first-party merchant sources carries **`merchant_fact`, indefinite,
+  with `expires_at` NULL**, both enforced by the same `RetentionGoverned` CHECK pair.
+  **No normalization arithmetic here** — `p_obs`/`n`/`y` are written by MS-2e under
+  the §3.2.5(b) contract. Tests (`test_seller_rating_observation.py`): a row persists
+  and round-trips its `Decimal` values without float drift; a duplicate
+  `(seller, observed_at)` is rejected; **the CHECK pair is asserted per class** — an
+  eBay-sourced row without `expires_at` is rejected and one with it accepted, a
+  merchant-source row with `expires_at` is rejected and one without it accepted;
+  `count_basis` refuses an off-enum value.
 
-### Phase D — the four `purge_expired` hooks
+### Phase D — the sweeper plumbing and the four `purge_expired` hooks
 
 Files: `src/hw_radar/catalog/models/market.py`,
 `src/hw_radar/catalog/models/scoring.py`,
@@ -314,18 +434,66 @@ Files: `src/hw_radar/catalog/models/market.py`,
 `tests/db/test_score_clearing.py`, `tests/db/test_invalidation_hooks.py`,
 `tests/db/test_lock_parents_for_delete.py`, `tests/db/test_seller_anchor_phantom.py`.
 
+- **D0 — the sweeper's hook plumbing, stated exactly (finding 2).** The plan's
+  revision-1 claim that `getattr` is already a generic dispatcher was wrong, and so
+  was "the only change MS-2a makes to `purge_expired`". What the command does today:
+  `_deletion_exempt_q` resolves **one** named hook (`purge_expired.py:127`),
+  `_redact_expired` resolves **one** other (`:144`), and the batch loop
+  (`:213-221`) is `for pks in _batches(...)` → `with transaction.atomic():` →
+  `_deletable(model, now).filter(pk__in=pks).delete()`. **`QuerySet.delete()` returns
+  counts, not keys**, and the DELETE deliberately re-applies the whole predicate
+  (`:215-220`), so a child row whose `expires_at` was pushed forward between the
+  SELECT and the DELETE **survives** — dispatching the initially selected `pks` would
+  clear a pointer whose evidence still exists. MS-2a therefore adds, inside the
+  existing `transaction.atomic()` and in this order:
+
+  1. `lock_parents_for_delete(pks)` (D3), before anything else in the block;
+  2. a **key snapshot** — one `values_list` over the batch's rows for the fields the
+     invalidation hooks need, taken *before* the DELETE because the rows are gone
+     afterwards. The field tuple comes from an optional class attribute
+     `INVALIDATION_KEY_FIELDS`, defaulting to the model's pk, so `OfferSnapshot` and
+     `ListingScore` declare nothing (their `CompositePrimaryKey` **is**
+     `(listing_id, observed_at)` / `(listing_id, scored_at)`,
+     `market.py:513`) and only `SellerRatingObservation` declares
+     `("seller_id", "observed_at")` (§3.4.1 `:1164` gives the hook that pair);
+  3. the existing DELETE, unchanged;
+  4. a **survivor re-query** — `model._default_manager.filter(pk__in=pks)` — so the
+     **actually deleted** key set is the snapshot minus the survivors' keys. This is
+     the set the hooks receive, never the selected `pks`;
+  5. `getattr`-dispatch of `clear_parent_denorm` / `invalidate_listing_scores` /
+     `invalidate_seller_scores` with that set, when the model declares one, still
+     inside the same transaction.
+
+  The dispatch mechanism is the one the design names ("dispatched … the way it
+  already dispatches `deletion_exempt_q` and `redact_expired`", §3 `:354`), and the
+  sweeper still gains **no per-model special case** — but it does gain the five steps
+  above, which is more than §3's "the only change MS-2a makes to `purge_expired`
+  itself" (`:363`) reads on its face; that sentence is about the *lock* hook's
+  asymmetry, and this plan records the wider dispatch surface rather than
+  contradicting it silently. Tests (`test_invalidation_hooks.py`, D0's half): a
+  batch in which one selected row is refreshed past its expiry between SELECT and
+  DELETE dispatches the hook with **only** the truly deleted keys, and the refreshed
+  row's pointer is untouched; a model declaring no hook is swept exactly as before.
 - **D1 — the §2.3(b) clearing contract.** `Listing.mark_delisted()`
-  (`market.py:330`) and `Listing.redact_expired()` (`:454`) clear the five `current_*`
-  columns in the same transaction as the delist mark / content redaction, for **every**
-  delist regardless of retention class (the listing has left `P`, §2.2).
-  `ListingScore.clear_parent_denorm(deleted_keys)` is a classmethod taking the deleted
-  `(listing_id, scored_at)` pairs and issuing, per pair, exactly the §2.3(b) guarded
-  update — the five columns nulled `WHERE id = %(listing_id)s AND current_scored_at =
-  %(scored_at)s`. **The `AND current_scored_at = …` predicate is the whole
-  mechanism**; the withdrawn `clear_parent_denorm(listing_ids)` signature must not
-  reappear. It is dispatched by `purge_expired` through the existing `getattr`
-  protocol (`purge_expired.py:127,144`) inside the batch's own `transaction.atomic()`
-  (`:213-221`). Tests (`test_score_clearing.py`) — the six §2.3(b) tests, led by the
+  (`market.py:330-377`) clears the five `current_*` columns in the same transaction
+  as the delist mark, for **every** delist regardless of retention class (the listing
+  has left `P`, §2.2). `Listing.redact_expired()` (`:453-480`) clears them **inside
+  its own bulk `QuerySet.update()` call**, not through a model hook that a bulk path
+  would never run (design revision 13 `:290`).
+  **The redaction queryset must be widened (finding 12).** Today it ends with
+  `.exclude(**cls.REDACTED_CONTENT_FIELDS)` (`:475`) — "already-blank rows are
+  skipped" — so a row redacted before MS-2a, or on an earlier sweep pass, is filtered
+  out and would keep a stale non-NULL pointer forever. The predicate becomes "content
+  not yet blank **or** any of the five `current_*` columns not yet NULL", so the pass
+  is still idempotent (its fixed point is both halves clean) and still skips fully
+  repaired rows.
+  `ListingScore.clear_parent_denorm(deleted_keys)` is a classmethod taking the
+  **actually deleted** `(listing_id, scored_at)` pairs from D0 and issuing, per pair,
+  exactly the §2.3(b) guarded update — the five columns nulled `WHERE id =
+  %(listing_id)s AND current_scored_at = %(scored_at)s`. **The `AND current_scored_at
+  = …` predicate is the whole mechanism**; the withdrawn
+  `clear_parent_denorm(listing_ids)` signature must not reappear.
+  Tests (`test_score_clearing.py`) — the six §2.3(b) tests, led by the
   SA-002 regression: (1) an eBay listing with an **expired old** score row and a
   **newer unexpired** row that `current_*` points at — sweep, assert the old row is
   deleted and the pointer still identifies the newer row unchanged; (2) the pointer's
@@ -334,10 +502,19 @@ Files: `src/hw_radar/catalog/models/market.py`,
   repoint `current_*`, then run the clear: it no-ops, and running it twice is
   idempotent; (4) delist a scored listing and assert the clear and the mark cannot be
   observed separately (assert on the post-commit row); delisting clears
-  **unconditionally**; (5) `source_composition` has no MS-2a surface — replaced by the
-  `redact_expired()` path asserting the same five columns clear alongside the content
-  redaction (§2.3b row 2); (6) the negative control — a `merchant_fact` listing's
-  score row survives a sweep with its `current_*` columns intact.
+  **unconditionally**, and `scoring_inputs_changed_at` is asserted **unchanged**
+  (design revision 13 `:289`); (5) **the redaction path** — design revision 13
+  (`:330`) replaces revision 12's "`source_composition` tests in (a)", which §2.3(a)
+  assigns to MS-2c, with a test MS-2a can actually run: seed a deletion-exempt
+  bounded listing whose `expires_at` has passed and which carries a current score,
+  run `redact_expired()`, and assert the content fields **and** the five `current_*`
+  columns are blanked in the **same** bulk `update()` (post-commit row; the two
+  cannot be observed separately) and that `scoring_inputs_changed_at` is
+  **unchanged**. Its negative control is finding 12's: an **already
+  content-redacted** row that still holds a non-NULL pointer is repaired by the same
+  pass, which fails against the unwidened `.exclude(...)` queryset; (6) the negative
+  control — a `merchant_fact` listing's score row survives a sweep with its
+  `current_*` columns intact.
 - **D2 — L8 and L9 invalidation hooks (§3.4.1, §3.4.2(5)–(6)).**
   `OfferSnapshot.invalidate_listing_scores(deleted_keys)` issues, per deleted
   `(listing_id, observed_at)` pair, the §3.4.2(5) update — the same five columns
@@ -345,9 +522,10 @@ Files: `src/hw_radar/catalog/models/market.py`,
   `SellerRatingObservation.invalidate_seller_scores(deleted_keys)` clears the same
   five columns for every listing in `P` of an affected seller, **guarded on the
   score's stored group-3 `observed_at` equalling a deleted row's** (§3.4.2(6)); the
-  guard is cross-row, which is why D3's pre-lock is required beneath it. Both are
-  dispatched by the same `getattr` protocol inside the same per-model transaction as
-  the delete. Tests (`test_invalidation_hooks.py`): deleting the **selected** snapshot
+  guard is cross-row, which is why D3's pre-lock is required beneath it. Both take
+  D0's **actually deleted** key set — for `SellerRatingObservation` the
+  `("seller_id", "observed_at")` tuples its `INVALIDATION_KEY_FIELDS` declares — and
+  both run inside the same per-model transaction as the delete. Tests (`test_invalidation_hooks.py`): deleting the **selected** snapshot
   clears exactly that listing's five columns; deleting a **non-selected** snapshot
   updates nothing and costs no fan-out; a `price_unavailable` listing
   (`current_offer_observed_at IS NULL`) is **never** cleared by any deleted snapshot —
@@ -356,9 +534,11 @@ Files: `src/hw_radar/catalog/models/market.py`,
   control); the clear is idempotent under repeated batches.
 - **D3 — `lock_parents_for_delete(pks)` and its three implementations (§3.4.2(2),
   SA-006/SA-009).** A fourth optional classmethod under the **same** discovery
-  protocol, called inside the batch's existing `transaction.atomic()` **before** the
-  `DELETE` (`purge_expired.py:213-221`). **This is the only change MS-2a makes to
-  `purge_expired` itself** (§3). Implementations, per §3's table and §3.4.2(2):
+  protocol, called inside the batch's existing `transaction.atomic()` **before**
+  everything else in the block (D0 step 1), and before the `DELETE`
+  (`purge_expired.py:213-221`). It is the only change MS-2a makes to the sweeper's
+  **delete protocol** (§3 `:363`); D0 records the dispatch plumbing that comes with
+  it. Implementations, per §3's table and §3.4.2(2):
 
   | Model | What it locks, in order |
   | --- | --- |
@@ -370,60 +550,83 @@ Files: `src/hw_radar/catalog/models/market.py`,
   simplification**: the affected set is the mutable predicate "listings in `P` for
   that seller", so locking its current members cannot exclude a listing that joins
   afterwards. The global order is `seller` → `listing`, ascending `id` within each
-  class (§3.4.2(3)); no writer may take `listing` before `seller`. Tests
-  (`test_lock_parents_for_delete.py`): per model, the hook is asserted against that
-  lock order — for `OfferSnapshot` and `ListingScore`, `listing` rows only; for
-  `SellerRatingObservation`, distinct `seller` rows `FOR UPDATE` in ascending `id`
-  order **before** any listing row — and a test **inspects `pg_locks` inside the
-  sweep's transaction** to prove the seller lock is actually held rather than merely
-  intended; a batch spanning two sellers locks both, ascending; the hook is discovered
-  by `getattr` (a model without it is unaffected, asserted against an existing swept
-  model).
-- **D4 — the §3.4.2 fixture-12 `P`-entry phantom, with its negative control.**
-  MS-2a is where the hook is introduced and the first point at which a wrong
-  implementation is detectable, so the fixture runs here as well as in MS-2d.
-  Two connections, per §3.4.2 fixture 12: seed a listing for the seller with **no
-  snapshot**, so it is outside `P`; barrier — let
-  `SellerRatingObservation.lock_parents_for_delete` select and lock the fan-out, then
-  `append_snapshot` that listing into `P` on a second connection, then run the
-  refresh **stand-in**, then let the sweep's `DELETE` and L9 commit. Because MS-2d's
-  refresh does not exist yet, the stand-in is a test-only transaction that takes
-  **exactly** §3.4.2(3)'s refresh lock order — `seller` `FOR SHARE`, then its one
-  `listing` `FOR UPDATE` — and then writes a `listing_score` row citing the rating;
-  it is a harness, not a design decision, and it must not migrate into product code.
+  class — the class order is the invariant stated at design `:1340`, and §3.4.2(3)
+  explains why it has no cycle; no writer may take `listing` before `seller`.
+  **How the lock is proved (finding 10).** `pg_locks` alone is not an
+  identity-level inventory of held row locks: a granted `FOR UPDATE` row lock
+  normally surfaces as the holder's `transactionid` entry plus, once someone waits, a
+  `tuple` entry — so an assertion that merely finds *some* row in `pg_locks` can pass
+  without establishing that the seller row is the anchor. The primary oracle is
+  therefore **behavioural**: with the sweep's transaction open on connection 1, a
+  second connection issues `SELECT … FROM seller WHERE id = :id FOR UPDATE NOWAIT`
+  and must raise a lock-not-available error, while the same probe against an
+  **unrelated** seller succeeds — that pair is what identifies the specific row.
+  `pg_locks` joined to `pg_stat_activity` (and `pg_blocking_pids()`) is asserted as
+  the corroborating detail the design's exit criterion names (`:341`): the waiter's
+  ungranted entry blocks on the sweep's backend and no other.
+  Tests (`test_lock_parents_for_delete.py`): per model, the hook is asserted against
+  that lock order — for `OfferSnapshot` and `ListingScore`, `listing` rows only,
+  proved by the same NOWAIT probe on a listing row and its unrelated-listing control;
+  for `SellerRatingObservation`, distinct `seller` rows `FOR UPDATE` in ascending
+  `id` order **before** any listing row, proved by the seller probe **and** by the
+  ordering of the statements the hook issues (captured with
+  `django.test.utils.CaptureQueriesContext`, so "seller before listing" is asserted
+  on the SQL and not inferred); a batch spanning two sellers locks both, ascending;
+  the hook is discovered by `getattr` (a model without it is unaffected, asserted
+  against an existing swept model).
+- **D4 — the fixture-12 `P`-entry phantom, *lock half only* (design revision 13
+  `:341`).** MS-2a is where the hook is introduced and the first point at which a
+  wrong implementation is detectable, so the deleter side runs here; **the whole-table
+  assertion — that no `listing_score` row anywhere cites the deleted rating's
+  `observed_at` — is MS-2d's**, where the real refresh exists. Revision 13 states this
+  split because MS-2a lands no refresh, and "tick the refresh" in an MS-2a criterion
+  would name MS-2d work.
+  Two connections: seed a listing for the seller with **no snapshot**, so it is
+  outside `P`; barrier — let `SellerRatingObservation.lock_parents_for_delete` select
+  and lock the fan-out, then `append_snapshot` that listing into `P` on the second
+  connection, then run the **lock-only stand-in**, then let the sweep's `DELETE` and
+  L9 commit. The stand-in performs **only the refresh's lock sequence** — `seller`
+  `FOR SHARE`, then `listing` `FOR UPDATE` — and **re-derives no `D_selected` and
+  writes no score**: revision 13 is explicit that a duplicate re-derivation in an
+  MS-2a test would drift from the real one, and MS-2a lands no scoring math.
   Assertions: the stand-in **blocks on the seller anchor** — not on the listing row,
-  which the sweep never locked; it writes nothing until the sweep commits; the
-  phantom listing is **explicitly asserted absent from the sweep's lock set**, so the
-  test proves the anchor and not the fan-out; and after both transactions commit,
-  **no row anywhere in `listing_score` — not merely no current pointer — cites the
-  deleted rating's `observed_at`**, asserted by a whole-table query. **Negative
-  control (the assertion that makes the criterion meaningful):** the same assertion
-  run against a listing-only implementation of the hook must go **red** — implemented
-  as a parametrized/monkeypatched listing-only variant the test expects to fail.
+  which the sweep never locked (the D3 NOWAIT-probe oracle, applied to the phantom's
+  own listing to show it is *not* locked); the phantom listing is **explicitly
+  asserted absent from the sweep's lock set**, so the test proves the anchor and not
+  the fan-out; the stand-in unblocks only after the sweep commits, and the rating it
+  would have read is gone by then. **Negative control (the assertion that makes the
+  criterion meaningful):** the same test against a listing-only implementation of
+  `SellerRatingObservation.lock_parents_for_delete` must go **red** — a
+  monkeypatched listing-only variant the test expects to fail, since without the
+  anchor the stand-in never blocks.
 
 ### Phase E — registry and retention coverage
 
 Files: `tests/unit/test_purge_registry.py`, `tests/db/test_purge_expired.py`.
 
-- **E1 — registry-derived retention tests.** Extend
-  `tests/unit/test_purge_registry.py` (whose four properties are all derived from the
-  app registry, never a hand-written list) so the new `RetentionGoverned` models are
-  covered by the same derivations: `catalog.ListingScore` and
-  `catalog.SellerRatingObservation` join the bounded-table membership assertion; every
-  swept model still carries `retention_class`/`expires_at`, the partial `expires_at`
-  index from `retention_indexes(...)`, and the DR-001 CHECK pair from
-  `retention_constraints(...)`. Add one **registry-derived** property for this
+- **E1 — registry-derived retention tests.** `tests/unit/test_purge_registry.py`
+  holds **seven** tests: six derive their subject from the app registry or the class
+  hierarchy, and one —
+  `test_registry_is_not_empty_and_includes_the_bounded_tables` (`:39-50`) — is a
+  **hand-written label set** guarding the degenerate pass. Only that one needs
+  editing: add `catalog.ListingScore`, `catalog.SellerRatingObservation`,
+  `catalog.CohortBaseline` and `catalog.CohortBaselineCurrent` to its expected
+  labels. The other six then cover the new models automatically — they must carry
+  `retention_class`/`expires_at`, the partial `expires_at` index from
+  `retention_indexes(...)` (`:124-140`), and the DR-001 CHECK pair from
+  `retention_constraints(...)` (`:142-164`), which is exactly why C1 declares both on
+  the baseline tables (finding 7). Add one **new** registry-derived property for this
   milestone: every model declaring any of the four sweep hooks
   (`clear_parent_denorm`, `invalidate_listing_scores`, `invalidate_seller_scores`,
   `lock_parents_for_delete`) is in `retention_governed_models()`, so a hook can never
-  be declared on a table the sweep never visits. `CohortBaseline` /
-  `CohortBaselineCurrent` are `merchant_fact` and indefinite, so the existing CHECK
-  pair asserts they can never carry `expires_at`; `ScoringRun` is deliberately not
+  be declared on a table the sweep never visits. `ScoringRun` is deliberately not
   `RetentionGoverned` and is asserted absent from the registry. In
   `tests/db/test_purge_expired.py`, add the sweeper-side coverage the registry test
   cannot give: one end-to-end sweep over an expired `ListingScore` batch and an
-  expired `SellerRatingObservation` batch, asserting the rows are deleted and that
-  each model's D1–D3 hooks were dispatched inside the batch transaction.
+  expired eBay-classed `SellerRatingObservation` batch, asserting the rows are
+  deleted and that each model's D0–D3 hooks ran inside the batch transaction; plus
+  the control that a `merchant_fact` `SellerRatingObservation` row and both baseline
+  tables are never selected by the sweep at all.
 
 ### Phase F — integration + close
 
@@ -431,7 +634,7 @@ Files: `tests/unit/test_purge_registry.py`, `tests/db/test_purge_expired.py`.
   leg landed out of order, and run the **full battery serially**:
   `uv run python -m scripts.check` plus
   `uv run python manage.py makemigrations --check --dry-run`, and a migrate-from-empty
-  run proving `0018`–`0024` apply from a fresh database and the two hypertables and
+  run proving `0018`–`0025` apply from a fresh database and the two hypertables and
   the trigger exist afterwards. Fix regressions.
 - **F2 —** Docs and status: `docs/STATUS.md`, `docs/TODO.md` (narrow the MS-2 item to
   MS-2b onward), `docs/handoff/specs-plans.md` (this plan's row), handoff closeout.
@@ -448,95 +651,93 @@ it cites.
 | # | Exit criterion (§3, MS-2a) | Proved by |
 | --- | --- | --- |
 | 1 | Gate green | `uv run python -m scripts.check` at every commit; F1 |
-| 2 | Migrations apply from empty and are hypertable-verified | F1; C1 hypertable assertion on the `tests/db/test_market.py:43` pattern |
-| 3 | `retention_constraints("listing_score")` proves an eBay-classed row **must** carry `expires_at` and a `merchant_fact` row **must not** | C1 |
+| 2 | Migrations apply from empty and are hypertable-verified | F1; C3 hypertable assertion on the `tests/db/test_market.py:43` pattern |
+| 3 | `retention_constraints("listing_score")` proves an eBay-classed row **must** carry `expires_at` and a `merchant_fact` row **must not** | C3 |
 | 4 | The six §2.3(b) conditional-clearing tests pass, led by the SA-002 regression | D1 |
 | 5 | A released `CohortBaseline` version refuses `UPDATE` through `save()`, `QuerySet.update()`, `bulk_update()`, the admin and raw SQL under the runtime role — the refusal coming from the §3.3.5(a) **database trigger** on the bulk and raw paths — while `INSERT`, an uncited `DELETE` and a pointer `UPDATE` all still succeed | C2 |
-| 6 | A duplicate `(cohort_key, baseline_digest)` is rejected; deleting a cited version raises `ProtectedError` | C2; C1 |
-| 7 | `CohortBaselineCurrent.current_version` and `next_window_exit_at` accept NULL and `price_event_digest` does not (§3.3.5i, SA-002) | C2 |
-| 8 | `Listing.current_offer_observed_at` and `ListingScore.offer_observed_at` persist with the §2.1 nullability, and `offer_observed_at` is absent from `inputs_json` (SA-001) | B1; C1 |
-| 9 | The three §3.3.5(c) CHECKs reject a `cohort`-basis score with a NULL baseline, a `capacity_unavailable` score carrying a baseline or a cohort key, and both directions of the `offer_observed_at` biconditional; each neutral path is accepted (S2-26) | C1 |
+| 6 | A duplicate `(cohort_key, baseline_digest)` is rejected; deleting a cited version raises `ProtectedError` | C2; C3 |
+| 7 | `CohortBaselineCurrent.current_version` and `next_window_exit_at` accept NULL and `price_event_digest` does not (§3.3.5i, SA-002) | C1 |
+| 8 | `Listing.current_offer_observed_at` and `ListingScore.offer_observed_at` persist with the §2.1 nullability, and `offer_observed_at` is absent from `inputs_json` (SA-001) | B1; C3 |
+| 9 | The three §3.3.5(c) CHECKs reject a `cohort`-basis score with a NULL baseline, a `capacity_unavailable` score carrying a baseline or a cohort key, and both directions of the `offer_observed_at` biconditional; each neutral path is accepted (S2-26) | C3 |
 | 10 | `ingested_at` is assigned by the database, cannot be supplied by `append_snapshot`, and the migration backfills it from `observed_at` with `ingest_stamp_backfilled` set (§2.2.2, S2-24) | B2 |
-| 11 | `scoring_inputs_changed_at` advances for every `SCORING_INPUT_FIELDS` write and for no other | B1 |
-| 12 | `lock_parents_for_delete` asserted per model against §3.4.2's lock order, with a `pg_locks` inspection inside the sweep's transaction proving the seller lock is held | D3 |
-| 13 | Fixture 12 (`P`-entry phantom) at whole-table level — no `listing_score` row anywhere cites the deleted rating's `observed_at` — **and** the same assertion goes red against a listing-only hook | D4 |
+| 11 | `scoring_inputs_changed_at` advances for every `SCORING_INPUT_FIELDS` write and for no other — including **not** on `mark_delisted()` or the bulk `redact_expired()` path (revision 13 `:168`, `:289-290`) | B1 |
+| 12 | `lock_parents_for_delete` asserted per model against §3.4.2's lock order, the seller lock proved held by a `FOR UPDATE NOWAIT` probe from a second connection with an unrelated-seller control, and `pg_locks`/`pg_stat_activity` asserted as the corroborating detail (finding 10) | D3 |
+| 13 | Fixture 12's **lock half** (revision 13 `:341`): the lock-only stand-in blocks on the `seller` anchor, the phantom listing is absent from the sweep's lock set, and the same test goes **red** against a listing-only hook. The whole-table citation assertion is MS-2d's | D4 |
 | 14 | A `ScoringRun` persists with no source while a sourceless `ScraperRun` still raises | B4 |
 | 15 | `makemigrations --check` clean | F1 |
 | 16 | No scoring math; no observable behavior change | Review of the diff: no `scoring/` module beyond `contracts.py`, no `poller/service.py` change, no adapter change, no `SourceConfig.enabled` flip |
 
 Additional acceptance carried from the sections MS-2a is assigned in:
 
-- Retention registry tests are registry-derived and mirror
-  `tests/unit/test_purge_registry.py` (E1).
+- Retention registry coverage extends `tests/unit/test_purge_registry.py`'s one
+  hand-written label set and inherits its six registry-derived properties (E1), and
+  the two baseline tables satisfy them because C1 declares the CHECK pair and the
+  partial index on both (finding 7).
 - Neutral-path column values persist as SA-027's MS-2a half requires: `n_eff = 0` and
-  `lambda_shrinkage = 0` as **stored zeros** on all three neutral `price_basis` values
-  (C1). The byte-identical explanation reproduction half of SA-027 is MS-2d.
+  `lambda_shrinkage = 0` as **stored zeros**, and `quantity` / `quantity_basis`
+  populated rather than NULL, on all three neutral `price_basis` values (C3,
+  revision 13 `:441`). The byte-identical explanation reproduction half of SA-027 is
+  MS-2d.
+- `SellerRatingObservation`'s per-row retention class is asserted for both an eBay
+  row and a first-party merchant row (C4, revision 13 `:352`).
+- Every `ListingScore` range is enforced at the database and probed just outside its
+  boundary (C3, finding 9).
 - The §3.3.2 parent-tier map is landed by the `MarketTier` migration and is total,
-  with every parent strictly widening (B3).
+  with every parent strictly widening (B3), and `market_tier` is protected by a
+  database CHECK plus loader normalization so a later import cannot reinstate free
+  text (B3, finding 6).
 
 ## Open at plan time
 
-Each item is something the design does not settle for MS-2a. **None may be closed by
-inventing design** — take them to the owner or to the OQ/Deviations process (§7)
-before the task that needs them.
+**None blocking.** Revision 1 of this plan carried five open items; **design
+revision 13 settles all five**, and the tasks above implement the settled rules:
 
-1. **Retention class of a non-eBay `SellerRatingObservation` row** (§3 MS-2a bullet 3,
-   §3.2.5, S2-2a). The design fixes only "eBay-sourced rows carry
-   `ebay_listing_observation` (IR-002)". The DR-001 CHECK pair requires *some* class
-   on every row, and §2.1 notes eBay is the only live rating input among the top five,
-   so a non-eBay row may be unreachable today — but the column still needs a rule.
-2. **How `scoring_inputs_changed_at` advances on the delist/redaction paths** (§2.1,
-   §2.3b). §2.1 says the stamp is "advanced by `Listing.save()` … plus the
-   delist/redaction paths", yet `redact_expired()` is a bulk
-   `kept.update(**REDACTED_CONTENT_FIELDS)` (`market.py:454,480`) that bypasses
-   `save()` entirely, and `mark_delisted()` saves `delisted_at`/`delist_reason`, which
-   are not `SCORING_INPUT_FIELDS` members. Whether those two paths must set the stamp
-   explicitly, and with which value, is not stated.
-3. **`quantity` / `quantity_basis` on the `capacity_unavailable` path** (§3, §3.2.2).
-   §3 makes every unlisted-as-nullable column NOT NULL, which includes both; §3.2.2's
-   exhaustive table gives the capacity-unavailable row "—" for both and §3.4.1's
-   group-4 neutral table does not cover them. The stored value on that path is
-   undefined.
-4. **The field membership of `scoring/contracts.py` in MS-2a** (§2 module layout).
-   §2 names the five Pydantic models; their field sets are fixed only indirectly by
-   MS-2b/MS-2c sections (§3.2.1, §3.2.6, §3.3.1, §3.3.4, §3.4.1 group 4). How much of
-   that shape MS-2a must land — versus a minimal façade MS-2b widens — is not stated,
-   and widening it later is cheap only while no released version imports it (§3.4.3
-   item 1 forbids that import outright).
-5. **What plays the refresh's part in MS-2a's fixture 12** (§3 MS-2a exit,
-   §3.4.2 fixture 12). The criterion requires "the refresh must block on the `seller`
-   anchor" in a sub-milestone whose own scope excludes the refresh (MS-2d). D4 uses a
-   test-only stand-in taking exactly §3.4.2(3)'s refresh lock order; that is a harness
-   derivation, not a design statement, and it is recorded here so the plan review can
-   confirm or replace it.
+| Revision-1 open item | Settled by (design revision 13) | Where it landed |
+| --- | --- | --- |
+| 1. Retention class of a non-eBay `SellerRatingObservation` row | `:352` — the class is per row and follows `source_site`: eBay ⇒ `ebay_listing_observation` + non-NULL `expires_at`; the four first-party merchant sources ⇒ `merchant_fact`, indefinite | C4 |
+| 2. `scoring_inputs_changed_at` on the delist/redaction paths | `:168`, `:289-290` — it advances **only** on a `Listing.save()` write of a `SCORING_INPUT_FIELDS` member; both other paths leave `P` and re-enter through C1 | B1 (positive and negative tests), D1 |
+| 3. `quantity` / `quantity_basis` on the `capacity_unavailable` path | `:436`, `:441`, `:1227` — the `—` cells were a documentation error: the §3.2.2 ladder never consults capacity, so both columns stay NOT NULL on every path and such a row carries the ladder's own outcome (`1` / `default_single` / `quantity_assumed` when the title bears no signal). No nullability, no sentinel, no fifth `quantity_basis` value | C3 |
+| 4. Field membership of `scoring/contracts.py` in MS-2a | `:99-102` — the five names plus exactly the fields the MS-2a schema fixes; MS-2b widens them with computed fields | A1 |
+| 5. What plays the refresh's part in fixture 12 | `:341` — MS-2a asserts the deleter side and blocking with a **lock-only** stand-in that re-derives no `D_selected`; the whole-table citation assertion is MS-2d's | D4 |
+
+One **non-blocking** reconciliation is recorded rather than resolved, because it is a
+plan-level reading and not a gap that stops a task:
+
+- **Where the parent-tier map lives.** §3.3.2 (`:748`) calls it "a versioned constant
+  under S2-6; landed by the §2.1 `MarketTier` migration", while §3.4.3 item 4
+  (`:1508`) lists it in the constant set a released version owns
+  (`scoring/versions/v1/`, MS-2b). B3 lands it as inert data in the `0020` migration
+  and MS-2b's version constant is the copy the ladder reads, with an MS-2b task
+  asserting the two agree. If MS-2b's plan prefers a single home, this plan's B3 test
+  is the only thing that has to move.
 
 ## Deliberately excluded MS-2a mentions
 
-Grep hits for "MS-2a" in the design that this plan does **not** turn into a task,
-with why:
+Grep hits for "MS-2a" in design revision 13 that this plan does **not** turn into a
+task, with why. Section references are used rather than line numbers here, because
+these are whole-passage exclusions:
 
-- §3.2.6 / §3.4.1 group 4 (lines 662, 1197, 1214) — these settle a *contradiction*
-  MS-2a "could not choose a column nullability" for. The plan carries the resolution
-  as C1's NOT NULL/nullable rules; the four-combination provisional matrix and
-  `s_price = 0.5` are MS-2b table-driven tests (§3, MS-2b exit).
-- §3.2.6 line 666, SA-027's `suggested_validation` "MS-2a/MS-2d" — the stored-column
-  half is C1; the `inputs_json` group-4 payload and byte-identical explanation
-  reproduction through §3.4.3 dispatch need `compose`/`explain`/`dispatch`, which are
+- **§3.2.6 and §3.4.1 group 4** (the neutral-path representation) — these settle a
+  *contradiction* MS-2a "could not choose a column nullability" for. The plan carries
+  the resolution as C3's NOT NULL/nullable rules; the four-combination provisional
+  matrix and `s_price = 0.5` are MS-2b table-driven tests (§3, MS-2b exit).
+- **§3.2.6's SA-027 `suggested_validation` ("MS-2a/MS-2d")** — the stored-column half
+  is C3; the `inputs_json` group-4 payload and byte-identical explanation reproduction
+  through §3.4.3 dispatch need `compose` / `explain` / `dispatch`, which are
   MS-2b/MS-2d.
-- §3.3.3 line 773 — MS-2a adds `Listing.extracted_attrs_json` (B1); **MS-2c** writes
-  it from `matching/resolver.py`. No resolver change here.
-- §3.4.1 coverage rows (lines 1283, 1370) — "MS-2a asserts the class" for
-  `drive_spec` / `product_model` / `product_variant` being `merchant_fact`. Covered by
-  E1's registry-derived CHECK-pair property rather than by a bespoke test; the trigger
-  and candidate-clause behavior around them is MS-2d.
-- §2.2.2 tests (lines 243–244, 259) — the *field* half is B2; the B1 high-water
-  trigger, the two insert shapes and the negative control are explicitly "MS-2d for
-  the trigger".
-- §2.2.1 (line 317 context) and §2.3(b) test list item 5 — the current-offer selector
-  and the `source_composition` tests are MS-2c/MS-2d by their own headings; MS-2a
-  carries only the columns and the clearing hooks they later exercise.
-- §1.2 rows and §6/§7 narrative (lines 46, 56–82, 1601, 1603, 1646–1657) — ratification
-  and audit history. They are the *precondition* for cutting this plan, not work in it.
-- §3.3.5(f)/(g) prune and §3.3.5(h) measurement — the prune runs inside the
+- **§3.3.3** — MS-2a adds `Listing.extracted_attrs_json` (B1); **MS-2c** writes it
+  from `matching/resolver.py`. No resolver change here.
+- **§3.4.1's dependency × mutation coverage rows** ("MS-2a asserts the class" for
+  `drive_spec` / `product_model` / `product_variant` being `merchant_fact`) — covered
+  by E1's registry-derived CHECK-pair property rather than by a bespoke test; the
+  trigger and candidate-clause behaviour around them is MS-2d.
+- **§2.2.2's test list** — the *field* half is B2; the B1 high-water trigger, the two
+  insert shapes and the negative control are explicitly "MS-2d for the trigger".
+- **§2.2.1's selector tests and §2.3(a)'s `source_composition` tests** — MS-2c/MS-2d
+  by their own headings. Revision 13 (`:330`) replaces the §2.3(b) list's item 5 with
+  the redaction-path test MS-2a can run, which is D1 test 5.
+- **§1.2's ratification rows and the §6/§7 narrative** — ratification and audit
+  history. They are the *precondition* for cutting this plan, not work in it.
+- **§3.3.5(f)/(g) prune and §3.3.5(h) measurement** — the prune runs inside the
   `score-refresh` job (MS-2d) and the growth measurement is MS-2c. MS-2a lands only
-  the `PROTECT` FK that makes condition 2 a database invariant.
+  the `PROTECT` FK that makes prune condition 2 a database invariant.
