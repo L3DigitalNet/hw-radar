@@ -15,8 +15,6 @@ Instructions for AI agents:
 
 ## Agent tasks
 
-- [ ] Refresh Project Standards after upstream issue #80 ships and re-verify automatic Agent Handoff startup under the `uv-strict-python` shim.
-
 - [ ] Run the MS-1e owner-in-the-loop ratification step (design §6): live-harvest a corpus with
   `manage.py harvest_corpus --all --limit …`, draft labels, have the owner audit a random ~20%
   sample plus every matcher-disagreement entry, run the full verification gate once as the single
@@ -36,11 +34,20 @@ Instructions for AI agents:
 
 - [ ] Give the Seller table a retention policy (currently always NULL); needed once IR-002
   redaction reaches merchant usernames.
-- [ ] `ProductModel`, `DriveSpec`, and `ProductAlias` inherit `RetentionGoverned` and are
-  visited by the sweep but declare neither `retention_constraints()` nor
-  `retention_indexes()` — no CHECK forces `expires_at` NULL for their indefinite classes
-  and each sweep sequential-scans them. Decide whether to add both (migration) or exclude
-  indefinite-only models from `retention_governed_models()`. (Found by the verifier pass
-  2026-08-30.)
+- [ ] `ProductModel`, `DriveSpec`, and `ProductAlias` carry the partial `expires_at` index
+  (migration 0016) but still lack the DR-001 CHECK pair from `retention_constraints()`.
+  Add the CHECK pair and update the ~45 test/db fixture sites that omit `retention_class`
+  once the new resolver-learned-alias retention OQ (see `docs/open-questions.md`) is decided.
 
 - [ ] Decide the WD Purple recert opt-in question.
+
+- [ ] owner-gated: ratify MS-2 design §1.2 (all S2 rows, S2-1..S2-26, ~26) per §1.1
+  (`docs/superpowers/specs/2026-09-06-ms2-scoring-design.md`, revision 5). Then the
+  orchestrator runs cross-agent review round 5 to converge the document. Note S2-2b is
+  counsel-adjacent.
+- [ ] Master-spec hygiene pass, editorial, owner-directed per revision-history convention:
+  `docs/specs/hw-radar-master-spec.md` lines 441/447/451 (score home / dollars_per_tb
+  row-local claim), line 1200 (lot quantity already required), lines 1255-1262 (mixed-unit
+  cap formula).
+- [ ] After owner ratification of MS-2 design §1.2, the planner derives the MS-2a
+  implementation plan, then cross-agent review-plan.

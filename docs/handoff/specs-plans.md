@@ -1,11 +1,12 @@
 # Specs And Plans
 
-Last updated: 2026-08-16
+Last updated: 2026-09-06
 
 ## Active Design Artifacts
 
 | Artifact | Role | Status |
 | --- | --- | --- |
+| `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` | MS-2 scoring design | Revision 5 on `dev` (`ebcb71b`); Codex review rounds 1-4 complete; round 5 held for owner ratification of S2-1..S2-26 (§1.2) |
 | `docs/superpowers/specs/2026-07-06-ms1e-validation-corpus-ratification-design.md` | MS-1e validation-corpus + ADR-0019 ratification design | Implemented on dev; §6 owner-gated |
 | `docs/superpowers/plans/2026-08-16-ms1e-validation-corpus.md` | MS-1e harvest-tooling implementation plan | Implemented on dev; converged |
 | `docs/research/2026-07-05-ms1c-catalog-seed-inputs.md` | MS-1c catalog seed input ledger | Implemented; keep for provenance |
