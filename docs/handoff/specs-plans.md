@@ -6,7 +6,8 @@ Last updated: 2026-09-06
 
 | Artifact | Role | Status |
 | --- | --- | --- |
-| `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` | MS-2 scoring design | Revision 12 on `dev` (`f3bc307`), owner-ratified; audit b2eedc33 closed at cap (8/9; SA-009 wording residual closed in-house in rev 12); next: owner choice |
+| `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` | MS-2 scoring design | Revision 14 (`a3ec96b`) owner-accepted (in-house closure, §6/§7); rev 13 `5e0e7c1` settled seven items |
+| `docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md` | MS-2a scoring-substrate implementation plan | Revision 4 (`05f130f`) on `dev` after 3 Codex `delegate` passes (pass 2 12 resolved/2 partial/1 open/4 new); `review-plan` refused: spec closed at cap; Codex delegate reviews instead |
 | `docs/superpowers/specs/2026-07-06-ms1e-validation-corpus-ratification-design.md` | MS-1e validation-corpus + ADR-0019 ratification design | Implemented on dev; §6 owner-gated |
 | `docs/superpowers/plans/2026-08-16-ms1e-validation-corpus.md` | MS-1e harvest-tooling implementation plan | Implemented on dev; converged |
 | `docs/research/2026-07-05-ms1c-catalog-seed-inputs.md` | MS-1c catalog seed input ledger | Implemented; keep for provenance |

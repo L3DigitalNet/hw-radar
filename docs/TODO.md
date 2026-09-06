@@ -36,6 +36,7 @@ Instructions for AI agents:
   redaction reaches merchant usernames.
 - [ ] Decide the WD Purple recert opt-in question.
 
-- [ ] owner-gated choice: accept the in-house closure of the SA-009 wording residual on MS-2
-  design revision 12 (`docs/superpowers/specs/2026-09-06-ms2-scoring-design.md`, `f3bc307`)
-  and let the planner cut the MS-2a plan, OR open a third cross-agent audit against revision 12.
+- [ ] owner-gated: run MS-2a execution per the plan
+  (`docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md`, revision 4 `05f130f`),
+  engineering legs per plan phases, once the owner says go.
+- [ ] MS-2e must resolve eBay `feedbackScore` semantics before its plan can be cut.

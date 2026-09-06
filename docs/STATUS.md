@@ -15,13 +15,18 @@
   Migrations 0014-0017 are DEPLOYED (PR #22, `f3303b1`, 2026-09-06).
 - Source go-live now remains gated by the SA-004 operations checklist and the MS-1e owner
   ratification step, not by missing code.
-- MS-2 scoring design revision 12 on `dev` (`f3bc307`), owner-ratified (§1.2 incl. S2-23
-  re-ratification, 2026-09-06). Fresh cross-agent audit b2eedc33 ran all five rounds against
-  revision 7-12: SA-001..SA-008 resolved by the peer (revisions 8-11); SA-009 partial at the
-  round-5 cap (mechanism accepted, two deliverable/coverage sentences inconsistent) and closed
-  in revision 12 with in-house verification only (no peer review of revision 12 yet).
-  Next step is owner-gated: accept the in-house SA-009 closure, or open a third audit against
-  revision 12; then the planner cuts the MS-2a plan.
+- MS-2 scoring design revision 14 (`a3ec96b`) is owner-accepted (in-house closure recorded in
+  §6/§7, 2026-09-06); revision 13 (`5e0e7c1`) settled seven MS-2a-facing rules first, and
+  revision 14 settled three more raised by plan review.
+- The MS-2a scoring-substrate implementation plan is cut and reviewed:
+  `docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md`, revision 4 (`05f130f`) on `dev`,
+  migrations 0018-0026 planned. Cross-agent `review-plan` refused (spec closed at cap), so a
+  Codex `delegate` second opinion ran three passes instead: pass 1 (`a626c2f0`) 14 findings/5
+  blocking, addressed in plan revision 2 and design revision 13; pass 2 (`8755be2a`) 12
+  resolved/2 partial/1 open/4 new (2 design-owned, folded into design revision 14), addressed in
+  plan revision 3; pass 3 (`b92dd220`) 4 resolved/16 of 17 partial/19 new (all plan-owned),
+  addressed in plan revision 4 and confirmed by an in-house verifier (no fourth Codex pass).
+  Next step is owner-gated: MS-2a execution (engineer legs per plan phases) once the owner says go.
 - Master-spec hygiene pass landed (`c3af4d7`, Revision History 0.15): score home = listing_score,
   $/TB computed in the scoring lib rather than an offer_snapshot generated column, lot-quantity
   wording, C.4 cap units 0.35/0.60, and ADR-0011 wording (q = price percentile, 1-q cheapness).
