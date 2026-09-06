@@ -11,14 +11,18 @@ Personal/business use; single maintainer.
 
 ## Status
 
-**MS-0 foundation built and deployed — live in production.** The Django
-foundation, TimescaleDB-backed schema (the ADR-0010 identity ladder through the
-`offer_snapshot` hypertable), auth stub, health/login/dashboard surface, poller
-stub, and deploy artifacts run on a dedicated Debian LXC container, deployed by
-GitHub Actions CD. The Python verification gate (uv · Ruff · BasedPyright strict ·
-pytest + coverage · pip-audit) is green locally and in CI. The MS-1+ product
-surface — the `fetch → parse → normalize → entity-resolve → score → alert`
-pipeline, the marketplace connectors, and scoring — is not built yet.
+**MS-0 through MS-1e are implemented, merged, and deployed — live in
+production.** The Django foundation, TimescaleDB-backed schema (the ADR-0010
+identity ladder through the `offer_snapshot` hypertable), the ingestion
+substrate, matching layer, catalog seed, five marketplace connectors, and
+availability heartbeat all run on a dedicated Debian LXC container, deployed by
+GitHub Actions CD. The Python verification gate (uv · Ruff · BasedPyright
+strict · pytest + coverage · pip-audit) is green locally and in CI. All
+marketplace sources still ship disabled: the MS-1e evaluation harness and
+harvest tooling are merged and deployed, but the owner-in-the-loop
+ratification step is pending before any source goes live. Scoring (MS-2) is
+designed and owner-ratified but not implemented; alerting (MS-4) and the UI
+(MS-3) are not implemented.
 
 ## Documentation
 

@@ -9,7 +9,8 @@
 - Retention/delist follow-up fixes landed on `dev` (`db62b6f`, 2026-08-30): partial `expires_at`
   indexes (migration 0014) and a continuity-aware CR-004 absence grace (migration 0015). A third
   partial-index migration (0016, `6e68585`) covers `ProductModel`/`DriveSpec`/`ProductAlias`. All
-  three (0014/0015/0016) are still unpushed and undeployed.
+  three (0014/0015/0016) are on `dev` and pushed (2026-09-06) but undeployed pending
+  the dev→main PR.
 - Source go-live now remains gated by the SA-004 operations checklist and the MS-1e owner
   ratification step, not by missing code.
 - MS-2 scoring design authored and under cross-agent (Codex) review, revision 5 on `dev`

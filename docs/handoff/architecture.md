@@ -1,6 +1,6 @@
 # Architecture Notes
 
-Last updated: 2026-07-06
+Last updated: 2026-09-06
 
 ## Component Graph
 
@@ -17,6 +17,8 @@ Last updated: 2026-07-06
 
 ## Standing Backlog
 
-- MS-1d connectors and heartbeat adapters
-- MS-1e validation corpus and ADR-0019 ratification
-- Later MS-1+ scoring, alerts, and operator-facing product UI
+- MS-1e owner-in-the-loop ratification (design implemented, ratification pending;
+  sources ship disabled until it lands)
+- MS-2 scoring: designed and owner-ratified, not implemented
+- MS-3 operator-facing product UI: not implemented
+- MS-4 alerting: not implemented
