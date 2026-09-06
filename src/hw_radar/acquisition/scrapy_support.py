@@ -90,9 +90,8 @@ async def run_spider(
     crawler = runner.create_crawler(spider_cls)
     crawler.signals.connect(collect, signal=signals.item_scraped)
     await runner.crawl(crawler, **spider_kwargs)
-    # crawler.stats is set in Crawler._apply_settings (before crawl()) and is
-    # never cleared afterward on Scrapy 2.16.0, so reading get_stats() here —
-    # after crawl() has resolved — returns the full run's final snapshot,
-    # including close-time stats like finish_reason/finish_time.
-    stats = crawler.stats.get_stats() if crawler.stats is not None else {}
+    # Scrapy >= 2.18 types Crawler.stats as always present, since it is
+    # assigned in the constructor before crawl() can run. The former
+    # None-guard here was defensive against an older Optional annotation.
+    stats = crawler.stats.get_stats()
     return SpiderResult(items=items, stats=stats)
