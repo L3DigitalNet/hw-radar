@@ -1,15 +1,16 @@
 """Registry-level invariants the retention sweep depends on but cannot check itself.
 
-Two properties, both derived from the app registry rather than a hand-written
+Three properties, all derived from the app registry rather than a hand-written
 list: the sweep must cover every RetentionGoverned table, now and after new
-models land; and any model that claims expired rows against deletion must also
-declare what gets scrubbed from the rows it keeps.
+models land; any model that claims expired rows against deletion must also
+declare what gets scrubbed from the rows it keeps; and every swept table must
+declare the partial expires_at index the sweep's own query plan depends on.
 """
 
 from django.db.models import Field, Model
 
 from hw_radar.catalog.management.commands.purge_expired import retention_governed_models
-from hw_radar.catalog.models.base import RetentionGoverned
+from hw_radar.catalog.models.base import RetentionGoverned, retention_indexes
 
 
 def _concrete_descendants(cls: type[Model]) -> set[type[Model]]:
@@ -112,3 +113,21 @@ def test_redacted_content_fields_name_real_columns_that_accept_their_blank() -> 
             # to_python round-trips only a value of the field's own Python type:
             # a dict handed to a CharField comes back as its repr, not itself.
             assert field.to_python(blank) == blank, f"{label}.{name} does not accept {blank!r}"
+
+
+def test_every_swept_model_declares_the_expires_at_partial_index() -> None:
+    # Without this index the hourly sweep sequential-scans the table: its WHERE
+    # is `expires_at < now()`, and the partial predicate keeps the index to the
+    # bounded rows only. A missing index is invisible in test output — it costs
+    # a full scan per table per hour in production — so it is pinned here.
+    for model in retention_governed_models():
+        label = model._meta.label  # pyright: ignore[reportPrivateUsage]
+        partial = [
+            index
+            for index in model._meta.indexes  # pyright: ignore[reportPrivateUsage]
+            if list(index.fields) == ["expires_at"] and index.condition is not None
+        ]
+        assert partial, f"{label}: no partial expires_at index from retention_indexes()"
+        assert partial == retention_indexes(partial[0].name), (
+            f"{label}: expires_at index predicate differs from retention_indexes()"
+        )
