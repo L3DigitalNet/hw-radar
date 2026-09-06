@@ -11,13 +11,17 @@
 >
 > **Review lineage:** Codex `delegate` second opinion
 > `a626c2f0-5919-4fe2-a480-2c51f8f15c1b` (2026-09-06) round 1 → **revision 2**;
-> pass 2 (`8755be2a`) → **revision 3** (this document). Revision 2 closed pass-1
-> findings 1–14 and adopted design revision 13's seven settled rules. Revision 3
-> closes pass-2 findings 10, 14, 17 and 18 directly, and adopts **design revision
-> 14**'s three settled rules for the design-owned findings 3, 15 and 16 — the
-> `REDACTED_CONTENT_FIELDS` save-guard exception (B1), `raw_payload` as nullable
-> `SET_NULL` (C4), and the two source-to-class retention triggers (new task C5). The
-> plan again carries **no blocking open question**.
+> pass 2 (`8755be2a`) → **revision 3**; pass 3 (`b92dd220`) → **revision 4** (this
+> document). Revision 2 closed pass-1 findings 1–14 and adopted design revision 13's
+> seven settled rules. Revision 3 closed pass-2 findings 10, 14, 17 and 18 and
+> adopted **design revision 14**'s three settled rules for the design-owned findings
+> 3, 15 and 16 — the `REDACTED_CONTENT_FIELDS` save-guard exception (B1),
+> `raw_payload` as nullable `SET_NULL` (C4), and the two source-to-class retention
+> triggers (C5). Revision 4 closes pass-3 findings 16 (named trigger DDL, the
+> `normalized_name = 'ebay'` discriminator, parameterized UPDATE controls, the
+> `pg_trigger` event-mask check), 17 (`matcher_grain` and `relaxation_step` domain
+> CHECKs) and 19 (stale hold language removed from acceptance). Every finding from
+> all three passes is now closed and the plan carries **no blocking open question**.
 
 **Goal:** the data model, retention wiring, and clearing/serialization contract that
 scoring needs, per design §3 "MS-2a — Scoring substrate": `catalog/models/scoring.py`
@@ -346,7 +350,10 @@ Files: `src/hw_radar/catalog/models/scoring.py`,
   the CHECK**; a duplicate `(cohort_key, baseline_digest)` is rejected;
   `current_version` and `next_window_exit_at` accept NULL while `price_event_digest`
   does not, so the §3.3.5(i) baseline-void state is representable and its
-  empty-projection digest is not confusable with an absent one (SA-002).
+  empty-projection digest is not confusable with an absent one (SA-002); and the
+  `relaxation_step` domain CHECK rejects an off-enum value inserted by **raw SQL**
+  (pass-3 finding 17), which is the only chance this table ever gets — the C2 trigger
+  makes the row immutable, so a malformed step cannot be repaired in place.
 - **C2 — the immutability trigger and the read-only admin (§3.3.5a, SA-003).**
   Migration `0023`: a `RunSQL` pair creating `cohort_baseline_no_update()` and the
   `BEFORE UPDATE ... FOR EACH ROW` trigger `cohort_baseline_immutable` exactly as
@@ -420,9 +427,19 @@ Files: `src/hw_radar/catalog/models/scoring.py`,
   outside the four-member vocabulary satisfies every one of them with all three
   related columns non-NULL. C3 therefore adds `price_basis IN ('cohort',
   'capacity_unavailable', 'price_unavailable', 'no_cohort_evidence')` (§3.2.6's four
-  values) and `quantity_basis IN ('structured', 'structured_over_extracted',
-  'extracted', 'default_single')` (§3.2.2's table); C4 adds `count_basis IN
-  ('total_count', 'net_score_proxy', 'unavailable')` (§3.2.5). Each is asserted by a
+  values), `quantity_basis IN ('structured', 'structured_over_extracted',
+  'extracted', 'default_single')` (§3.2.2's table), and **`matcher_grain IN ('none',
+  'family', 'model', 'variant')`** — the `ResolutionGrain` values
+  (`base.py:117-124`), whose string values §C.3.3 shares verbatim with
+  `matching.types.Grain`, so the CHECK is written from that enum rather than
+  hand-listed; C1 adds **`relaxation_step IN ('none', 'condition', 'capacity',
+  'tier')`** on `CohortBaseline` (§3 `:352`), which matters more there than anywhere
+  else because the row is immutable — a malformed step can never be corrected in
+  place, only pruned; C4 adds `count_basis IN ('total_count', 'net_score_proxy',
+  'unavailable')` (§3.2.5). That is **every** persisted closed-vocabulary scoring
+  enum this milestone creates (pass-3 finding 17); `retention_class` is excluded
+  because `retention_constraints()` already constrains it and C5's triggers pin its
+  source mapping. Each is asserted by a
   **raw-SQL insert** of an off-enum value that must raise `IntegrityError` — a test
   going through the ORM alone would prove nothing, because the ORM never validates
   either.
@@ -497,11 +514,26 @@ Files: `src/hw_radar/catalog/models/scoring.py`,
   added in the **same RunSQL-with-reversing-DROP shape** §3.3.5(a) uses for
   `cohort_baseline_immutable`, dropped trigger-then-function:
 
-  | Table | What the trigger derives, and from what |
-  | --- | --- |
-  | `seller_rating_observation` | joins `NEW.source_site_id` to its `source_site` row and rejects unless `retention_class` = `ebay_listing_observation` for eBay, `merchant_fact` otherwise |
-  | `listing_score` | reads `NEW.listing_id` and rejects unless `retention_class` equals that listing's own class — the S2-2a "a score inherits its listing's class" rule, which `retention_constraints("listing_score")` can no more see than the pair above can see a source |
+  | DDL name (function → trigger) | Table | What it derives, and from what |
+  | --- | --- | --- |
+  | `seller_rating_retention_class()` → `seller_rating_retention_class_check` | `seller_rating_observation` | joins `NEW.source_site_id` to its `source_site` row and rejects unless `retention_class` = `ebay_listing_observation` when that row is eBay, `merchant_fact` otherwise |
+  | `listing_score_retention_class()` → `listing_score_retention_class_check` | `listing_score` | reads `NEW.listing_id` and rejects unless `retention_class` equals that listing's own class — the S2-2a "a score inherits its listing's class" rule, which `retention_constraints("listing_score")` can no more see than the pair above can see a source |
 
+  The names are pinned here because three things reference them: the reversing
+  `DROP TRIGGER … ; DROP FUNCTION …`, the tests' error-origin assertion, and F1's
+  catalog check.
+  **The eBay discriminator is `source_site.normalized_name = 'ebay'`, and it is
+  fail-closed** (pass-3 finding 16b). `SourceSite` offers several candidate columns
+  (`market.py:39-48`); `normalized_name` is the one that is **unique** (`:43`) and the
+  one migration `0005_seed_sources.py:55` seeds as `'ebay'`, whereas `source_type` is
+  `marketplace` — a class that a future non-eBay marketplace would also carry, which
+  would silently widen the eBay rule to sources it was never argued for. The design
+  writes the rule as `required_class(source)` (`:358-363`) without naming the column,
+  so this plan names it: the trigger's derivation is *"`ebay_listing_observation` when
+  `normalized_name = 'ebay'`, `merchant_fact` otherwise"*, which fails **closed** —
+  an unrecognized or renamed source demands `merchant_fact`, the indefinite class,
+  and any eBay-derived row that lost its discriminator is refused rather than
+  silently retained forever.
   It reads the row's **own** `source_site_id` rather than a denormalized `is_ebay`
   boolean: the design rejects the boolean because nothing keeps a second copy of that
   fact true across a re-attribution, and rejects writer-side enforcement for SA-003's
@@ -513,10 +545,24 @@ Files: `src/hw_radar/catalog/models/scoring.py`,
   rejected; a first-party one inserted `ebay_listing_observation` + a TTL is rejected;
   the two mirror cases on `listing_score` against an eBay listing and a
   `merchant_fact` listing are rejected; the **four matching combinations are
-  accepted**, so the triggers are proven not over-broad; and a `bulk_create` plus a
-  `QuerySet.update()` of `retention_class` are included, because those are exactly the
-  paths a `save()`-level rule would miss. Forward and reverse migration tests as in
-  C2.
+  accepted**, so the triggers are proven not over-broad; and a `bulk_create` is
+  included, because that is a path a `save()`-level rule would miss.
+  **The `QuerySet.update()` controls must be parameterized, or they prove nothing**
+  (pass-3 finding 16a). Updating `retention_class` alone to the wrong value leaves
+  `expires_at` matching the *old* class, so the pre-existing
+  `*_retention_ttl_coherent` CHECK (`base.py:61-72`) rejects the statement — and the
+  test would pass green against a trigger that was accidentally `BEFORE INSERT` only.
+  Each UPDATE control therefore moves **both** columns together —
+  `update(retention_class=<wrong class>, expires_at=<value coherent with that wrong
+  class>)`, i.e. a TTL when moving to `ebay_listing_observation` and `None` when
+  moving to `merchant_fact` — so the coherence CHECK is satisfied and **only** the
+  trigger can refuse. The assertion is on the refusal's origin: the error names the
+  trigger function above, not a constraint name. Both tables get this control in both
+  directions.
+  Forward and reverse migration tests as in C2, plus an **event-mask assertion**: for
+  each trigger, `pg_trigger.tgtype` proves it fires on **both** `INSERT` and
+  `UPDATE`, which is the static counterpart of the parameterized control and fails
+  immediately if a later edit narrows the trigger to one event.
 
 ### Phase D — the sweeper plumbing and the four `purge_expired` hooks
 
@@ -748,8 +794,10 @@ Files: `tests/unit/test_purge_registry.py`, `tests/db/test_purge_expired.py`.
   `uv run python -m scripts.check` plus
   `uv run python manage.py makemigrations --check --dry-run`, and a migrate-from-empty
   run proving `0018`–`0026` apply from a fresh database and the two hypertables and
-  all three triggers exist afterwards — `cohort_baseline_immutable` plus the two
-  retention-source triggers of C5. Fix regressions.
+  all three triggers exist afterwards, **by name and by event mask** — a `pg_trigger`
+  query asserting `cohort_baseline_immutable`, `seller_rating_retention_class_check`
+  and `listing_score_retention_class_check` are present and that the latter two carry
+  both the INSERT and UPDATE bits in `tgtype` (pass-3 finding 16). Fix regressions.
 - **F2 —** Docs and status: `docs/STATUS.md`, `docs/TODO.md` (narrow the MS-2 item to
   MS-2b onward), `docs/handoff/specs-plans.md` (this plan's row), handoff closeout.
   No spec edit — a deviation goes to the Deviations Log / OQ process (§7).
@@ -767,15 +815,15 @@ it cites.
 | 1 | Gate green | `uv run python -m scripts.check` at every commit; F1 |
 | 2 | Migrations apply from empty and are hypertable-verified | F1; C3 hypertable assertion on the `tests/db/test_market.py:43` pattern |
 | 3 | `retention_constraints("listing_score")` proves an eBay-classed row **must** carry `expires_at` and a `merchant_fact` row **must not** | C3 |
-| 3b | The two source-to-class triggers reject an eBay-sourced rating classed `merchant_fact`, a first-party rating classed `ebay_listing_observation`, and both mirror cases on `listing_score`, while accepting the four matching combinations — proved by raw SQL, `bulk_create` and `QuerySet.update()` (revision 14 `:354-358`, `:368`, `:370`) | C5 |
+| 3b | The two source-to-class triggers (`seller_rating_retention_class_check`, `listing_score_retention_class_check`) reject an eBay-sourced rating classed `merchant_fact`, a first-party rating classed `ebay_listing_observation`, and both mirror cases on `listing_score`, while accepting the four matching combinations — proved by raw SQL, `bulk_create`, and a **parameterized** `QuerySet.update()` that moves `retention_class` and `expires_at` together so only the trigger can refuse; `pg_trigger.tgtype` proves both fire on INSERT **and** UPDATE (revision 14 `:354-370`; pass-3 finding 16) | C5 |
 | 4 | The six §2.3(b) conditional-clearing tests pass, led by the SA-002 regression | D1 |
 | 5 | A released `CohortBaseline` version refuses `UPDATE` through `save()`, `QuerySet.update()`, `bulk_update()`, the admin and raw SQL under the runtime role — the refusal coming from the §3.3.5(a) **database trigger** on the bulk and raw paths — while `INSERT`, an uncited `DELETE` and a pointer `UPDATE` all still succeed | C2 |
 | 6 | A duplicate `(cohort_key, baseline_digest)` is rejected; deleting a cited version raises `ProtectedError` | C2; C3 |
 | 7 | `CohortBaselineCurrent.current_version` and `next_window_exit_at` accept NULL and `price_event_digest` does not (§3.3.5i, SA-002) | C1 |
 | 8 | `Listing.current_offer_observed_at` and `ListingScore.offer_observed_at` persist with the §2.1 nullability, and `offer_observed_at` is absent from `inputs_json` (SA-001) | B1; C3 |
-| 9 | The three §3.3.5(c) CHECKs reject a `cohort`-basis score with a NULL baseline, a `capacity_unavailable` score carrying a baseline or a cohort key, and both directions of the `offer_observed_at` biconditional; each neutral path is accepted (S2-26) — **and each closed-vocabulary enum (`price_basis`, `quantity_basis`, `count_basis`) carries a database domain CHECK proved by a raw-SQL off-enum insert**, without which an off-enum `price_basis` satisfies all three biconditionals (finding 17) | C3; C4 |
+| 9 | The three §3.3.5(c) CHECKs reject a `cohort`-basis score with a NULL baseline, a `capacity_unavailable` score carrying a baseline or a cohort key, and both directions of the `offer_observed_at` biconditional; each neutral path is accepted (S2-26) — **and every persisted closed-vocabulary scoring enum carries a database domain CHECK proved by a raw-SQL off-enum insert**: `price_basis`, `quantity_basis` and `matcher_grain` on `ListingScore`, `relaxation_step` on the immutable `CohortBaseline`, and `count_basis` on `SellerRatingObservation` (findings 17). Without the `price_basis` domain, an off-enum value satisfies all three biconditionals | C1; C3; C4 |
 | 10 | `ingested_at` is assigned by the database, cannot be supplied by `append_snapshot`, and the migration backfills it from `observed_at` with `ingest_stamp_backfilled` set (§2.2.2, S2-24) | B2 |
-| 11 | `scoring_inputs_changed_at` advances for every `SCORING_INPUT_FIELDS` write and for no other — including **not** on `mark_delisted()` (asserted on a delete-on-delist listing) or the bulk `redact_expired()` path (revision 13 `:170`, `:291-292`). **Held for design revision 14** — pass-2 finding 3 | B1 |
+| 11 | `scoring_inputs_changed_at` advances for every `SCORING_INPUT_FIELDS` write and for no other — including **not** on `mark_delisted()` (asserted on a delete-on-delist listing, which is the only class that reaches `redact_merchant_content()`) and **not** on the bulk `redact_expired()` path, under revision 14's exception for an `update_fields` equal to the `REDACTED_CONTENT_FIELDS` key set (`:170`, `:291-292`) | B1 |
 | 12 | `lock_parents_for_delete` asserted per model against §3.4.2's lock order; the seller lock proved by a `FOR UPDATE NOWAIT` probe from a second connection with an unrelated-seller control, corroborated by a **third, genuinely blocking** connection whose ungranted `pg_locks` entry and `pg_blocking_pids()` name the sweep's backend (finding 10) | D3 |
 | 13 | Fixture 12's **lock half** (revision 14 `:343`): the lock-only stand-in blocks on the `seller` anchor, the phantom listing is absent from the sweep's lock set, and the same test goes **red** against a listing-only hook. The whole-table citation assertion is MS-2d's | D4 |
 | 14 | A `ScoringRun` persists with no source while a sourceless `ScraperRun` still raises | B4 |
@@ -794,9 +842,10 @@ Additional acceptance carried from the sections MS-2a is assigned in:
   revision 14 `:461`). The byte-identical explanation reproduction half of SA-027 is
   MS-2d.
 - `SellerRatingObservation`'s class/`expires_at` coherence is asserted for both the
-  bounded eBay class and the indefinite merchant class (C4, revision 14 `:354`). The
-  **source-to-class** half of that rule has no enforcement mechanism yet and is held
-  for design revision 14 (pass-2 finding 16), so no acceptance item claims it.
+  bounded eBay class and the indefinite merchant class (C4, revision 14 `:354`), and
+  the **source-to-class** half is enforced by C5's `seller_rating_retention_class`
+  trigger — with the `listing_score` sibling covering S2-2a inheritance — under
+  acceptance item 3b (revision 14 `:354-370`).
 - Every `ListingScore` range is enforced at the database and probed just outside its
   boundary (C3, finding 9).
 - The §3.3.2 parent-tier map is landed by the `MarketTier` migration and is total,
