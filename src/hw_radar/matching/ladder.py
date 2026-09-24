@@ -12,7 +12,7 @@ versions arrive with the rung-3/occurrence thresholds at MS-1c."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -131,6 +131,13 @@ def contradictions(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[s
     return vetoed
 
 
+# A category's hard-attribute veto: the extracted-side fields a catalog target
+# must not contradict. Drive's is `contradictions`; the resolver injects the one
+# from the dispatch category's rules (MS2-D-02). The rung-2 decoder-capacity
+# check below is NOT a Veto — it compares against the decode, not the catalog.
+type Veto = Callable[[ExtractedAttributes, HardAttrs], list[str]]
+
+
 def brands_consistent(extracted_brand: str | None, target_brand: str | None) -> bool:
     if not extracted_brand or not target_brand or extracted_brand == target_brand:
         return True
@@ -150,6 +157,8 @@ def decide(
     prior: PriorResolution | None,
     alias_hits: Sequence[AliasHit],
     decoded: DecodeResult | None,
+    *,
+    veto: Veto = contradictions,
 ) -> Verdict:
     evidence: dict[str, object] = {"mpn_hypothesis": _hypothesis(candidates)}
     if decoded is not None:
@@ -158,9 +167,11 @@ def decide(
     # Rung 0 — re-observation: inherit after RE-RUNNING the veto (survives
     # relist/edit abuse — C.3.2 requires the check on every re-observation).
     if prior is not None:
-        veto = contradictions(extracted, prior.hard_attrs)
-        if veto:
-            return Verdict(Outcome.REVIEW, Grain.NONE, rung=0, evidence={**evidence, "veto": veto})
+        vetoed = veto(extracted, prior.hard_attrs)
+        if vetoed:
+            return Verdict(
+                Outcome.REVIEW, Grain.NONE, rung=0, evidence={**evidence, "veto": vetoed}
+            )
         return Verdict(
             Outcome.ACCEPT,
             prior.target.grain,
@@ -193,10 +204,10 @@ def decide(
         }
         if len(targets) == 1:
             best = max(viable, key=lambda h: CONFIDENCE_BY_SOURCE_KIND.get(h.source_kind, 0.5))
-            veto = contradictions(extracted, best.hard_attrs)
-            if veto:
+            vetoed = veto(extracted, best.hard_attrs)
+            if vetoed:
                 return Verdict(
-                    Outcome.REVIEW, Grain.NONE, rung=1, evidence={**evidence, "veto": veto}
+                    Outcome.REVIEW, Grain.NONE, rung=1, evidence={**evidence, "veto": vetoed}
                 )
             if not has_brand_evidence(best):
                 return Verdict(
@@ -222,7 +233,7 @@ def decide(
         ):
             # OEM N:N fan-out inside one family → attach at family grain (the
             # OEM cross-reference verdict: an OEM PN can never assert a model).
-            clean = [h for h in viable if not contradictions(extracted, h.hard_attrs)]
+            clean = [h for h in viable if not veto(extracted, h.hard_attrs)]
             if clean:
                 family_id = next(iter(families))
                 return Verdict(
