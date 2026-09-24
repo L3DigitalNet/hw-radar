@@ -32,11 +32,10 @@ workflow, using hybrid acquisition: inexpensive direct/local collectors where th
 fit and self-owned private Apify Actors selectively under a hard **$20/month**
 Hardware Radar Apify ceiling.
 
-**The multi-category watch core is under way on `dev`, not yet merged to `main`
-or deployed:** GPU/RAM/CPU first-class categories, category-specific
-`match | no_match | unknown` requirement evaluation, and hw-radar's first
-self-owned Apify Actor project (`actors/hw-radar-synthetic-collector`, no
-Apify push/build/run yet).
+**The multi-category watch core is under way and not yet deployed:** GPU/RAM/CPU
+first-class categories, category-specific `match | no_match | unknown`
+requirement evaluation, and Hardware Radar's first self-owned Apify Actor project
+(`actors/hw-radar-synthetic-collector`; nothing pushed to or run on Apify yet).
 
 ## Documentation
 

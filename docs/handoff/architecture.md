@@ -19,12 +19,14 @@ Last updated: 2026-09-24
 - `eligibility`: persisted watch requirements and `match | no_match | unknown`
   verdicts per (watch, listing) — `requirements` (the single writer),
   `evaluate` (the evaluator the ingestion pipeline calls), `service` (batched
-  currency/re-evaluation), and `shortlist` (the `shortlist`/`review_queue`
-  read model). No ADR-0011 scoring artifact is read or written here.
-- `acquisition`: `sources/` (five drive-focused direct connectors: demo,
-  eBay, GoHardDrive, Seagate, ServerPartDeals, WD), `scheduling/` (fast/slow
-  lane admission, backoff, checkpoints), `deadman`/`heartbeat` (availability
-  monitoring), and `apify/` (hw-radar's side of the versioned Actor contract —
+  is-this-verdict-still-current checks and re-evaluation), and `shortlist`
+  (the `shortlist`/`review_queue` read model). No ADR-0011 scoring artifact is
+  read or written here.
+- `acquisition`: `sources/` (five drive-focused direct connectors — eBay,
+  GoHardDrive, Seagate, ServerPartDeals, WD — plus a `demo` source),
+  `scheduling/` (fast/slow lane admission, backoff, checkpoints),
+  `deadman`/`heartbeat` (availability monitoring), and `apify/` (`client`,
+  the Apify API client, and hw-radar's side of the versioned Actor contract —
   Pydantic models mirroring the committed JSON Schema — and `classify_run`,
   the run-completeness classifier for remote collector runs).
 - `refdata`: ADR-0018 truncated fetch→parse→normalize pipeline (seed
