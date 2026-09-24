@@ -152,13 +152,44 @@ def test_gate_passes_none_scope_through(completeness: RunCompleteness) -> None:
 
 @pytest.mark.parametrize("eligible", [True, False])
 @pytest.mark.parametrize("completeness", list(RunCompleteness))
-def test_continuity_counts_only_complete_or_eligible_truncated(
+def test_local_continuity_mapping_unchanged(
     completeness: RunCompleteness, *, eligible: bool
 ) -> None:
+    # Local provider: `scope` is never consulted, matching the pre-existing
+    # mapping (a local run's own eligibility/completeness already carries the
+    # decision). Pass a scope that would fail the remote branch to prove that.
     expected = completeness is RunCompleteness.COMPLETE or (
         completeness is RunCompleteness.TRUNCATED and eligible
     )
-    assert counts_toward_sweep_continuity(_evidence(completeness, eligible=eligible)) is expected
+    evidence = _evidence(completeness, eligible=eligible)
+    for scope in (None, _scope(complete=False), _scope(complete=True)):
+        assert counts_toward_sweep_continuity(evidence, scope) is expected
+
+
+@pytest.mark.parametrize(
+    ("scope_complete", "expected"),
+    [(False, False), (True, True)],
+)
+def test_remote_complete_evidence_with_incomplete_or_missing_scope_does_not_count(
+    *, scope_complete: bool, expected: bool
+) -> None:
+    # ADR 0021 / F-04 residual: a remote COMPLETE run only extends continuity
+    # when its own scope also claims complete=True — otherwise a chain of
+    # under-scoped remote runs could keep continuous_since alive for a lane
+    # they never actually swept.
+    evidence = _evidence(RunCompleteness.COMPLETE, eligible=False, kind=ProviderKind.APIFY)
+    assert counts_toward_sweep_continuity(evidence, _scope(complete=scope_complete)) is expected
+    if not scope_complete:
+        assert counts_toward_sweep_continuity(evidence, None) is False
+
+
+@pytest.mark.parametrize("completeness", [RunCompleteness.PARTIAL_FAILURE, RunCompleteness.FAILED])
+def test_remote_non_complete_evidence_never_counts_toward_continuity(
+    completeness: RunCompleteness,
+) -> None:
+    evidence = _evidence(completeness, eligible=False, kind=ProviderKind.APIFY)
+    for scope in (None, _scope(complete=False), _scope(complete=True)):
+        assert counts_toward_sweep_continuity(evidence, scope) is False
 
 
 class _PlainAdapter:
@@ -256,7 +287,7 @@ def test_local_evidence_truncated_eligible_when_adapter_sweep_incomplete() -> No
     # The eBay truncated-sweep path is preserved: the gate hands the scope
     # through untouched (already complete=False) and continuity still counts.
     assert gate_delist_scope(scope, evidence) == scope
-    assert counts_toward_sweep_continuity(evidence) is True
+    assert counts_toward_sweep_continuity(evidence, scope) is True
 
 
 def test_local_evidence_truncated_eligible_when_adapter_has_no_delist_detector() -> None:
@@ -267,7 +298,7 @@ def test_local_evidence_truncated_eligible_when_adapter_has_no_delist_detector()
     assert evidence.completeness_reason == REASON_COMPLETENESS_NOT_ASSERTED
     assert evidence.stale_absence_eligible is True
     # Scope-less sources must keep advancing lane continuity exactly as before.
-    assert counts_toward_sweep_continuity(evidence) is True
+    assert counts_toward_sweep_continuity(evidence, None) is True
 
 
 @pytest.mark.parametrize("run_kind", [RunKind.HEARTBEAT, RunKind.PROBE])

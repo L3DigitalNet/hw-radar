@@ -309,6 +309,39 @@ def test_complete_remote_evidence_with_incomplete_scope_cannot_stale_delist() ->
     _assert_k_old_survived(run)
 
 
+def test_remote_complete_evidence_incomplete_scope_breaks_continuity_then_local_cannot_stale_delist() -> (
+    None
+):
+    # Ledger 7: counts_toward_sweep_continuity, not just gate_delist_scope, must
+    # refuse a remote run whose COMPLETE evidence contradicts its own incomplete
+    # scope. Otherwise a chain of such runs (each individually blocked from
+    # delisting `k-old` by the gate above) would still keep continuous_since
+    # alive, and a later local truncated sweep could inherit that unearned
+    # continuity and stale-delist `k-old` on its own short grace.
+    _seed_stale_k_old(continuous_since=timezone.now() - OLD_CONTINUITY)
+    for _ in range(3):
+        provider = FakeRemoteProvider(
+            provider_kind=ProviderKind.APIFY,
+            site_key="demo",
+            completeness=RunCompleteness.COMPLETE,
+            scope_complete=False,
+        )
+        run, _ = asyncio.run(run_collection(provider, NullResolver()))
+        assert run.status == RunStatus.SUCCESS
+        _assert_k_old_survived(run)
+    # The first ineligible run already breaks the old (unearned) continuity.
+    assert _full_lane().continuous_since is None
+
+    adapter = _IncompleteSweepAdapter(["k-new"])
+    run, _ = asyncio.run(run_source(adapter, NullResolver()))
+    assert run.status == RunStatus.SUCCESS
+    assert run.detail_json["listings_delisted"] == 0
+    _assert_k_old_survived(run)
+    # The local sweep restarts continuity at its own fetch time rather than
+    # inheriting anything from the remote runs.
+    assert _full_lane().continuous_since == adapter.last_fetched_at
+
+
 def test_local_incomplete_scope_keeps_stale_absence_path() -> None:
     # Mirrors test_source_ebay.py's truncated-sweep case: a local complete=False
     # scope still stale-delists once the listing has been unseen for the grace

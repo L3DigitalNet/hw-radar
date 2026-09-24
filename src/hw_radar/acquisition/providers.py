@@ -84,7 +84,9 @@ def gate_delist_scope(
     return None
 
 
-def counts_toward_sweep_continuity(evidence: ProviderRunEvidence) -> bool:
+def counts_toward_sweep_continuity(
+    evidence: ProviderRunEvidence, scope: DelistScope | None
+) -> bool:
     """Whether this FULL run extends the lane's CR-004 polling-continuity window.
 
     Same invariant as gate_delist_scope — only `complete` may keep
@@ -92,10 +94,28 @@ def counts_toward_sweep_continuity(evidence: ProviderRunEvidence) -> bool:
     continuity clock: true only for a complete run or a stale-absence-eligible
     (local) truncated run. A failed or partial run did not sweep the lane, so
     counting it would let a later truncated sweep treat an outage as polling.
+
+    For a non-local provider, COMPLETE evidence alone is not enough (plan
+    review F-04 residual): the run's own DelistScope must also claim
+    `complete=True`. gate_delist_scope already refuses to act on a remote
+    run whose COMPLETE label contradicts its own incomplete scope; without the
+    same check here, a chain of such runs would keep extending
+    continuous_since anyway, and a later local truncated sweep could then
+    stale-delist on continuity those remote runs never actually proved (ADR
+    0021: incomplete remote collection must not indirectly authorize
+    absence). Local behavior is unchanged — a local run's own scope already
+    determines its stale_absence_eligible / completeness mapping, so `scope`
+    is not consulted on that path.
     """
-    if evidence.completeness is RunCompleteness.COMPLETE:
-        return True
-    return evidence.completeness is RunCompleteness.TRUNCATED and evidence.stale_absence_eligible
+    if evidence.provider_kind is ProviderKind.LOCAL:
+        if evidence.completeness is RunCompleteness.COMPLETE:
+            return True
+        return (
+            evidence.completeness is RunCompleteness.TRUNCATED and evidence.stale_absence_eligible
+        )
+    return (
+        evidence.completeness is RunCompleteness.COMPLETE and scope is not None and scope.complete
+    )
 
 
 class LocalCollectionProvider:

@@ -445,11 +445,16 @@ async def run_collection(
         # The provider's scope is never applied as-is: gate_delist_scope reads it
         # through the run's completeness evidence, so a remote run that stopped at
         # a page/item/budget limit cannot delist however its scope is phrased, and
-        # the same evidence decides whether the run advances lane continuity or
-        # breaks it (_break_sweep_continuity). For a LocalCollectionProvider
-        # continuity always advances and the scope gate is the identity, so local
-        # delist behavior is unchanged — with one deliberate difference: continuity is
-        # now recorded AFTER delist_scope(), because it depends on the evidence.
+        # the same evidence AND scope decide whether the run advances lane
+        # continuity or breaks it (_break_sweep_continuity) — a non-local run needs
+        # its own scope to claim complete=True too, or COMPLETE evidence alone
+        # would let a string of under-scoped remote runs fake polling continuity
+        # a later local sweep could stale-delist on (plan review F-04 residual;
+        # see counts_toward_sweep_continuity). For a LocalCollectionProvider
+        # continuity always advances the same way it always has and the scope gate
+        # is the identity, so local delist behavior is unchanged — with one
+        # deliberate difference: continuity is now recorded AFTER delist_scope(),
+        # because it depends on the evidence.
         # If delist_scope raises, the run fails as before but no longer advances
         # continuous_since first, which can only shorten the continuity window —
         # strictly more conservative for the stale-absence path.
@@ -458,7 +463,7 @@ async def run_collection(
             scope = provider.delist_scope(batch, parsed)
             evidence = provider.run_evidence(batch, parsed, scope, run_kind=effective_kind)
             continuous_since: datetime | None = None
-            if counts_toward_sweep_continuity(evidence):
+            if counts_toward_sweep_continuity(evidence, scope):
                 continuous_since = await sync_to_async(_record_sweep_continuity)(
                     site, batch.fetched_at
                 )
