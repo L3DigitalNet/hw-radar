@@ -43,6 +43,15 @@ class Attribute[T]:
 
 
 @dataclass(frozen=True)
+class CategoryAttributes:
+    """Base for a non-drive category's typed listing-side payload (MS2-D-05).
+
+    Each `matching.rules` module subclasses it; the category's veto narrows with
+    isinstance, so a payload from another category reads as all-unknown and can
+    never veto (or pass) a comparison it was not built for."""
+
+
+@dataclass(frozen=True)
 class ExtractedAttributes:
     """N2 output. None means UNKNOWN — never guessed (suitability-research rule).
 
@@ -66,6 +75,9 @@ class ExtractedAttributes:
     warranty_channel: Attribute[str] | None = None  # manufacturer | seller | none
     quantity: Attribute[int] | None = None
     brand: Attribute[str] | None = None  # canonical brand key (see plan Interfaces)
+    # Non-drive categories only; the drive fields above stay the drive contract
+    # and vocab.extract never sets this.
+    category_attrs: CategoryAttributes | None = None
 
 
 class TokenKind(StrEnum):

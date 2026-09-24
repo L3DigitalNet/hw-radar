@@ -47,15 +47,27 @@ _BRAND_EQUIV: tuple[frozenset[str], ...] = (frozenset({"western_digital", "hgst"
 
 
 @dataclass(frozen=True)
+class CategoryHardAttrs:
+    """Base for a non-drive category's typed catalog-side payload (MS2-D-05).
+    Each `matching.rules` module subclasses it; see types.CategoryAttributes for
+    the listing-side twin and the isinstance-narrowing contract."""
+
+
+@dataclass(frozen=True)
 class HardAttrs:
     """Catalog-side veto fields (from drive_spec / family agreement set).
-    None = unknown on the catalog side → that field cannot veto."""
+    None = unknown on the catalog side → that field cannot veto.
+
+    The five drive fields are read only by `contradictions`; a non-drive
+    category leaves them None and carries its satellite payload in `category`,
+    which only that category's veto reads."""
 
     capacity_bytes: int | None = None
     interface: str | None = None
     form_factor: str | None = None
     sector_format: str | None = None
     security: str | None = None
+    category: CategoryHardAttrs | None = None
 
 
 @dataclass(frozen=True)
@@ -64,8 +76,9 @@ class TargetRef:
     model/variant grains (enables the OEM family collapse); family_key names a
     not-yet-materialized provisional family for rung 2 — the resolver
     get_or_creates it (vendor, family_name). category_slug is never set by the
-    ladder: the resolver stamps the dispatch category onto family_key targets so
-    a provisional family is created under the category it was matched in."""
+    ladder: the resolver stamps the dispatch category onto every target, so a
+    provisional family is created under the category it was matched in and
+    materialization applies that category's variant_on_demand setting."""
 
     grain: Grain
     family_id: int | None = None
@@ -112,6 +125,11 @@ class Verdict:
     target: TargetRef | None = None
     confidence: float | None = None
     evidence: dict[str, object] = field(default_factory=dict)
+    # The rung-1 hit an ACCEPT rests on (the highest-confidence single-target
+    # hit, or the best hit of an OEM family fan-out). Not evidence: the resolver
+    # reads its source_kind for the MS2-D-21 acceptance policy, and keeping it
+    # out of `evidence` leaves every persisted drive edge byte-identical.
+    winning_hit: AliasHit | None = None
 
 
 def contradictions(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[str]:
@@ -227,6 +245,7 @@ def decide(
                 target=best.target,
                 confidence=CONFIDENCE_BY_SOURCE_KIND.get(best.source_kind, 0.5),
                 evidence=evidence,
+                winning_hit=best,
             )
         families = {h.target.family_id for h in viable}
         if (
@@ -247,6 +266,9 @@ def decide(
                     target=TargetRef(grain=Grain.FAMILY, family_id=family_id),
                     confidence=OEM_FAMILY_FANOUT_CONFIDENCE,
                     evidence={**evidence, "oem_fanout": len(viable)},
+                    winning_hit=max(
+                        clean, key=lambda h: CONFIDENCE_BY_SOURCE_KIND.get(h.source_kind, 0.5)
+                    ),
                 )
         return Verdict(
             Outcome.REVIEW,
