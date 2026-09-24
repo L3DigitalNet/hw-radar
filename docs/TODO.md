@@ -6,37 +6,51 @@ Purpose:
 
 Instructions for AI agents:
 - Do not add tasks to the `## User tasks` section.
-- Do add tasks to the `## Agent tasks` section. Include all open work from agent-managed handoff documents.
-- Use `- [ ]` to indicate open work and `- [x]` for work completed during the current session.
-- Remove completed standalone agent tasks after recording their outcomes in `docs/STATUS.md`.
--->
+- Do add tasks to the `## Agent tasks
 
-## User tasks
-
-## Agent tasks
-
-- [ ] Run the MS-1e owner-in-the-loop ratification step (design §6): live-harvest a corpus with
-  `manage.py harvest_corpus --all --limit …`, draft labels, have the owner audit a random ~20%
-  sample plus every matcher-disagreement entry, run the full verification gate once as the single
-  authorizing evidence, and on `ms1_ratification_gate == PASS` flip ADR-0019 to accepted.
-  All code-side go-live gates (sweeper, eBay soft-delete, lane-state split) are now clear; this is
-  the next owner step.
-
-- [ ] Add the remaining SanDisk/WD real-corpus alias verification.
-  Blocked on the owner-gated harvest / first SSD seed.
-
-- [ ] Deliberately enable sources only after their operational and source-specific gates pass.
-
-- [ ] After deploying migration 0015, `SourceLaneState.continuous_since` starts NULL, so no
-  `ABSENT_STALE` delist is possible until each FULL lane has polled continuously for the 6h
-  grace — expected and safe; deployed 2026-09-06 (run 34056023371); confirm on the first
-  post-deploy sweep log (`delist stage ... skipping stale-absence marks`).
-
-- [ ] Give the Seller table a retention policy (currently always NULL); needed once IR-002
-  redaction reaches merchant usernames.
+- [ ] Re-baseline the implementation around [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
+  and [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md). Do not execute the old MS-2a
+  scoring-substrate plan as the next milestone.
+- [ ] Establish the category-domain boundary around the existing ADR-0010 identity spine:
+  first-class HDD/SSD, GPU/accelerator, RAM, and CPU typed specs; shared identity/alias primitives;
+  category-owned extraction, contradiction checks, and requirement evaluation returning
+  `match | no_match | unknown`. Preserve the existing drive matcher rather than flattening it
+  into generic strings.
+- [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
+  saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
+  Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.
+- [ ] Add an acquisition-provider boundary to hw-radar. Preserve cheap official API / structured
+  local paths; add an Apify-backed provider adapter that starts bounded private Actor runs,
+  records provider run/build/query/completeness metadata, imports output idempotently, and never
+  lets a truncated run prove delisting.
+- [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
+  initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
+  ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential
+  proxy / paid third-party Actor escalation.
+- [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
+  categories and both local + self-owned-Apify provider paths. Measure cost, completeness,
+  identifier quality, condition/shipping coverage, freshness, and failure recovery before adding
+  breadth.
+- [ ] Coordinate one self-owned private Hardware Radar Actor in the separate
+  `L3DigitalNet/apify-actors` repo as the integration proof. Keep Actor output observation-only:
+  no Django model imports, no production DB credentials, no canonical matching/persistence.
+- [ ] Keep provider identity separate from marketplace/source identity so moving a source between
+  local and Apify execution preserves listing identity and price history.
+- [ ] Run the existing MS-1e owner-in-the-loop ratification step for the drive matcher before
+  enabling affected drive source/category combinations: live harvest, label draft, owner audit,
+  full verification gate, and ADR-0019 flip only on PASS.
+- [ ] Add category-specific validation corpora/gates before auto-accepting GPU/RAM/CPU matches;
+  drive-corpus precision does not validate other categories.
+- [ ] Deliberately enable each source × category combination only after its operational,
+  retention/ToS, completeness, match-quality, and cost gates pass.
+- [ ] Add the remaining SanDisk/WD real-corpus alias verification; blocked on the owner-gated
+  drive harvest / first SSD seed.
+- [ ] Confirm the first post-migration-0015 continuous-sweep log before relying on
+  `ABSENT_STALE` delisting (deployed 2026-09-06; expected 6h grace).
+- [ ] Give the Seller table a retention policy before merchant usernames enter IR-002 redaction.
 - [ ] Decide the WD Purple recert opt-in question.
-
-- [ ] owner-gated: run MS-2a execution per the plan
-  (`docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md`, revision 4 `05f130f`),
-  engineering legs per plan phases, once the owner says go.
-- [ ] MS-2e must resolve eBay `feedbackScore` semantics before its plan can be cut.
+- [ ] **Deferred:** MS-2a scoring-substrate execution
+  (`docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md`). Revisit after the
+  multi-category watch-first path is working and real history identifies which category-specific
+  scoring work is valuable.
+- [ ] **Deferred with MS-2:** resolve eBay `feedbackScore` semantics before any future MS-2e plan.
