@@ -1,0 +1,58 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "category": "ram",
+  "manufacturer_name": "Micron",
+  "manufacturer_key": "micron",
+  "family_name": "DDR RDIMM",
+  "provenance": {
+    "source_kind": "first_party_page",
+    "sources": [
+      {
+        "url": "https://www.micron.com/products/obsolete/obsolete-rdimm/part-catalog/part-detail/mta36asf8g72pz-3g2f2",
+        "title": "Micron MTA36ASF8G72PZ-3G2F2 obsolete part-catalog detail",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.micron.com/products/obsolete/obsolete-rdimm/part-catalog/part-detail/mtc20f2085s1rc52ba1",
+        "title": "Micron MTC20F2085S1RC52BA1 obsolete part-catalog detail",
+        "retrieved": "2026-09-24"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "MTA36ASF8G72PZ-3G2F2",
+      "spec": {
+        "generation": "ddr4",
+        "module_type": "rdimm",
+        "ecc": true,
+        "module_capacity_gb": 64,
+        "modules_per_kit": 1,
+        "speed_mts": 3200,
+        "ranks": null
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "MTA36ASF8G72PZ-3G2F2", "is_primary": true}
+      ],
+      "source_url": "https://www.micron.com/products/obsolete/obsolete-rdimm/part-catalog/part-detail/mta36asf8g72pz-3g2f2",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "MTC20F2085S1RC52BA1",
+      "spec": {
+        "generation": "ddr5",
+        "module_type": "rdimm",
+        "ecc": true,
+        "module_capacity_gb": 32,
+        "modules_per_kit": 1,
+        "speed_mts": null,
+        "ranks": 2
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "MTC20F2085S1RC52BA1", "is_primary": true}
+      ],
+      "source_url": "https://www.micron.com/products/obsolete/obsolete-rdimm/part-catalog/part-detail/mtc20f2085s1rc52ba1",
+      "retrieved_on": "2026-09-24"
+    }
+  ]
+}

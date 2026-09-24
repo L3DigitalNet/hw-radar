@@ -1,0 +1,74 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "category": "cpu",
+  "manufacturer_name": "AMD",
+  "manufacturer_key": "amd",
+  "family_name": "EPYC",
+  "provenance": {
+    "source_kind": "first_party_page",
+    "sources": [
+      {
+        "url": "https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9354.html",
+        "title": "AMD EPYC 9354 product page",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9654.html",
+        "title": "AMD EPYC 9654 product page",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.amd.com/en/products/processors/server/epyc/7003-series/amd-epyc-7763.html",
+        "title": "AMD EPYC 7763 product page",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.amd.com/content/dam/amd/en/documents/products/epyc/amd-epyc-7002-series-datasheet.pdf",
+        "title": "AMD EPYC 7002-series datasheet",
+        "retrieved": "2026-09-24"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "EPYC 9354",
+      "spec": {"socket": "sp5", "cores": 32, "tdp_w": 280},
+      "aliases": [
+        {"alias_type": "mpn", "text": "EPYC 9354", "is_primary": true},
+        {"alias_type": "mpn", "text": "100-000000798"}
+      ],
+      "source_url": "https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9354.html",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "EPYC 9654",
+      "spec": {"socket": "sp5", "cores": 96, "tdp_w": 360},
+      "aliases": [
+        {"alias_type": "mpn", "text": "EPYC 9654", "is_primary": true},
+        {"alias_type": "mpn", "text": "100-000000789"}
+      ],
+      "source_url": "https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9654.html",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "EPYC 7763",
+      "spec": {"socket": "sp3", "cores": 64, "tdp_w": 280},
+      "aliases": [
+        {"alias_type": "mpn", "text": "EPYC 7763", "is_primary": true},
+        {"alias_type": "mpn", "text": "100-000000312"},
+        {"alias_type": "retail_pn", "text": "100-100000312WOF"}
+      ],
+      "source_url": "https://www.amd.com/en/products/processors/server/epyc/7003-series/amd-epyc-7763.html",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "EPYC 7742",
+      "spec": {"socket": "sp3", "cores": 64, "tdp_w": 225},
+      "aliases": [
+        {"alias_type": "mpn", "text": "EPYC 7742", "is_primary": true}
+      ],
+      "source_url": "https://www.amd.com/content/dam/amd/en/documents/products/epyc/amd-epyc-7002-series-datasheet.pdf",
+      "retrieved_on": "2026-09-24"
+    }
+  ]
+}

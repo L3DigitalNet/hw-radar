@@ -108,7 +108,9 @@ def test_drive_documents_validate_unchanged() -> None:
     # The shipped drive seeds predate MS-2 and must all still load as drive.
     shipped = load_seed_documents()
     assert shipped
-    assert {d.category for d in shipped} == {"drive"}
+    shipped_drive = [d for d in shipped if d.manufacturer_key in {"seagate", "western_digital"}]
+    assert len(shipped_drive) == 3
+    assert {d.category for d in shipped_drive} == {"drive"}
 
 
 def test_non_drive_row_without_source_url_rejected() -> None:
@@ -258,7 +260,7 @@ def test_non_first_party_document_is_refused_before_any_write() -> None:
 
 @pytest.mark.django_db
 def test_drive_import_byte_identical(snapshot: SnapshotAssertion) -> None:
-    docs = load_seed_documents()
+    docs = [d for d in load_seed_documents() if d.category == "drive"]
     first = import_documents(docs).as_json()
     second = import_documents(docs).as_json()
     assert snapshot == {

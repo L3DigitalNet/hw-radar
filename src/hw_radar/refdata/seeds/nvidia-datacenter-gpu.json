@@ -1,0 +1,74 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "category": "gpu",
+  "manufacturer_name": "NVIDIA",
+  "manufacturer_key": "nvidia",
+  "family_name": "Data Center GPUs",
+  "provenance": {
+    "source_kind": "first_party_datasheet",
+    "sources": [
+      {
+        "url": "https://images.nvidia.com/content/technologies/volta/pdf/tesla-volta-v100-datasheet-letter-fnl-web.pdf",
+        "title": "NVIDIA Tesla V100 datasheet",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/PB-10577-001_v02.pdf",
+        "title": "NVIDIA A100 80GB PCIe product brief",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.nvidia.com/content/dam/en-zz/Solutions/gtcs22/data-center/h100/PB-11133-001_v01.pdf",
+        "title": "NVIDIA H100 PCIe product brief",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/proviz-print-nvidia-rtx-a6000-datasheet-us-nvidia-1454980-r9-web%20(1).pdf",
+        "title": "NVIDIA RTX A6000 datasheet",
+        "retrieved": "2026-09-24"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "Tesla V100 PCIe (32GB)",
+      "spec": {"chip_vendor": "nvidia", "vram_gb": 32, "interface": "pcie", "cooling": null, "tdp_w": 250},
+      "aliases": [
+        {"alias_type": "mpn", "text": "Tesla V100 PCIe (32GB)", "is_primary": true},
+        {"alias_type": "mpn", "text": "NVIDIA Tesla V100 (32GB, PCIe)"}
+      ],
+      "source_url": "https://images.nvidia.com/content/technologies/volta/pdf/tesla-volta-v100-datasheet-letter-fnl-web.pdf",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "A100 80GB PCIe",
+      "spec": {"chip_vendor": "nvidia", "vram_gb": 80, "interface": "pcie", "cooling": "passive", "tdp_w": 300},
+      "aliases": [
+        {"alias_type": "mpn", "text": "A100 80GB PCIe", "is_primary": true},
+        {"alias_type": "mpn", "text": "NVIDIA A100 80GB (SKU 230)"}
+      ],
+      "source_url": "https://www.nvidia.com/content/dam/en-zz/Solutions/Data-Center/a100/pdf/PB-10577-001_v02.pdf",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "H100 PCIe",
+      "spec": {"chip_vendor": "nvidia", "vram_gb": 80, "interface": "pcie", "cooling": "passive", "tdp_w": 350},
+      "aliases": [
+        {"alias_type": "mpn", "text": "H100 PCIe", "is_primary": true},
+        {"alias_type": "mpn", "text": "NVIDIA H100 PCIe (SKU GH100-200)"}
+      ],
+      "source_url": "https://www.nvidia.com/content/dam/en-zz/Solutions/gtcs22/data-center/h100/PB-11133-001_v01.pdf",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "RTX A6000",
+      "spec": {"chip_vendor": "nvidia", "vram_gb": 48, "interface": "pcie", "cooling": "active", "tdp_w": 300},
+      "aliases": [
+        {"alias_type": "mpn", "text": "RTX A6000", "is_primary": true},
+        {"alias_type": "mpn", "text": "NVIDIA RTX A6000"}
+      ],
+      "source_url": "https://www.nvidia.com/content/dam/en-zz/Solutions/design-visualization/quadro-product-literature/proviz-print-nvidia-rtx-a6000-datasheet-us-nvidia-1454980-r9-web%20(1).pdf",
+      "retrieved_on": "2026-09-24"
+    }
+  ]
+}

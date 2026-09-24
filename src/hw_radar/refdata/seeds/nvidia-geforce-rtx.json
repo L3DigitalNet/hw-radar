@@ -1,0 +1,42 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "category": "gpu",
+  "manufacturer_name": "NVIDIA",
+  "manufacturer_key": "nvidia",
+  "family_name": "GeForce RTX",
+  "provenance": {
+    "source_kind": "first_party_page",
+    "sources": [
+      {
+        "url": "https://www.nvidia.com/en-my/geforce/graphics-cards/30-series/rtx-3090",
+        "title": "GeForce RTX 3090 product page",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4090",
+        "title": "GeForce RTX 4090 product page",
+        "retrieved": "2026-09-24"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "GeForce RTX 3090",
+      "spec": {"chip_vendor": "nvidia", "vram_gb": 24, "interface": null, "cooling": "active", "tdp_w": 350},
+      "aliases": [
+        {"alias_type": "mpn", "text": "GeForce RTX 3090", "is_primary": true}
+      ],
+      "source_url": "https://www.nvidia.com/en-my/geforce/graphics-cards/30-series/rtx-3090",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "GeForce RTX 4090",
+      "spec": {"chip_vendor": "nvidia", "vram_gb": 24, "interface": null, "cooling": "active", "tdp_w": 450},
+      "aliases": [
+        {"alias_type": "mpn", "text": "GeForce RTX 4090", "is_primary": true}
+      ],
+      "source_url": "https://www.nvidia.com/en-us/geforce/graphics-cards/40-series/rtx-4090",
+      "retrieved_on": "2026-09-24"
+    }
+  ]
+}
