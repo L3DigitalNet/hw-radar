@@ -3311,6 +3311,12 @@ and runs last.
 - **B5 — Admin + close-out.** Register the satellites in Django admin, then run
   the gate and update TODO/STATUS.
 
+**Slice B residual (session 2):** reversing migration `0019` may delete an
+adopted pre-existing family-less row where only the drive exists on the
+deployed schema (no family row to fall back to). Not yet a blocking issue
+(0019 is unmerged into production; deployed schema is still `0017`), but a
+rollback-path caveat for whoever writes or reviews the `0019` reverse.
+
 **Acceptance:**
 - AC-1 holds.
 - GPU/RAM/CPU exact-alias hits reach `review` while auto-accept is off.
@@ -3426,6 +3432,22 @@ empty frozen-file diff for every other pre-B test file.
     and expired rows are excluded; the result has no score field; a `grep` guard
     asserts no import of any scoring module.
 - **C5 — Close-out:** gate; TODO/STATUS.
+
+**Implementation-driven clarifications (session 2, C code-complete):**
+- Contradiction confidence is ≥0.85 per `CategoryPolicy`.
+- Catalog-yes/title-no is `no_match` (MS2-D-08, taken literally).
+- Soft-only catalog edits do not bump `requirement_version`; this deviates
+  from the plan's "bumps on each edit" text because the evaluator never reads
+  soft fields.
+- Unit price = `price + known shipping (+ stated tax)` in USD, divided by the
+  title quantity (none parses as 1; a low-confidence quantity that only
+  bounds the value yields `quantity_uncertain`).
+- Unknown shipping yields `shipping_unknown` (an `unknown` outcome) unless the
+  price alone already exceeds the requirement's max, which is `no_match`.
+- A family-grain spec value counts only when every family member has it and
+  they agree.
+- Only the currently accepted catalog edge supplies catalog evidence.
+- `EVALUATOR_VERSION` is `ms2c.2`.
 
 **Acceptance:**
 - AC-2 holds.
@@ -4641,7 +4663,11 @@ resolved; all accepted → revision 8.** Static read-only review of revision 7 a
 **Migrations (round 7):** no number changes. `correction_closing_read` and
 `provider_build_id` land in Slice E's unmerged `0022`.
 
-**Revision 8 review status:** a Codex review of revision 8 is pending (round 8).
+**Revision 8 review status:** Codex round 8 is done; see *Round 8* below.
+
+**Round 8 — delegate `b73b6633` (codex), READY, no new findings; plan converged
+at revision 8.** Static read-only review of revision 8. No further revision is
+required; the plan's Apify budget/ledger design (revisions 5–8) is converged.
 
 ## Next slice after A
 
