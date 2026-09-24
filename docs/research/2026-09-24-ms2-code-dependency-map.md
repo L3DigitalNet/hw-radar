@@ -100,23 +100,57 @@ decisions it informs live in
   structurally: `DelistDetector.delist_scope` (`contracts.py:120-125`), the
   reflective retention read `adapter_retention()` (`contracts.py:136-153`), and
   `HeartbeatProbe.probe()` (`src/hw_radar/acquisition/heartbeat.py:92-97`).
-- The only production caller of `fetch()`/`parse()` is `run_source()`
-  (`pipeline.py:339-416`: fetch under `asyncio.timeout` at `:354-355`, classify
-  at `:356-357`, parse at `:359`, zero-record parser-rot guard at `:362-363`).
-  `run_heartbeat()` never calls them directly. On a transition it calls
-  `run_source(..., run_kind=RunKind.FULL)` (`heartbeat.py:228-234`).
+- **Direct `fetch()`/`parse()` callers.** This list was corrected on
+  2026-09-24 after cross-agent review round 1 (finding F-02), and re-verified by
+  `grep -rnE '\.(fetch|parse)\(' src/` at `dev` df114de. The first version wrongly
+  said `run_source()` was the only production caller. There are three kinds of
+  caller:
+  - **The pipeline.** `run_source()` (`pipeline.py:339-416`) fetches under
+    `asyncio.timeout` (`:354-355`), classifies (`:356-357`), parses (`:359`),
+    and applies the zero-record parser-rot guard (`:362-363`).
+  - **Corpus harvesting, outside the pipeline.** The `harvest_corpus`
+    management command's `_fetch_parse`
+    (`src/hw_radar/catalog/management/commands/harvest_corpus.py:134-141`,
+    fetch at `:140`, parse at `:141`, called at `:204`) drives adapters
+    directly and persists nothing. It serializes listings through
+    `_staging_entry` (`:70`), which copies only `source_listing_key`, `url`,
+    `price`, `currency`, `condition_label`, and `attrs`. The eval harness
+    reloads them through `ListingFields` (`matching/eval/corpus.py:181`,
+    `extra="forbid"`) and rebuilds a `ParsedListing` in `_ingest`
+    (`matching/eval/evaluate.py:106`), again without any category field.
+  - **Heartbeat probes, outside the pipeline.** Each `HeartbeatProbe.probe()`
+    reuses its own adapter's `fetch()`/`parse()` to produce readings, with no DB
+    writes:
+    - eBay `sources/ebay.py:318-335` (fetch `:321`, parse `:334`);
+    - ServerPartDeals `sources/serverpartdeals.py:130-143` (`:131`, `:143`);
+    - Seagate `sources/seagate.py:149-162` (`:150`, `:162`);
+    - WD `sources/wd.py:208-223` (`:209`, `:223`).
+
+    `run_heartbeat()` calls `adapter.probe()` (`heartbeat.py:218`). On a
+    transition it calls `run_source(..., run_kind=RunKind.FULL)`
+    (`heartbeat.py:228-234`).
+
+  `acquisition/http.py:55` (`parser.parse(...)`) is a robots-parser call, not
+  an adapter call.
 - Callers of `run_source`: `poll_source` (`src/hw_radar/poller/service.py:81`,
   call at `:110-115`), `recovery_probe_job` (`service.py:208`, call at
   `:242-248`), and `run_heartbeat` (`heartbeat.py:228`). All three forward
-  `adapter_retention(adapter)`.
+  `adapter_retention(adapter)`. None of them passes a category, an evaluator,
+  or a provider. `recovery_probe_job` always resolves the local factory from
+  `ADAPTERS` (`service.py:219-221`).
 - Adapter construction is a zero-argument factory in `ADAPTERS`
   (`src/hw_radar/acquisition/sources/__init__.py:13-20`). No run-time query
   scope, category, or provider argument exists. Each adapter hard-codes its
   scope (eBay: `SEARCH_PARAMS`, `ebay.py:54`).
 - **Implication:** a provider seam can wrap `SourceAdapter` without editing any
   adapter. `run_source(adapter, …)` keeps its signature and delegates to a
-  provider-generic runner. All five collectors, the heartbeat, and the probe
-  path then run unchanged.
+  provider-generic runner. All five collectors, the heartbeat-fired FULL run,
+  and the recovery probe then run unchanged. The seam does **not** cover:
+  - corpus harvesting and replay, which need their own category-hint plumbing;
+  - heartbeat `probe()` readings, which stay local-only;
+  - provider selection for recovery probes, which needs its own dispatch.
+
+  The MS-2 plan (revision 2) handles these in MS2-D-27, MS2-D-18, and MS2-D-24.
 
 ## Q4 — Source identity conflated with execution mechanism
 

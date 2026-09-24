@@ -18,6 +18,12 @@
 >
 > Deviations go to the plan's Open risks section and the OQ process, never silently.
 > This plan does not edit ADRs or the master spec.
+>
+> **Revision 2 (2026-09-24).** Resolves the 12 findings of cross-agent review
+> round 1 (see *Review lineage* at the end), aligns the Slice A text with what
+> landed for A0–A3, and folds in the Slice B/D/F prep research. Decision IDs
+> MS2-D-01..-19 and task IDs are unchanged; new decisions are MS2-D-20..-28 and
+> new tasks carry new IDs (B4a–B4c, B6, D10–D12, E8).
 
 **Goal:** prove the smallest complete multi-category decision path without an
 ADR-0011 score:
@@ -50,6 +56,7 @@ bounded, idempotent, completeness-honest, and budget-admitted.
   may not lower coverage below the configured threshold.
 - **Migrations** (settled D2). The catalog head is `0017_identity_retention_checks`,
   and MS-2 owns `0018+` in this order: B `0018`, `0019`; C `0020`; D `0021`; E `0022`.
+  D-prep (see *Slice order*) has no migration.
   Every migration must:
   - apply cleanly to an empty DB and upgrade a DB holding deployed drive data without
     loss;
@@ -97,7 +104,11 @@ bounded, idempotent, completeness-honest, and budget-admitted.
   columns, or any ADR-0011 artifact. Do not present cross-category scores
   (ADR 0022).
 - Do not let a non-`complete` provider result produce `DelistScope.complete=True`,
-  advance sweep continuity, or reach the stale-absence path for a remote provider.
+  advance or preserve sweep continuity (it breaks it, MS2-D-11), or reach the
+  stale-absence path for a remote provider.
+- Do not let a stored eligibility verdict outlive the inputs it evaluated
+  (MS2-D-20), and do not default any remote import to `merchant_fact` retention
+  (MS2-D-25).
   Do not change the eBay delist path or the lane-continuity gate (migration 0015)
   (D5).
 - Do not create listings, fork history, duplicate observations, or reset watch
@@ -107,7 +118,8 @@ bounded, idempotent, completeness-honest, and budget-admitted.
   in v1. Do not run a second scheduler (ADR 0012, D4).
 - Do not give an Actor DB credentials, hw-radar model imports, or canonical
   state. Do not enable residential proxies, browser escalation, or paid
-  third-party Actors automatically (ADR 0021, ADR 0014).
+  third-party Actors automatically (ADR 0021, ADR 0014). MS-2 Actor runs use
+  no proxy at all (MS2-D-26).
 - Do not treat the account-level Apify `max_monthly_usage_usd` as project
   admission. It is an owner backstop only (D3).
 - Do not start any live Actor run before the owner gates in *Open risks* clear.
@@ -148,21 +160,30 @@ UI and no alert.
 **MS2-D-02 — Category dispatch registry.**
 - **Pure registry.** A pure module `hw_radar.matching.categories` maps category
   slug → `CategoryRules(slug, extract, extract_candidates, decode, veto)`. MS-2
-  Slice A registers only `drive`, bound to the existing `vocab.extract`,
-  `mpn.extract_candidates`, `grammars.decode`, and `ladder.contradictions`
-  objects *by identity*.
+  Slice A registers only `drive`. `rules_for("drive")` builds its
+  `CategoryRules` **on each call** from the current module attributes
+  `vocab.extract`, `mpn.extract_candidates`, `grammars.decode`, and
+  `ladder.contradictions`, so `rules_for("drive").extract is vocab.extract`
+  holds, and a monkeypatched module function is honored. Binding at import time
+  was rejected because frozen `tests/db/test_resolver.py` (≈:242–314)
+  monkeypatches `vocab.extract` and expects an error edge.
+  `CATEGORY_SLUG_MAX_LENGTH` (50) lives in `matching/categories.py`.
 - **Ladder veto.** `ladder.decide()` gains a keyword-only `veto` parameter that
   defaults to `contradictions`. It is used at all three veto sites
-  (`ladder.py:161,196,225`).
+  (`ladder.py:161,196,225`). The two local result variables that were named
+  `veto` (`:161`, `:196`) are renamed `vetoed`, so the callable parameter is
+  never rebound to a list; the persisted evidence key stays `"veto"` and its
+  values are byte-identical.
 - **Resolver spec readers.** The resolver keeps the ORM-bound spec readers in a
   parallel `_SPEC_READERS` table whose keys must equal the registry's. A test
   pins this.
 - **Unregistered categories.** A registered-but-unknown category produces a
   `none` edge with `unsupported_category` evidence. Drive rules never run on it.
-- **Edge provenance.** Every edge the dispatcher writes carries
-  `evidence["category"]` and `evidence["category_source"]`
-  (`hint | legacy_default`). This is the only additive change to persisted drive
-  output.
+- **Edge provenance.** Every ladder-path edge carries `evidence["category"]`
+  and `evidence["category_source"]` (`hint | legacy_default`). This is the only
+  additive change to persisted drive output.
+- **Invalid hints.** A non-string or non-slug hint read back from `attrs_json`
+  produces the resolver's error edge, never a drive fallback.
 - *Evidence:* Map Q2 (`decide()` touches drive semantics only via
   `contradictions()` and the grammar-gated rung 2).
 - *Rejected (a):* a generic `Mapping[str, object]` veto payload. It loses typing
@@ -236,6 +257,8 @@ filters need. `DriveSpec` is unchanged.
   with exact curated aliases only and no spec satellite. `server` sets
   `variant_on_demand=False` so configured systems never collapse into one
   variant (D11).
+- **Acceptance provenance.** Even with `auto_accept=True`, new categories
+  accept only authoritative aliases at approved grains (MS2-D-21).
 - *Rejected:* enabling GPU/RAM/CPU auto-accept on catalog-authoritative aliases
   at merge. No category corpus exists to prove precision.
 
@@ -247,6 +270,34 @@ envelope gets a category-discriminated spec payload and per-row
 - `source_kind=catalog_authoritative` / `retention_class=manufacturer_reference`
   apply only to first-party manufacturer pages. Everything else is `manual`.
 - `refdata.persist` becomes category-keyed. Its drive path is unchanged.
+- **Current-state gaps** (code evidence, 2026-09-24): `persist._import_document`
+  hard-codes `Category.objects.get_or_create(slug="drive")` (`persist.py:152`)
+  and writes `DriveSpec.objects.update_or_create` (`persist.py:208`);
+  `SeedModel.spec` is one concrete drive-mirroring `SeedSpec`
+  (`contracts.py:56`); provenance is one per-document `SeedProvenance` block,
+  not per row; and `SeedProvenance.source_kind` is a Literal of
+  `first_party_datasheet | first_party_manual | first_party_page` with no
+  non-first-party value. B4a/B4b close these gaps.
+- **First-party sources and identifiers** (prep survey, retrieved 2026-09-24;
+  per-source ToS spot check stays risk R6):
+  - CPU: Intel ARK (ark.intel.com), keyed by processor number (for example
+    `Xeon Gold 6448Y`), with the FPO/spec code (`SRxxx`) as the printed
+    identifier; AMD specifications pages (amd.com) keyed by marketing name, with
+    the OPN (`100-000000xxx`) as the ordering identifier. OPN and FPO/spec code
+    are the MPN-like aliases; marketing names are the retail-name aliases.
+  - GPU: chip-vendor pages and PDF datasheets (NVIDIA data-center and GeForce
+    pages, AMD Instinct and Radeon pages). Every MS2-D-04 GPU field is
+    chip-level, so board-partner (AIB) pages are not v1 sources. An AIB page is
+    authoritative only for that partner's own board SKU, never for chip facts.
+    Intel Arc and Data Center GPU pages were not surveyed.
+  - RAM: Micron's official part decoder is the one confirmed first-party
+    decoder. Samsung and SK hynix per-part pages exist, but their decode grammars
+    are only community-sourced, so the grammars are not authoritative. For OEM
+    server part numbers (Dell, HPE, Lenovo), the OEM's own spec for its own SKU
+    qualifies. A reseller's claim that an OEM part equals a module-maker part does
+    not qualify: that equivalence is `manual` at most.
+  - No bulk export is confirmed for any vendor. Seeds stay hand-authored,
+    per-model JSON, like the drive seeds.
 - *Rejected:* third-party spec aggregators as authoritative. Provenance and
   licence are unclear.
 
@@ -309,20 +360,24 @@ envelope gets a category-discriminated spec payload and per-row
 
 **MS2-D-09 — Evaluation persistence and the shortlist read model (Slice C).**
 - **`watch_evaluation`**: unique `(watch, listing)` current state holding verdict,
-  `reasons` JSON (output evidence per DR-004, not watch input),
-  `requirement_version`, `evaluator_version`, `snapshot_observed_at`, and
-  `evaluated_at`.
+  `reasons` JSON (output evidence per DR-004, not watch input), and the
+  evaluated-input binding: `requirement_version`, `evaluator_version`,
+  `snapshot_observed_at`, `resolution` (FK to the `ListingResolution` edge that
+  was current at evaluation, null, `SET_NULL`), plus `evaluated_at`. Validity is
+  governed by MS2-D-20.
 - **Retention.** It is `RetentionGoverned`, mirroring the listing's retention
   class/expiry at evaluation. `Listing.mark_delisted` pulls it forward like
   snapshots (`market.py:369-374`), and the purge registry covers it. eBay-derived
   reasons carry prices, so they must not outlive DR-008.
 - **Trigger.** Evaluation runs as a pipeline stage after resolution, isolated
-  like the resolver: a failure never blocks ingestion. It also runs from an
-  `evaluate_watches` command after watch edits.
-- **Read model.** `shortlist(watch_id)` returns `match` rows at the current
-  requirement version for active listings, ordered by landed USD ascending, with
+  like the resolver: a failure never blocks ingestion. It is wired on every
+  ingestion path (MS2-D-20). It also runs from an `evaluate_watches` command
+  after watch edits.
+- **Read model.** `shortlist(watch_id)` returns only *current* (MS2-D-20)
+  `match` rows for active listings, ordered by landed USD ascending, with
   freshness (`fresh | stale | budget_paused`) and `meets_target`.
-  `review_queue(watch_id)` returns `unknown` rows.
+  `review_queue(watch_id)` returns current `unknown` rows (`state="unknown"`)
+  and every non-current row of any verdict (`state="pending"`).
 - *Rejected:* an append-only evaluation history. DR-004 requires evidence per
   evaluated listing, not per evaluation. History can be added in MS-4 with the
   alert state machine.
@@ -337,7 +392,16 @@ envelope gets a category-discriminated spec payload and per-row
 - **Runners.** `run_collection(provider, …)` holds today's `run_source` body.
   `run_source(adapter, …)` keeps its exact signature and delegates. Poller,
   heartbeat, and probe call sites are untouched.
-- *Evidence:* Map Q3 (the only `fetch`/`parse` caller is `run_source`).
+- **Callers outside the seam.** `run_source` is the only *pipeline* caller of
+  `fetch`/`parse`, but not the only caller (Map Q3, corrected in revision 2):
+  - `harvest_corpus` calls both directly, with no persistence
+    (`harvest_corpus.py:134-141`). MS2-D-27 carries the category hint through it.
+  - Each heartbeat adapter's `probe()` reuses its own `fetch`/`parse`: eBay,
+    ServerPartDeals, Seagate, and WD, called from `run_heartbeat`
+    (`heartbeat.py:218`). Heartbeat is local-only (MS2-D-18 CHECK).
+  - `run_heartbeat` then fires `run_source` as a FULL run (`heartbeat.py:228`).
+    It is therefore inside the seam, and MS2-D-20 wires evaluation there.
+- *Evidence:* Map Q3.
 - *Rejected:* editing each adapter to a new base class. That touches five
   collectors for no behavior gain.
 
@@ -354,13 +418,35 @@ envelope gets a category-discriminated spec payload and per-row
 
   | Completeness | Result |
   | --- | --- |
-  | `complete` | the scope, unchanged |
+  | `complete` | the scope, unchanged, if `scope.complete` is True **or** the evidence is stale-eligible (local only); else `None` |
   | `truncated` | `replace(scope, complete=False)` if stale-eligible, else `None` |
   | `partial_failure` | `None` |
   | `failed` | `None` |
 
+  The `complete` row was tightened during Slice A verification (revision 2).
+  Revision 1 passed a `complete` evidence's scope through even when the scope
+  said `complete=False`. A remote provider reporting `complete` evidence with an
+  incomplete scope could then reach `ABSENT_STALE`.
+
 - **Continuity.** `counts_toward_sweep_continuity(evidence)` is true only for
   `complete` or stale-eligible `truncated`.
+  - An eligible successful FULL run calls `_record_sweep_continuity`, unchanged.
+  - An **ineligible** successful FULL run **breaks** continuity:
+    `_break_sweep_continuity(site)`, a small helper beside
+    `_record_sweep_continuity`, sets the FULL lane's `continuous_since := None`.
+    It is a no-op when the site has no `SourceConfig`.
+  - A remote result rejected before persistence also breaks continuity
+    (MS2-D-22).
+  - *Why:* merely skipping the update would leave an old local
+    `continuous_since` in place. `_record_sweep_continuity` finds the previous
+    run by `FULL` + `SUCCESS` alone (`pipeline.py:112-117`), so a truncated remote
+    import would make the gap look short and let a later local incomplete sweep
+    stale-delist on continuity that no run ever proved.
+  - Because every ineligible run nulls continuity, the next eligible run always
+    restarts it. So the previous-run lookup needs no completeness predicate.
+  - *Rejected:* tracking the last eligible sweep in a new lane column. It needs a
+    migration in Slice A and duplicates the ScraperRun record.
+  - Local runs are always eligible, so local-only behavior is unchanged.
 - **Local mapping.** An adapter scope with `complete=True` maps to `complete`. A
   scope with `complete=False`, or no scope at all, maps to stale-eligible
   `truncated`. The eBay path and non-delist sources therefore behave exactly as
@@ -394,21 +480,23 @@ envelope gets a category-discriminated spec payload and per-row
     `build_id`, `build_number`, `contract_schema_version`;
   - requested scope: `query_scope` JSON (category/query/limits), plus typed
     `memory_mb`, `timeout_s`, `max_items`, `max_pages`, and `admission_class`;
-  - lifecycle: `apify_status`, `started_at`, `finished_at`, `completeness`,
-    `completeness_reason`, `usage_total_usd`;
-  - import: `dataset_id`, `dataset_item_count`, `import_state`
-    (`pending | importing | imported | rejected`), `scraper_run` OneToOne null,
-    `dataset_deleted_at`.
-- **Idempotent import:**
-  1. The pipeline's durable persistence (`_persist_all`) and the transition to
-     `imported` commit in **one transaction**.
-  2. A replay that finds `imported` is a no-op before any fetch.
-  3. `observed_at` is the run's `startedAt`, which is deterministic and never
+  - remote execution (MS2-D-23): `remote_status`, `remote_terminal_at`,
+    `started_at`, `finished_at`, `completeness`, `completeness_reason`,
+    `usage_total_usd`, `run_kind` (FULL or PROBE);
+  - local work (MS2-D-22, -23, -25): `dataset_id`, `kv_store_id`,
+    `dataset_item_count`, `import_state`, `import_listing_ids` (bigint array),
+    `stage_detail` JSON (per-stage error counts), `import_attempts`,
+    `next_attempt_at`, `scraper_run` OneToOne null, `storage_state`,
+    `storage_cleanup_due_at`, `storage_cleanup_attempts`, `storage_deleted_at`.
+- **Idempotent import** (revision 2; the durable stage machine is MS2-D-22):
+  1. A replay that finds `finalized` or `rejected` is a no-op before any fetch.
+  2. `observed_at` is the run's `startedAt`, which is deterministic and never
      overstates freshness.
-  4. Provider imports use insert-if-absent on `(listing_id, observed_at)`.
-- **Retention.** The table holds no merchant content, so it is not
-  retention-bearing (like `ScraperRun`). Raw dataset items land in `RawPayload`
-  under the source's declared retention.
+  3. Provider imports use insert-if-absent on `(listing_id, observed_at)`.
+  4. The `ScraperRun` is created once and reused on every retry.
+- **Retention.** The table holds no merchant content, only ids, counts, and
+  status, so it is not retention-bearing (like `ScraperRun`). Raw dataset items
+  land in `RawPayload` under the source's registered retention (MS2-D-25).
 - *Rejected:* deduplicating by `RawPayload.content_hash`. It is not unique
   (Map Q5) and cannot express "this remote run was already imported".
 
@@ -426,38 +514,89 @@ envelope gets a category-discriminated spec payload and per-row
     time}, pagesDeclared, pagesFetched, itemsDeclared, itemsEmitted}`,
     `queryScope` echo, and `errors[]`. It follows the `pdf-evidence-reader`
     status/truncated/coverage pattern.
+- **Classifier.** `classify_run(remote_status, output, dataset_count,
+  usable_count) -> (RunCompleteness, reason)`. `usable_count` is the number of
+  dataset rows that pass contract validation.
 - **Completeness mapping:**
   - `complete` requires all of: Apify `SUCCEEDED`, `OUTPUT.completeness.complete`,
-    no limit hit, and `itemsEmitted` = dataset count.
+    no limit hit, and `itemsEmitted` = dataset count = `usable_count`.
+  - **Proven complete-empty** is `complete` with reason `complete_empty`. It
+    requires all of: `SUCCEEDED`; a valid `OUTPUT` with `complete=true` and no
+    limit hit; `pagesFetched ≥ 1`; `itemsDeclared == 0` and `itemsEmitted == 0`,
+    both present and non-null; and a dataset count of 0. ADR 0021 requires this
+    to be distinguishable from a failed collection.
   - `truncated` covers any limit hit or `TIMED-OUT`.
   - `partial_failure` covers `FAILED`/`ABORTED` with items, or `errors` non-empty.
-  - `failed` covers a missing or invalid `OUTPUT`, an unknown `schemaVersion`, or
-    no usable items.
+  - `failed` covers:
+    - a missing or invalid `OUTPUT`, or an unknown `schemaVersion`;
+    - a **non-empty dataset with zero usable rows** (`no_usable_items`);
+    - an **empty dataset without complete-empty evidence** (`ambiguous_empty`).
 
   Missing or ambiguous evidence is never `complete` (DR-011). `failed` persists
-  nothing.
+  nothing (the import is `rejected`, MS2-D-22).
+- **Raw batch shape.** `RawBatch.items` holds dataset rows only. The `OUTPUT`
+  record is stored on `provider_run` and is never a `RawItem`. So the zero-record
+  parser-rot guard (`batch.items and not parsed`, `pipeline.py:362`) passes a
+  complete-empty batch and still rejects non-empty unusable output. A
+  complete-empty result with a `scope_key` delists that scope's active listings
+  through the normal `ABSENT_FROM_SWEEP` path.
 - **Fixtures.** Frozen fixtures for each state live in hw-radar. The Actor PR in
   the separate repository copies the committed schemas.
-- **Dataset deletion.** The default dataset is deleted after a durable import
-  (retention).
+- **Storage cleanup.** The run's default dataset and KV store are deleted by
+  deadline, independent of import success (MS2-D-25).
 
 **MS2-D-15 — Apify transport (Slice D).** Use a thin async `httpx` client over the
-five REST calls needed: start run, get run, list dataset items, get KV record, and
-delete dataset.
+seven REST calls needed: start run, get run, abort run (only on a start-option
+mismatch, MS2-D-26), list dataset items, get KV record, delete dataset, and
+delete KV store. Revision 1 listed five calls; F-08 and F-10 added abort and
+KV-store delete.
 - `httpx` is already a dependency, and tests use `httpx.MockTransport` / vcrpy
   cassettes.
-- *Rejected:* `apify-client` 3.2.0. It defaults to the `impit` transport, adds a
-  dependency for five calls, and its return types changed across 2.x→3.x.
+- *Rejected:* `apify-client` 3.2.0 (released 2026-09-03). Since 3.0.0 it uses
+  `impit` as its required default transport; the optional `httpx2` extra is a
+  separate package, not the `httpx` we already have. It would add a dependency
+  for seven calls, and its return types changed across 2.x→3.x.
+- **Confirmed facts the client relies on** (docs.apify.com, retrieved
+  2026-09-24; prep report for D):
+  - Run status lifecycle: `READY` → `RUNNING` → terminal `SUCCEEDED | FAILED |
+    TIMED-OUT | ABORTED`, reached via the transitional `TIMING-OUT` and
+    `ABORTING`.
+  - Run object fields (Python-client attribute names; the camelCase wire names
+    follow the same aliasing): `id`, `status`, `started_at`, `finished_at`,
+    `build_id`, `build_number`, `default_dataset_id`,
+    `default_key_value_store_id`, `options.memory_mbytes`,
+    `options.timeout_secs`, `options.max_items`, `stats.compute_units`,
+    `usage` (a per-component breakdown, nullable), and
+    `usage_total_usd: float | None`.
+  - `usage_total_usd` is nullable. Its value right at `SUCCEEDED` is
+    unconfirmed, and Apify says historical dollar amounts are recomputed at
+    current pricing and are "for informational purposes only". It is therefore
+    re-read until non-null (MS2-D-23).
+  - **Naming trap.** The start request sets the run timeout with the REST query
+    parameter `timeout` (seconds) and memory with `memory` (MB). The Python
+    client names them `run_timeout` (a `timedelta`) and `memory_mbytes`. The run
+    response reports them as `options.timeoutSecs` / `options.memoryMbytes`.
+    None of these is the client's per-request HTTP `timeout` tier. The Actor's
+    `timeout` must never be confused with the httpx request timeout.
+  - `max_total_charge_usd` applies only to pay-per-event Actors. It is not a
+    cost bound for a self-owned Actor.
+- **Unconfirmed until D3:** the exact wire names of `usageTotalUsd`,
+  `buildNumber`, and the `usage` component keys, and whether `maxItems` is
+  enforced by the platform for a non-pay-per-result Actor. D3 verifies these
+  against the official API reference before merge. MS2-D-26 does not rely on
+  platform `maxItems` enforcement.
 - *Reopen if* the needed surface grows beyond these calls.
 - The token comes from `HW_RADAR_APIFY_TOKEN`. The owner scopes it to Run on the
   specific Actor(s).
 
 **MS2-D-16 — Completion observation (settled D4).**
-- **Poll job.** An APScheduler `apify-poll` interval job polls non-terminal
-  `provider_run` rows via `GET /v2/actor-runs/{id}` and imports terminal ones.
+- **Poll job.** An APScheduler `apify-poll` interval job (`max_instances=1`,
+  `coalesce=True`) runs two independent selectors each tick: active remote
+  executions, and terminal rows with outstanding local work (MS2-D-23).
 - **Start job.** The existing full-lane job for a source with
   `collection_provider=apify` *starts* a run instead of calling `run_source`.
-  There is one scheduling owner and no Apify schedules or webhooks.
+  The recovery-probe job dispatches the same way (MS2-D-24). There is one
+  scheduling owner and no Apify schedules or webhooks.
 
 **MS2-D-17 — Apify spend ledger (Slice E, migration 0022; settled D3).**
 - **Period: a rolling 31-day window, not a calendar month or the billing cycle.**
@@ -471,26 +610,28 @@ delete dataset.
     the plan changes.
   - Cost of this choice: no "reset" on the 1st. Reports also show calendar-month
     and cycle views for attribution.
-- **Reservation estimate.** Estimate before start:
-  `memory_mb/1024 × timeout_s/3600 × usd_per_cu × (1 + margin) + per_run_overhead_usd`.
-  - `usd_per_cu` defaults to 0.20 (official pricing, 2026-09-24) and is
-    settings-tunable.
-  - `margin` and `per_run_overhead_usd` are labeled assumptions covering storage
-    and transfer.
-  - This is a hard bound because self-owned Actors have no per-run $ cap.
-- **Admission.** Under a Postgres transaction-scoped advisory lock, admit iff
-  `reconciled_actual + outstanding_reservations + estimate ≤ class_limit`.
-  - Class limits: `watch_refresh` → $20 hard; `discovery` → $12 operating
-    target. Discovery degrades first.
-  - Outstanding reservations, including stuck or unreconciled runs, count at
-    their estimate. This fails closed.
+- **Reservation estimate.** It is the sum of the bounded charge components in
+  MS2-D-26, times `(1 + margin)`. Revision 1's single compute formula plus an
+  assumed overhead is withdrawn: it bounded compute only.
+- **Admission.** Under the budget advisory lock (MS2-D-26), admit iff
+  `reconciled_actual(window) + outstanding_reservations + estimate ≤ class_limit`.
+  - Class limits: `watch_refresh` → the effective hard cap, which is below $20
+    by the OQ23 deduction and a safety margin (MS2-D-26). `discovery` →
+    `min($12, effective hard cap)`, the operating target. Discovery degrades
+    first. Remote recovery probes use `discovery` (MS2-D-24).
+  - Outstanding reservations, including stuck or unreconciled runs of any age,
+    count at their estimate. This fails closed.
   - Denials are recorded as ledger rows.
   - A kill switch `HW_RADAR_APIFY_ENABLED` (default false) denies everything.
-- **Reconciliation.** Reconcile with `usage_total_usd` at terminal state, and
-  re-read until non-null. If actual exceeds the estimate, keep the actual and log
-  an overrun.
+    So do missing unit prices, an unset OQ23 deduction, and a tripped overrun
+    latch (MS2-D-26).
+- **Reconciliation.** Reconcile with `usage_total_usd` once it is non-null; it is
+  re-read by the outstanding-work selector (MS2-D-23). Reconciliation takes the
+  same lock as admission. An overrun beyond tolerance trips the latch
+  (MS2-D-26); it is never merely logged.
 - **Freshness.** `budget_paused` holds for a source when its newest ledger event
-  is a budget denial after its last imported run.
+  is a budget denial after its last imported run, or while the overrun latch is
+  tripped.
 - *Rejected:* fusing with ADR-0016 `SearchBudgetGate` semantics. That gate is
   unbuilt and search-specific. Only the reserve-then-reconcile pattern is reused.
 
@@ -505,15 +646,292 @@ delete dataset.
 only; the owner decides (settled D8 as revised).
 - **Local paths:**
   - eBay Browse, extended to GPU (27386), RAM (170083), and CPU (164) `category_ids`
-    sweeps, one ID per request, with pagination;
+    sweeps, one ID per request, with pagination (facts in F1);
   - WD Recertified;
   - Seagate Recertified;
   - ServerPartDeals, whose non-drive collections are still unverified.
 - **Actor proof:** owner decision (risk R1). Newegg is excluded because its Terms
-  of Use restrict automated access. B&H, ServerPartDeals, and refurbished
-  server-parts sellers each need a ToS/robots review before selection.
+  of Use prohibit automated access and scraping (R1 has the evidence). B&H,
+  ServerPartDeals, and refurbished server-parts sellers each need a ToS/robots
+  review before selection.
 - **Slice D stays source-agnostic.** It is built and tested against the frozen
   contract with a synthetic fixture source.
+
+**MS2-D-20 — Evaluation is bound to its inputs and wired on every ingestion path
+(Slice C; review F-03).**
+- **Validity.** A `watch_evaluation` row is *current* iff all four hold:
+  - `snapshot_observed_at` equals the listing's latest `OfferSnapshot.observed_at`;
+  - `resolution_id` equals the listing's current edge id (`is_current=True`),
+    or both are null;
+  - `requirement_version` equals the watch's `requirement_version`;
+  - `evaluator_version` equals the running `EVALUATOR_VERSION`.
+- **Read model.** Only current `match` rows qualify for `shortlist()`. A
+  non-current row of any verdict is `pending`. It is shown by `review_queue()`
+  with its stale binding, and it never qualifies.
+- **Failure path needs no write.** Any new evidence that the evaluator did not
+  assess leaves the old row non-current. That covers an evaluator exception,
+  a crash, a resolver failure, and an unfinished import stage. The old row
+  therefore drops out of the shortlist.
+- **Wiring.** `run_collection` gains `evaluator: ListingEvaluator | None = None`.
+  `None` binds the production `WatchEvaluator`; it is not a null object. So every
+  path through `run_collection` evaluates with no per-caller wiring:
+  `poll_source`; the FULL run that `run_heartbeat` fires (`heartbeat.py:228`);
+  `recovery_probe_job` PROBE runs; and provider-import stage 4 (MS2-D-22).
+  Tests inject a fake. A listing whose resolution raised in this run is not
+  evaluated and stays pending.
+- **Repair.** The next observation re-evaluates. `evaluate_watches --pending`
+  re-evaluates every non-current row on demand.
+- *Rejected (a):* an evaluator parameter each caller must pass, with a null
+  default. That is exactly the omission F-03 found on the heartbeat path; any
+  future caller would silently skip evaluation.
+- *Rejected (b):* write-time invalidation, which marks rows pending inside the
+  persistence transaction. It adds a write to the ingestion transaction and still
+  leaves crash windows. Read-time binding cannot be skipped.
+- *Rejected (c):* a scheduled evaluation-backlog job in MS-2. `pending` already
+  fails closed. *Reopen if* F3 measures a material pending backlog.
+
+**MS2-D-21 — New-category acceptance policy (Slice B; review F-09).**
+- **Policy object.** `CategoryRules.acceptance: AcceptancePolicy | None`.
+  - Drive: `None`. No gate applies, drive decisions are untouched, and A0 guards
+    this.
+  - gpu, ram, cpu, and every basic-watch category:
+    `AcceptancePolicy(authoritative_source_kinds={"catalog_authoritative"},
+    grains={MODEL, VARIANT})`.
+- **Where it applies.** The resolver applies the policy after `ladder.decide`
+  returns and before the `auto_accept` flag.
+- **Rung 1.** An `ACCEPT` stands only if two things hold: the winning alias hit
+  (the ladder's highest-confidence single-target hit) has an authoritative
+  `source_kind`, and the target grain is approved. Otherwise the result is
+  `REVIEW` with evidence
+  `acceptance_policy={"source_kind": ..., "grain": ...}`. The OEM family fan-out
+  accepts at family grain, so for these categories it becomes `REVIEW`.
+- **Evidence for rung 0.** Accepted non-drive edges record
+  `evidence["alias_source_kind"]`.
+- **Rung 0.** A prior is inherited only if its edge is an authoritative
+  `exact_alias` accept, or a `manual` owner decision. Any other prior becomes
+  `REVIEW`.
+- **Manual and learned aliases stay visible.** `manual` and `listing_derived`
+  aliases stay in `alias_hits`. That includes aliases the resolver learned from
+  earlier observations (`resolver.py:374-405`). So a collision stays
+  reviewable; it never becomes a silent `none`.
+- *Evidence:* `source_kind` sets confidence only (`ladder.py:28-32`, `:195`). It
+  does not gate acceptance.
+- *Rejected:* filtering non-authoritative hits out before `decide`. That turns
+  reviewable collisions into `none`.
+- *Reopen if* the owner ratifies `manual` aliases for a category (R4).
+
+**MS2-D-22 — Durable staged provider import (Slice D; review F-05).**
+Replaces revision 1's "persist and mark `imported` in one transaction".
+- **Stages.** `import_state` moves `pending → observations_committed →
+  absence_applied → resolved → evaluated → finalized`. The only other terminal
+  state is `rejected`.
+- **Transitions.** Each transition is a compare-and-set under
+  `select_for_update` on the row. Every stage's effects are idempotent, so a
+  duplicate executor stops at the compare-and-set.
+- **Claim.** In its own transaction the claim creates the `ScraperRun`
+  (RUNNING, `started_at` = Apify `startedAt`) if absent, links it, and increments
+  `import_attempts`. Every retry reuses that `ScraperRun`.
+- **Stage 1 (one transaction).** Read and validate the dataset and `OUTPUT`
+  *before* the transaction; then `classify_run`. A `failed` result goes to
+  *Reject*. Otherwise the transaction does: `store_raw`, `upsert_listing`,
+  insert-if-absent snapshots, `import_listing_ids`, and state
+  `observations_committed`. A crash rolls the whole stage back.
+- **Stage 2 (one transaction).** Continuity is recorded or broken
+  (MS2-D-11), the gated scoped delist runs (MS2-D-12/-14), and the state becomes
+  `absence_applied`. PROBE runs skip absence and continuity (existing rule).
+- **Stage 3.** Resolve each id in `import_listing_ids`, then set `resolved`.
+  Resolver errors are counted in `stage_detail` and never block.
+- **Stage 4.** Evaluate each listing whose resolution did not raise (MS2-D-20),
+  then set `evaluated`. Evaluator errors are counted; the affected rows stay
+  pending (fail-closed).
+- **Stage 5 (one transaction).** Set the `ScraperRun` to SUCCESS with its
+  counts and `detail_json` (provider evidence, resolver and evaluator errors,
+  `listings_delisted`). Apply `apply_run_outcome`. Set `finalized`. The
+  compare-and-set makes the lifecycle outcome apply exactly once.
+- **Reject (one transaction).** Covers `failed` completeness, an invalid
+  contract, unknown retention (MS2-D-25), and a storage deadline passed before
+  stage 1. The `ScraperRun` becomes FAILED with a classification, the lifecycle
+  outcome is applied, continuity is broken, and the state becomes `rejected`.
+- **Resumption.** The outstanding-work selector (MS2-D-23) resumes a row from its
+  recorded stage. Only stage 1 needs the dataset.
+- **Code shape.** D extracts the stages from `run_collection` into functions.
+  The local path composes the same functions in memory with no durable markers.
+  A crashed local run is repaired by the next poll, and its evaluations stay
+  pending (MS2-D-20).
+- *Rejected (a):* committing persistence and a terminal marker together
+  (revision 1). A crash after that commit strands delist, resolution,
+  evaluation, and finalization forever.
+- *Rejected (b):* one transaction over all stages. A resolver or evaluator
+  failure must not roll back ingestion (C.3), and the transaction would hold
+  locks across hundreds of resolutions.
+- *Rejected (c):* an external task queue. It is a second scheduler (ADR 0012).
+
+**MS2-D-23 — Remote execution status is separate from local outstanding work
+(Slice D, E; review F-06).**
+- **Two axes.**
+  - Remote: `remote_status` is the Apify enum. `remote_terminal_at` is set when
+    the job first sees a terminal status.
+  - Local: `import_state` (MS2-D-22), `storage_state`
+    (`retained | deleted | delete_failed`, MS2-D-25), and, from E, the
+    reservation `status` (`reserved | reconciled`).
+- **Selector 1, active.** Rows where `remote_status` is non-terminal. Each is
+  polled with `GET` run, which updates status, ids, and usage.
+- **Selector 2, outstanding.** Rows where `remote_status` is terminal and any of
+  these holds:
+  - `import_state ∉ {finalized, rejected}`;
+  - `storage_state ≠ deleted` and either the import is terminal or
+    `storage_cleanup_due_at` has passed;
+  - (E) the reservation is `reserved` or `usage_total_usd` is null.
+- **Isolation and restart.** Each unit of work is claimed and committed
+  separately, with per-row backoff via `next_attempt_at`, so one failing row
+  never starts the others. Both selectors read only persisted state, so a poller
+  restart resumes every row.
+- *Rejected:* revision 1's "poll non-terminal rows and import terminal ones". A
+  row whose remote status is terminal would never be selected again. That
+  strands unfinished imports, failed deletions, and late usage.
+
+**MS2-D-24 — Recovery probes dispatch by the selected provider (Slice D;
+review F-07).**
+- **Dispatch.** `recovery_probe_job` branches on
+  `SourceConfig.collection_provider`.
+  - `local` runs today's path byte for byte.
+  - `apify` calls `start_provider_run(source, run_kind=PROBE)`. That path uses
+    the same `check_admission(PROBE)` and then budget admission as class
+    `discovery`, so a paused source cannot spend watch-refresh headroom. It
+    applies the bounded run options (MS2-D-26), allows at most one outstanding
+    probe run per source, completes asynchronously (MS2-D-22/-23), and uses
+    registered retention (MS2-D-25).
+- **Probe outcome.** When a PROBE import finalizes, the outcome is
+  `PROBE_SUCCESS` iff completeness is `complete` or `truncated`. Otherwise it is
+  `PROBE_FAILURE`, which is state-neutral.
+  - A budget denial starts no run. The source stays paused and the denial is
+    recorded.
+  - A PROBE import never reaches absence or continuity.
+- **The local adapter never runs for an Actor-backed source.** It is never
+  invoked for an `apify` source in any job, even when one is registered.
+- *Rejected:* probing an Actor-backed source with its local adapter. That
+  "recovers" the wrong execution provider, and an Actor-only source could
+  never recover.
+
+**MS2-D-25 — Provider-independent source retention and remote storage cleanup
+(Slice D; review F-10).**
+- **Registry.** A new pure module `acquisition/retention_policy.py` holds
+  `SOURCE_RETENTION: Mapping[str, AdapterRetention]`, keyed by `site_key`.
+  `source_retention(site_key)` raises `UnknownSourceRetention` for an
+  unregistered key.
+- **Remote imports.** Every remote import passes the policy explicitly to the
+  stage functions as a required keyword with no default. Unknown retention
+  rejects the import. It never falls back to `run_collection`'s `merchant_fact`
+  default (`contracts.py:136-153`).
+- **Local path.** The local path keeps `adapter_retention(adapter)` in MS-2.
+  A test pins `adapter_retention(ADAPTERS[k]()) == source_retention(k)` for every
+  registered adapter, so the two sources of truth cannot drift. An Actor-only
+  source must be registered in the registry.
+- **Cleanup deadline.** When a terminal status is first observed:
+  `storage_cleanup_due_at = remote_terminal_at +
+  min(HW_RADAR_APIFY_STORAGE_CLEANUP_MAX, bounded_ttl / 2)`.
+  - The default for `HW_RADAR_APIFY_STORAGE_CLEANUP_MAX` is 24 h (an
+    assumption; tunable).
+  - The `bounded_ttl / 2` term applies only to bounded sources. For eBay's ≤6 h
+    TTL the deadline is 3 h.
+  - The deadline is always far inside Apify's default-storage expiry: 7 days
+    on Free, 31 days on paid plans (Apify help center, retrieved 2026-09-24).
+- **Cleanup.** Cleanup deletes the run's default dataset and default KV store.
+  An HTTP 404 counts as deleted. It runs for successful, rejected, failed, and
+  abandoned runs. It fires when the import reaches a terminal state or when the
+  deadline passes, whichever comes first, independent of import success.
+  - If the deadline passes before stage 1 committed, the import is `rejected`
+    with `storage_deadline`: retention wins over completeness.
+  - Failures retry with backoff. A row still `delete_failed` past its deadline
+    logs at error level and appears in the pilot and spend reports.
+- **Actor contract.** The Actor may write merchant content only to the default
+  dataset. The `OUTPUT` record in the default KV store holds only counts, scope,
+  and errors. This is an Actor-PR review item.
+- *Rejected (a):* a retention column on `SourceConfig`. Legal retention would
+  become admin-editable, and `expires_policy` is a callable. The code registry is
+  reviewed and tested.
+- *Rejected (b):* deleting only after a durable import (revision 1). Rejected,
+  failed, and abandoned datasets would then live until Apify's own expiry, far
+  beyond bounded TTLs.
+
+**MS2-D-26 — Every admitted charge is bounded; an overrun latch pauses paid
+admission (Slice E; review F-08).** This decision amends MS2-D-17.
+- **Charge components.** Unit prices are from the official pricing page
+  (apify.com/pricing, retrieved 2026-09-24). Each price is a setting with a
+  cited URL and date. For live admission, no price setting has a default.
+
+  | Component | Bound in the reservation | Enforced by |
+  | --- | --- | --- |
+  | Compute | `memory_mb/1024 × timeout_s/3600 × usd_per_cu` ($0.20/CU on Free/Starter) | The start request's `memory` and `timeout` query parameters. The start response's `options` must equal the request; on a mismatch the run is aborted and the latch trips. |
+  | Dataset and KV storage, reads, writes | `max_items × (write + read unit price)` plus timed storage for `max_items × max_item_bytes` until the cleanup deadline | Actor input caps `maxItems` and `maxPages`, and a per-row byte cap (contract schema `maxLength`). Import rejects over-cap rows. A dataset count above `max_items` trips the latch. |
+  | Data transfer | `max_requests × max_response_bytes × transfer unit price` | Actor input caps. If the transfer rate's direction semantics cannot be verified in E2, live admission stays disabled. |
+  | Proxy | Disallowed: $0 | Contract and Actor input carry no proxy configuration (Actor-PR review item). Any non-zero proxy component in the run's `usage` breakdown trips the latch. Residential proxies are never used. |
+
+- **Reservation.** `(Σ component bounds) × (1 + margin)`. If any unit price is
+  missing, admission is denied with `pricing_unverified`.
+- **Ceiling.** `effective_hard_cap = $20 − HW_RADAR_APIFY_CAP_DEDUCTION_USD −
+  HW_RADAR_APIFY_SAFETY_MARGIN_USD`.
+  - The owner sets the deduction after answering OQ23 (does a plan base fee
+    count against the $20?). While it is unset, live admission is denied.
+  - The safety margin defaults to $2.00 (an assumption; tunable).
+- **Invariant.** `reconciled_actual(window) + Σ unreconciled reservations of any
+  age + new reservation ≤ class cap`.
+- **Window and attribution.**
+  - Spend is attributed at `reserved_at`, fixed for good.
+  - The window is 31 days plus the maximum configured run timeout. A run
+    reserved just before a billing-cycle start whose charges land inside that
+    cycle is therefore still counted.
+  - An unreconciled reservation never ages out.
+- **Serialization.** Reserve, reconcile, latch trip, and latch reset each take
+  the same `pg_advisory_xact_lock(APIFY_BUDGET_LOCK)`.
+- **Overrun latch.** A new `apify_budget_latch` table in migration 0022 records
+  each trip and each clear.
+  - Trip conditions at reconcile: actual > estimate × (1 +
+    `HW_RADAR_APIFY_OVERRUN_TOLERANCE`, default 0.10, an assumption); any proxy
+    usage; a dataset over its cap; or a start-option mismatch.
+  - While tripped, all paid admission is denied with `overrun_latch`, and every
+    Apify source shows `budget_paused`.
+  - It clears only through the owner command `apify_budget_reset --reason`, or
+    through an estimator correction: a bump of
+    `HW_RADAR_APIFY_ESTIMATOR_VERSION`, recorded as a clear event.
+- **Late usage.** The reservation stays counted at its estimate until
+  `usage_total_usd` arrives. After 31 days it is still counted and is reported
+  as `unreconciled_stale` for owner action.
+- *Rejected:* revision 1's "the estimate is a hard bound" with an assumed
+  overhead. Storage, transfer, and proxy were unbounded, and an overrun was only
+  logged.
+
+**MS2-D-27 — Category hint through the corpus tooling (Slice B task B6; review
+F-02).**
+- **Corpus schema.** `ListingFields` (`matching/eval/corpus.py:181`,
+  `extra="forbid"`) gains `category_hint: str | None = None`, with the A2 slug
+  validation.
+- **Harvest.** `harvest_corpus._staging_entry` (`:70`) writes a
+  `"category_hint"` key only when the hint is non-null.
+- **Replay.** `eval/evaluate._ingest` (`:106`) passes the hint into the
+  `ParsedListing` it rebuilds.
+- **Compatibility.** The existing drive corpus has no such key and loads
+  byte-identically. Staging output for unhinted listings is byte-identical. The
+  A0 baseline is unchanged.
+- **Why Slice B, not F.** The hint changes a decision only once a non-drive
+  category is registered (B3). F4 should be pure measurement, with no schema
+  change inside it.
+- *Rejected:* carrying the hint in `attrs`. A2 forbids the reserved key.
+
+**MS2-D-28 — Remote rows skip the HTTP soft-block classifier (Slice D;
+discovered during revision 2).**
+- **Hazard.** `_classify_batch` flags any item whose body is under 20% of the
+  site's median per-item body size (`classify.py:55-59`). That median comes from
+  the site's prior successful FULL runs (`pipeline.py:171-187`). Dataset rows are
+  small JSON, while local runs store full pages, so after a provider switch
+  every imported row would be classified `ANTI_BOT`.
+- **Decision.**
+  - The import path does not run `_classify_batch`. Remote transport health comes
+    from `classify_run`.
+  - `_median_body_bytes` counts only runs whose `detail_json["provider"]
+    ["provider_kind"]` is `local` or absent.
+- *Rejected:* a separate per-provider median. Remote rows are not HTTP responses,
+  so a soft-block ratio does not apply to them.
 
 ## Requirement traceability
 
@@ -533,14 +951,14 @@ Task IDs refer to the slices below.
 | AC-2 — match/no_match/unknown per first-class category | spec :938 | C3 | `tests/db/test_watch_evaluation.py` parametrized 4 categories × 3 verdicts |
 | AC-3 — real-observation shortlist without score | spec :939 | C4, F6 (owner-gated) | `test_shortlist.py` (fixtures); F6 live evidence; `grep` proves no scoring import |
 | AC-4 — local ↔ Actor switch keeps identity/history | spec :940 | D7 | `test_apify_import.py::test_provider_switch_preserves_identity_history_and_watch_state` |
-| AC-5 — truncated Actor run cannot delist | spec :941 | A6, D8 | `test_collection_provider.py::test_truncated_remote_run_*`; `test_apify_import.py::test_truncated_actor_fixture_cannot_delist` |
-| AC-6 — duplicate completion/import idempotent | spec :942 | D6 | `test_apify_import.py::test_duplicate_completion_is_noop`, `::test_crash_between_persist_and_mark_replays_once` |
-| AC-7 — attributable cost; admission fails closed | spec :943 | E3–E6 | `test_apify_ledger.py` (attribution by source/provider; denial at limit; kill switch; outstanding counted) |
+| AC-5 — truncated Actor run cannot delist | spec :941 | A6, D8 | `test_collection_provider.py::test_truncated_remote_run_*`, `::test_local_after_prolonged_truncated_remote_cannot_mass_delist`; `test_apify_import.py::test_truncated_actor_fixture_cannot_delist` |
+| AC-6 — duplicate completion/import idempotent | spec :942 | D6, D10 | `test_apify_import.py::test_duplicate_completion_is_noop`, `::test_crash_between_persist_and_mark_replays_once`, `::test_crash_after_observation_commit_resumes_without_duplicates`, `::test_crash_before_finalization_finalizes_once` |
+| AC-7 — attributable cost; admission fails closed | spec :943 | E2–E6, E8 | `test_apify_ledger.py` (attribution by source/provider; denial at limit; kill switch; outstanding counted; `::test_overrun_latch_denies_admission_until_reset`; `::test_run_spanning_window_boundary_is_counted`) |
 | AC-8 — full gate green | spec :944 | every slice | gate + `makemigrations --check` per commit |
 | FR-001 — per-source provider choice, freshness SLO kept | spec :246 | D2 (MS2-D-18), F1 | `test_provider_selection.py` (CHECK, default local) |
-| FR-003 — identity ladder, no false cross-category merges | spec :248 | A3, B3 | `test_resolver_dispatch.py::test_cross_category_alias_goes_to_review` (B) |
+| FR-003 — identity ladder, no false cross-category merges | spec :248 | A3, B3 | `test_resolver_categories.py::test_cross_category_alias_goes_to_review`; `::test_non_authoritative_alias_never_auto_accepts_new_category` (MS2-D-21) |
 | FR-006 — eligibility reasons mandatory | spec :251 | C3 | every `watch_evaluation` row has non-empty `reasons` (DB test) |
-| FR-014 — verdict persisted; unknown never passes | spec :259 | C2, C3 | `test_eligibility_aggregate.py` (unknown ≠ match); listing-tier evidence cannot `match` a product clause |
+| FR-014 — verdict persisted; unknown never passes | spec :259 | C2, C3, C4 | `test_eligibility_aggregate.py` (unknown ≠ match); listing-tier evidence cannot `match` a product clause; `test_shortlist.py::test_prior_match_then_contradictory_evidence_leaves_shortlist` (MS2-D-20) |
 | NFR-003 — secrets via OpenBao | spec :267 | D3 | client reads `HW_RADAR_APIFY_TOKEN` only; test asserts no token in logs/detail_json |
 | NFR-006 — new category = satellite + rows | spec :270 | B1, B2 | no change to spine models (migration test + diff) |
 | IR-007 — provenance-bearing category references | spec :283 | B4 | seed validation rejects a row without `source_url`/`retrieved_on` |
@@ -565,9 +983,13 @@ Task IDs refer to the slices below.
 | R-MS2-12 — shortlist read model (gap) | spec :939, :948 | C4 | `shortlist()` / `review_queue()` tests |
 | R-MS2-13 — per-run cost recorded; admission stops at budget | ADR 0021 :148 | E3–E6 | ledger tests |
 | R-MS2-14 — ADR-0016 pattern reuse only | ADR 0016 :54-69 | MS2-D-17 | no `SearchBudgetGate` import (grep) |
-| R-MS2-15 — Actor-side retention (gap) | — | D5 | dataset deleted after durable import; delete failure retried and logged |
+| R-MS2-15 — Actor-side retention (gap) | — | D11 | `test_apify_storage_cleanup.py` (deadline cleanup for successful/rejected/failed/abandoned runs; retries; 404 idempotent) |
 | ADR 0021 — imports idempotent; completeness evidence; one scheduler | ADR 0021 :92-108 | D1, D5, D6 | as AC-5/AC-6; no Apify schedule (config review) |
-| ADR 0012 amendment — polled completion, idempotent | ADR 0012 :94 | D5 | `test_apify_poll_job.py` |
+| ADR 0012 amendment — polled completion, idempotent | ADR 0012 :94 | D5, D10 | `test_apify_poll_job.py` (both selectors; restart recovery per state) |
+| ADR 0017 — recovery probes per selected provider | ADR 0017 | D12 | `test_apify_recovery_probe.py::test_local_success_cannot_clear_actor_provider_failure`, `::test_budget_admitted_actor_probe_recovers_source` |
+| DR-001/DR-008 — bounded retention on remote imports | spec :290 | D11 | `test_apify_retention.py::test_bounded_source_import_retains_listings_snapshots_raw_and_evaluations` |
+| ADR 0021 — complete-empty distinguishable from failure | ADR 0021 :100 | D1, D8 | `test_apify_import.py::test_complete_empty_run_delists_scope_end_to_end`, `::test_ambiguous_empty_run_cannot_delist` |
+| MS-2 Task 6 prerequisite — non-drive corpus replay | spec :932 | B6 | `test_corpus_category_hint.py::test_harvested_non_drive_entry_reaches_category_rules` |
 
 ## Slice order and migration assignment
 
@@ -576,13 +998,17 @@ Task IDs refer to the slices below.
 | **A** | Seams: category registry + hint; provider seam + run evidence + completeness gate | none | — | Every later slice plugs into these seams. Behavior-preserving, so it is safe to land first. |
 | **B** | GPU/RAM/CPU satellites, category rows, rules, reference seeds, cross-category guard | `0018_category_spec_satellites`, `0019_seed_categories` | A | C's product clauses read the satellites. |
 | **C** | Watch + requirement satellites + evaluator + `watch_evaluation` + shortlist read model | `0020_watch_requirements` | B | D's provider-switch test must prove watch state survives (AC-4). |
-| **D** | Apify provider (source-agnostic), contract, `provider_run`, idempotent import, scoped absence, provider selection. Production admission = deny-all | `0021_provider_runs` | A, C | Live runs are impossible until E replaces deny-all. D is fail-closed by construction. |
+| **D-prep** | D1 (contract models, committed schemas, `classify_run`, fixtures) and D3 (httpx client). Pure code with no DB schema and no pipeline wiring. | none | A | Has no dependency on B or C, so it may be developed and merged any time after A. |
+| **D** (core) | D2, D4–D12: `provider_run`, staged import, scoped absence, provider selection, poll selectors, probes, retention, cleanup. Production admission = deny-all | `0021_provider_runs` | C, D-prep | D7 needs `WatchEvaluation` (C), and stage 4 needs the evaluator. Live runs are impossible until E replaces deny-all. D is fail-closed by construction. |
 | **E** | Spend ledger, admission, reconcile, `budget_paused`, spend report | `0022_apify_spend_ledger` | D | Reservations attach to `provider_run`. |
 | **F** | Pilot sources (eBay category sweeps, SPD check), measurement, owner-gated Actor proof, end-to-end evidence | none planned | B–E | Integration and measurement last (ADR 0022 "measure before breadth"). |
 
-B and D touch disjoint code and may be developed in parallel worktrees. They merge
-in the order above; if D merges first, renumber per Global constraints. Every
-slice leaves `dev` deployable with all sources still disabled.
+**Merge order = dependency graph:** A → B → C → D (core) → E → F. D-prep merges
+at any point after A and before D (core). Revision 1's "if D merges first,
+renumber" alternative is withdrawn: D (core) needs C's code and schema, and
+renumbering migrations cannot satisfy that dependency. For parallel work, only
+D-prep runs alongside B/C. Every slice leaves `dev` deployable with all sources
+still disabled.
 
 ## Slice A — Seams (behavior-preserving, no migration)
 
@@ -636,7 +1062,10 @@ time):
 2. Add `test_ladder_golden_baseline(snapshot)`. It runs every
    `ladder.decide(...)` input tuple used in `tests/unit/test_ladder.py`
    (re-declared locally) and snapshots the `Verdict` fields `outcome`, `grain`,
-   `rung`, `method`, `target`, `confidence`, and `sorted(evidence)`.
+   `rung`, `method`, `confidence`, the target fields `(grain, family_id,
+   model_id, variant_id, family_key)`, and the full sorted evidence *items*
+   (keys and values). As landed, this is stronger than sorted keys, and it
+   deliberately excludes `TargetRef.category_slug`, which A3 adds.
 3. Run `HW_RADAR_DB_PORT=5433 uv run pytest tests/db/test_ms2_decision_baseline.py --snapshot-update -q`
    **on the unmodified base**, then run it again without `--snapshot-update`. It
    should be green.
@@ -663,6 +1092,12 @@ run `--snapshot-update`.
    - Add `*, veto: Veto = contradictions` to `decide`.
    - Replace the three `contradictions(` calls inside `decide` with `veto(`. Leave
      the rung-2 capacity check as is.
+   - Rename the two local result variables that were named `veto` (rung 0 at
+     `:161`, rung 1 at `:196`) to `vetoed`. Otherwise the recipe yields
+     `veto = veto(...)`, which rebinds the annotated callable parameter to a list
+     and fails strict basedpyright. The evidence key stays `"veto"` and its
+     values are byte-identical. The OEM fan-out filter (`:225`) calls
+     `veto(...)` inline.
 3. **RED.** `tests/unit/test_categories.py`:
    - `test_drive_rules_bind_existing_functions_by_identity`: `rules_for("drive")`
      has `extract is vocab.extract`,
@@ -682,6 +1117,7 @@ run `--snapshot-update`.
    ```python
    DRIVE: Final = "drive"
    LEGACY_DEFAULT_CATEGORY: Final = DRIVE
+   CATEGORY_SLUG_MAX_LENGTH: Final = 50
    CATEGORY_SLUG_RE: Final = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
    class CandidateExtractor(Protocol):
@@ -701,10 +1137,13 @@ run `--snapshot-update`.
    def dispatch_category(hint: str | None) -> str: ...  # None -> DRIVE; validates slug
    ```
 
+   `rules_for` builds the `CategoryRules` on each call from the current module
+   attributes (MS2-D-02); it does not bind them at import.
    Module docstring: record the legacy-default trap (MS2-D-03) and that the
    ORM-bound spec readers live in `resolver._SPEC_READERS`.
-5. Run `uv run pytest tests/unit/test_categories.py tests/unit/test_ladder_veto.py tests/unit/test_ladder.py -q`,
-   then the full gate. Commit:
+5. Run `uv run pytest tests/unit/test_categories.py tests/unit/test_ladder_veto.py tests/unit/test_ladder.py -q`
+   and `uv run basedpyright src/hw_radar/matching/ladder.py src/hw_radar/matching/categories.py`
+   (0 errors), then the full gate. Commit:
    `feat(matching): add category rules registry and injectable ladder veto`.
 
 ### A2 — Category hint on the ingestion contract
@@ -721,7 +1160,7 @@ run `--snapshot-update`.
    Fails: unknown field / no validation.
 2. **GREEN.** In `contracts.py`:
    - Add `CATEGORY_HINT_ATTR: Final = "category_hint"`.
-   - Add `ParsedListing.category_hint: str | None = Field(default=None, max_length=50, pattern=CATEGORY_SLUG_RE.pattern)`.
+   - Add `ParsedListing.category_hint: str | None = Field(default=None, max_length=CATEGORY_SLUG_MAX_LENGTH, pattern=CATEGORY_SLUG_RE.pattern)`.
      Import the pattern constant from `hw_radar.matching.categories`. That
      module is pure Python and imports no Django or acquisition module, so no
      import cycle arises.
@@ -758,9 +1197,12 @@ run `--snapshot-update`.
      `evidence["unsupported_category"] is True` and `evidence["category"] == "gpu"`.
      `Listing.product_model` stays None. The edge evidence has no
      `mpn_hypothesis` key, which `ladder.decide()` always writes
-     (`ladder.py:154`). That proves the drive ladder never ran. A monkeypatch of
-     `vocab.extract` would prove nothing, because the registry binds the function
-     object at import.
+     (`ladder.py:154`). That proves the drive ladder never ran, without relying
+     on a monkeypatch. `rules_for` resolves module functions per call, so a
+     monkeypatch would be honored. The frozen `test_resolver.py` error-edge
+     tests (≈:242–314) depend on that.
+   - Invalid-hint case (as landed): a non-string or non-slug hint in
+     `attrs_json` yields the error edge, never a drive fallback.
    - `test_rung2_provisional_family_uses_dispatch_category`: the
      `test_rung2_decode_*` title makes a family whose `category.slug == "drive"`.
    - `test_spec_readers_match_registry`:
@@ -814,6 +1256,10 @@ run `--snapshot-update`.
        fields equal;
      - `truncated` + ineligible → `None`;
      - `partial_failure` and `failed` → `None`.
+     - `complete` + `scope.complete is False` + ineligible (remote) → `None`
+       (`test_gate_remote_complete_evidence_with_incomplete_scope_is_none`,
+       added during Slice A verification). With eligible local evidence, the
+       scope passes unchanged.
    - `test_gate_passes_none_scope_through`.
    - `test_continuity_counts_only_complete_or_eligible_truncated`.
 
@@ -864,10 +1310,14 @@ run `--snapshot-update`.
        run_collection(LocalCollectionProvider(adapter), resolver, ...)`, and its
        signature is unchanged.
      - The FULL-run delist stage becomes: `scope = provider.delist_scope(batch,
-       parsed)`, then `evidence = provider.run_evidence(...)`. Continuity is
-       recorded only if `counts_toward_sweep_continuity(evidence)`, and
-       `_apply_delist` runs on `gate_delist_scope(scope, evidence)` when that is
-       not None.
+       parsed)`, then `evidence = provider.run_evidence(...)`.
+     - If `counts_toward_sweep_continuity(evidence)`, call
+       `_record_sweep_continuity`. Otherwise call the new
+       `_break_sweep_continuity(site)`, which sets the FULL lane's
+       `continuous_since := None` (MS2-D-11). The helper sits beside
+       `_record_sweep_continuity` and is a no-op without a `SourceConfig`.
+     - `_apply_delist` runs on `gate_delist_scope(scope, evidence)` when that
+       is not None.
      - Non-FULL runs compute evidence with `scope=None`.
      - Write `detail_json["provider"] = evidence.model_dump(mode="json")`.
    - Keep `_classify_batch` on `provider.expects_json`, and keep the
@@ -897,6 +1347,20 @@ run `--snapshot-update`.
      same assertions.
    - `test_truncated_remote_run_does_not_advance_continuity`: with
      `continuous_since=None` before the run, it is still `None` after.
+   - `test_ineligible_run_breaks_existing_continuity`: with an old non-null
+     `continuous_since`, a successful truncated remote FULL run leaves it
+     `None`. The test is parametrized over `truncated`, `partial_failure`, and
+     `failed` evidence, which all reach the success path in this fake.
+   - `test_local_after_prolonged_truncated_remote_cannot_mass_delist`: seed an
+     old non-null `continuous_since`, a prior successful local FULL run, and
+     several active listings whose `last_seen` is well past the grace. Then run
+     several truncated remote runs at intervals within the continuity
+     tolerance. Then run a local fake whose `DelistDetector` returns an
+     incomplete scope with a short grace. Expected: zero delists, and
+     `continuous_since` restarts at the local run's `observed_at`.
+   - `test_complete_remote_evidence_with_incomplete_scope_cannot_stale_delist`
+     (added during Slice A verification): remote `complete` evidence with a
+     `complete=False` scope delists nothing.
    - `test_complete_remote_run_delists_absent_listing` (positive control): `k-old`
      is delisted with `DelistReason.ABSENT_FROM_SWEEP`.
    - `test_local_incomplete_scope_keeps_stale_absence_path`: a local fake adapter
@@ -920,8 +1384,9 @@ run `--snapshot-update`.
 **Slice A acceptance:**
 - The syrupy baseline is unchanged.
 - All frozen regression files pass unmodified.
-- Truncated, partial, and failed provider results cannot delist or advance
-  continuity; complete ones can.
+- Truncated, partial, and failed provider results cannot delist, and they break
+  any existing continuity. Complete ones can delist. Remote `complete` evidence
+  with an incomplete scope cannot stale-delist.
 - An unregistered category never runs drive rules.
 - There is no migration.
 
@@ -932,7 +1397,10 @@ run `--snapshot-update`.
 
 ## Slice B — First-class category specs and rules
 
-**Scope:** MS2-D-04, -05, -06.
+**Scope:** MS2-D-04, -05, -06, -21, -27.
+
+**Task order:** B1 → B2 → B3 → B4a → B4b → B4c → B6 → B5. B5 is the close-out
+and runs last.
 
 **Files:**
 - `catalog/models/identity.py` (satellites + choices);
@@ -943,7 +1411,9 @@ run `--snapshot-update`.
   `variant_on_demand`);
 - `refdata/{contracts,persist}.py` (category-discriminated spec payload);
 - `refdata/seeds/`;
-- `catalog/admin.py`.
+- `catalog/admin.py`;
+- `matching/eval/{corpus,evaluate}.py` and
+  `catalog/management/commands/harvest_corpus.py` (B6 only).
 
 - **B1 — Satellites (0018).** Add `GpuSpec`, `RamSpec`, and `CpuSpec` per the
   MS2-D-04 table, each with `retention_constraints("<table>")` and
@@ -972,20 +1442,88 @@ run `--snapshot-update`.
     guard applies to prior and alias targets.
   - **Basic-watch.** Basic-watch rules are exact-alias-only; `server` sets
     `variant_on_demand=False`.
+  - **Acceptance policy (MS2-D-21).** Add `AcceptancePolicy` and
+    `CategoryRules.acceptance`, and apply the policy in `_run_ladder` after
+    `decide`. Accepted non-drive edges record `alias_source_kind`.
+  - **Category change writes an edge.** This is a residual from Slice A. The
+    resolver's no-spam rule writes no new edge when the outcome is unchanged.
+    So a listing whose current edge is a `none` or `review` with
+    `category=drive` keeps that stale category when a later snapshot hints
+    `gpu`. B3 treats a change of `evidence["category"]` as a decision-input
+    change and writes a new edge. For drive listings the category never changes,
+    so drive behavior and the A0 baseline are unaffected.
   - **Version.** Bump `MATCHER_VERSION` because rules were added. The drive
     baseline snapshot must still match (decisions, not the version string).
-  - Tests: `tests/unit/test_{gpu,ram,cpu}_rules.py` (extraction/veto tables),
-    `tests/db/test_resolver_categories.py` (rung-1 review while auto-accept is
-    off, cross-category review, server no-variant), and the A0 baseline.
-- **B4 — Reference seeds.** Make the refdata envelope category-discriminated;
-  drive seed documents stay valid unchanged. Every non-drive row requires
-  `source_url` + `retrieved_on`. `catalog_authoritative` applies only to
-  first-party hosts listed in the seed document's provenance block.
-  - Author a small curated seed per category (a handful of models each, enough
-    for C's representative cases) from first-party manufacturer pages, recording
-    the URL and date.
-  - Tests: `tests/db/test_refdata_categories.py`, plus the frozen
-    `test_refdata_*` suites green.
+  - Tests:
+    - `tests/unit/test_{gpu,ram,cpu}_rules.py`: extraction and veto tables.
+    - `tests/db/test_resolver_categories.py`: rung-1 review while auto-accept is
+      off; `test_cross_category_alias_goes_to_review`; server no-variant.
+    - `test_non_authoritative_alias_never_auto_accepts_new_category`. With
+      auto-accept enabled through a test-only registration, the same token is
+      aliased by `catalog_authoritative`, by `manual`, and by `listing_derived`.
+      Only the authoritative alias accepts; the other two yield `review` with
+      `acceptance_policy` evidence.
+    - `test_alias_learned_from_earlier_observation_goes_to_review`: a listing
+      learns a `listing_derived` alias, and a later listing hits it.
+    - `test_family_grain_fanout_is_review_for_new_categories`.
+    - `test_prior_from_non_authoritative_edge_is_review`.
+    - `test_drive_acceptance_unchanged` (the A0 baseline).
+    - `test_category_change_writes_new_edge_even_when_outcome_unchanged`.
+- **B4 — Reference seeds.** B4 is split into three sub-tasks. Drive seed
+  documents stay valid, unchanged.
+  - **B4a — Contract (`refdata/contracts.py`).**
+    - Add a `category` discriminator to `SeedDocument`, where `drive` is the
+      default when absent, so existing drive documents validate unchanged.
+    - Make `SeedModel.spec` a tagged union
+      `SeedDriveSpec | SeedGpuSpec | SeedRamSpec | SeedCpuSpec`. Each variant's
+      fields mirror its satellite by name, following the existing convention
+      (`contracts.py:57-58`).
+    - Add per-row provenance: `source_url` and `retrieved_on` on every non-drive
+      `SeedModel`. The per-document block alone no longer satisfies IR-007 for
+      new categories.
+    - Extend the `SeedProvenance.source_kind` Literal with a non-first-party
+      value that maps to alias `source_kind=manual`. This follows MS2-D-06:
+      authoritative status applies only to first-party manufacturer pages.
+    - Tests: `test_refdata_categories.py::test_drive_documents_validate_unchanged`,
+      `::test_non_drive_row_without_source_url_rejected`,
+      `::test_spec_variant_must_match_document_category`, and
+      `::test_non_first_party_row_maps_to_manual`.
+  - **B4b — Importer (`refdata/persist.py`).**
+    - Replace the hard-coded `slug="drive"` lookup (`:152`) with the document's
+      category.
+    - Replace the `DriveSpec` write (`:208`) with a category → satellite
+      dispatch table, keyed like `_SPEC_READERS`.
+    - The `catalog_authoritative` / `manufacturer_reference` gating
+      (`:225-228`) applies only to first-party rows. Conflict detection stays
+      unchanged.
+    - Tests: `::test_gpu_document_imports_to_gpu_spec_and_gpu_category`, and
+      `::test_drive_import_byte_identical` (the frozen `test_refdata_*` suites
+      stay green).
+  - **B4c — Seeds.** Author a small curated seed per category, enough for C's
+    representative cases, from the first-party sources in MS2-D-06. Record the
+    URL and date for every row. The suggested scope is homelab and used-server
+    relevance:
+    - CPU: about 10–15 rows (recent EPYC SP5 and Xeon LGA4677, plus AM5 and
+      LGA1700/1851 if consumer coverage is wanted);
+    - GPU: about 8–12 rows (NVIDIA V100/A100/H100 class, high-VRAM GeForce, and
+      AMD Instinct);
+    - RAM: about 10–15 rows (DDR4 and DDR5 RDIMM at 16/32/64 GB, sourced from
+      Micron's decoder first).
+
+    Community decode grammars (Samsung, SK hynix) and OEM↔module-maker
+    equivalences are seeded as `manual` or not at all.
+- **B6 — Category hint through the corpus tooling (MS2-D-27).** Add
+  `ListingFields.category_hint`. `_staging_entry` writes the key only when it is
+  non-null, and `_ingest` passes the hint through.
+  - Tests (new file `tests/db/test_corpus_category_hint.py`):
+    - `test_harvested_non_drive_entry_reaches_category_rules`: a `ParsedListing`
+      with `category_hint="gpu"` and a drive-shaped title that the drive rules
+      would accept at rung 1 goes through `_staging_entry`, a JSONL round trip,
+      `load_corpus`, and `evaluate_corpus`. The resulting edge has
+      `evidence["category"] == "gpu"` and never a drive model target.
+    - `test_unhinted_staging_entry_bytes_unchanged`.
+    - `test_existing_drive_corpus_loads_unchanged`.
+    - The A0 baseline is unchanged.
 - **B5 — Admin + close-out.** Register the satellites in Django admin, then run
   the gate and update TODO/STATUS.
 
@@ -993,6 +1531,9 @@ run `--snapshot-update`.
 - AC-1 holds.
 - GPU/RAM/CPU exact-alias hits reach `review` while auto-accept is off.
 - Cross-category hits never auto-accept.
+- With auto-accept enabled, only authoritative aliases at model or variant
+  grain accept for the new categories.
+- A harvested non-drive corpus entry replays through its own category rules.
 - The drive baseline is unchanged.
 
 **Exit evidence:** migration apply/rollback transcript on a DB holding drive data;
@@ -1000,7 +1541,7 @@ gate.
 
 ## Slice C — Watches, eligibility, shortlist read model
 
-**Scope:** MS2-D-07, -08, -09.
+**Scope:** MS2-D-07, -08, -09, -20.
 
 **Files:**
 - new `catalog/models/watch.py`;
@@ -1015,7 +1556,8 @@ gate.
 - **C1 — Schema (0020).** Add `Watch`, the four requirement satellites
   (ArrayFields of the satellite choices), and `WatchEvaluation`
   (`RetentionGoverned`, CHECK pair, unique `(watch, listing)`, index
-  `(watch, verdict)`).
+  `(watch, verdict)`, and the MS2-D-09 input-binding fields, including the
+  nullable `resolution` FK with `SET_NULL`).
   - Tests: constraints, including the at-most-one target CHECK and the retention
     pair; also the migration test.
 - **C2 — Requirement service.** Per-category Pydantic `RequirementSpec`s back
@@ -1026,11 +1568,14 @@ gate.
 - **C3 — Evaluator.** Implement `evaluate_listing(listing_id)` for all enabled
   watches of the dispatch category, with a clause registry per category and
   clause/aggregate semantics per MS2-D-08.
-  - It writes or updates `WatchEvaluation`, mirroring listing retention.
-  - It runs in the pipeline after resolve via a `ListingEvaluator` protocol
-    (`NullEvaluator` default in `run_collection`; the poller passes the real one).
-    Failures are counted in `detail_json["evaluator_errors"]` and never block
-    ingestion.
+  - It writes or updates `WatchEvaluation`, mirroring listing retention and
+    stamping the input binding (MS2-D-20).
+  - It runs in the pipeline after resolve via a `ListingEvaluator` protocol.
+    `run_collection(..., evaluator=None)` binds the production `WatchEvaluator`
+    (MS2-D-20), so poll, heartbeat-fired, and recovery-probe runs all evaluate
+    without caller changes. `heartbeat.py` and `poller/service.py` are not
+    edited in C. A listing whose resolution raised is skipped. Failures are
+    counted in `detail_json["evaluator_errors"]` and never block ingestion.
   - Tests:
     - `tests/unit/test_eligibility_clauses.py`: per-clause tri-state tables,
       including listing-tier contradiction ⇒ `no_match`, listing-tier agreement
@@ -1042,25 +1587,49 @@ gate.
     - Soft-threshold test.
     - Delist pull-forward and purge-registry test.
     - `test_pipeline_evaluator_failure_isolated`.
+    - `tests/db/test_evaluation_binding.py`:
+      - `test_prior_match_then_contradictory_evidence_updates_verdict`: a new
+        over-budget snapshot turns `match` into `no_match`.
+      - `test_evaluator_failure_after_prior_match_leaves_shortlist`: the
+        evaluator raises on the new snapshot, so the old `match` row is
+        `pending` and absent from `shortlist()`.
+      - `test_resolution_change_makes_evaluation_pending`.
+      - `test_heartbeat_fired_run_updates_watch_evaluation`: `run_heartbeat`
+        with a transitioning fake probe fires the FULL run, and the evaluation
+        is re-bound to the new snapshot with no evaluator argument passed.
+      - `test_recovery_probe_run_evaluates`.
+      - `test_listing_with_resolver_error_is_not_evaluated`.
 - **C4 — Read model.** Implement `shortlist(watch_id)` and
   `review_queue(watch_id)` with freshness `fresh | stale` (stale = latest
   snapshot older than 2 × the source's `cadence_baseline_s`; a labeled
   assumption, tunable). E adds `budget_paused`. Add the `show_shortlist`
   command.
-  - Tests: ordering by landed USD; only the current requirement version is
-    included; delisted and expired rows are excluded; the result has no score
-    field; a `grep` guard asserts no import of any scoring module.
+  - Only current rows (MS2-D-20) qualify. `review_queue()` labels rows
+    `unknown` or `pending`. `evaluate_watches --pending` re-evaluates non-current
+    rows.
+  - Tests: ordering by landed USD; only current evaluations are included (a
+    stale requirement version, snapshot, resolution, or evaluator version each
+    excludes the row and shows it as `pending`);
+    `test_prior_match_then_contradictory_evidence_leaves_shortlist`; delisted
+    and expired rows are excluded; the result has no score field; a `grep` guard
+    asserts no import of any scoring module.
 - **C5 — Close-out:** gate; TODO/STATUS.
 
 **Acceptance:**
 - AC-2 holds.
 - The shortlist runs on fixture observations with no ADR-0011 artifact (AC-3's
   code half).
-- Evaluator failures are isolated.
+- Evaluator failures are isolated, and they fail closed: the affected rows
+  become `pending`.
+- Evaluation runs on the poll, heartbeat-fired, and probe paths.
 
 ## Slice D — Apify provider (source-agnostic)
 
-**Scope:** MS2-D-12…-16, -18.
+**Scope:** MS2-D-12…-16, -18, -22…-25, -28.
+
+**PRs:** D-prep is D1 + D3. D (core) runs in the order D2 → D4 → D10 → D5 →
+D6 → D7 → D8 → D11 → D12 → D9. The staged importer (D10) comes before the jobs
+and the tests that import through it. See *Slice order*.
 
 **Files:**
 - new `acquisition/apify/{client,contract,provider,jobs}.py`;
@@ -1070,57 +1639,86 @@ gate.
 - migration `0021`;
 - `contracts.py` (`ParsedListing.collection_scope`, `DelistScope.scope_key`);
 - `persist.py` (scope write; insert-if-absent snapshot for provider imports);
-- `pipeline.py` (scope-filtered `_apply_delist`; transactional import hook);
-- `poller/service.py` (apify start branch + `apify-poll` job).
+- `pipeline.py` (scope-filtered `_apply_delist`; stage functions extracted from
+  `run_collection`; local-only `_median_body_bytes`);
+- new `acquisition/retention_policy.py`;
+- new `acquisition/apify/importer.py` (the stage machine);
+- `poller/service.py` (apify start branch, provider-dispatched recovery probe,
+  and the `apify-poll` job).
 
 - **D1 — Contract.**
-  - Add the Pydantic models, committed JSON Schemas, and `classify_run(apify_status,
-    output, dataset_count) -> (RunCompleteness, reason)` per the MS2-D-14 mapping.
-  - Add frozen fixtures: complete, truncated-by-pages, timed-out,
-    partial-with-errors, failed-with-items, missing-OUTPUT, unknown-schema, and
-    count-mismatch.
-  - Tests: `tests/unit/test_apify_contract.py` covers the schema-drift guard
-    (`Model.model_json_schema() == committed file`), the mapping table over every
-    fixture, and "unknown or missing ⇒ never complete".
+  - Add the Pydantic models, committed JSON Schemas, and `classify_run(remote_status,
+    output, dataset_count, usable_count) -> (RunCompleteness, reason)` per the
+    MS2-D-14 mapping.
+  - The listing row schema carries per-field `maxLength` caps, which supply the
+    per-row byte cap in MS2-D-26. The run input schema carries `maxItems`,
+    `maxPages`, and `maxRequests`, and has no proxy field.
+  - Add frozen fixtures: complete, **complete-empty**, **ambiguous-empty**
+    (`SUCCEEDED`, empty dataset, `itemsDeclared` missing), **nonempty-unusable**,
+    truncated-by-pages, timed-out, partial-with-errors, failed-with-items,
+    missing-OUTPUT, unknown-schema, and count-mismatch.
+  - Tests: `tests/unit/test_apify_contract.py` covers:
+    - the schema-drift guard (`Model.model_json_schema() == committed file`);
+    - the mapping table over every fixture;
+    - "unknown or missing ⇒ never complete";
+    - `test_complete_empty_requires_all_zero_counts_and_pages_fetched`;
+    - `test_empty_without_evidence_is_failed_ambiguous`;
+    - `test_nonempty_unusable_is_failed_not_complete_empty`.
 - **D2 — Schema (0021).**
-  - Add `ProviderRun`; `SourceConfig.collection_provider` + CHECK;
+  - Add `ProviderRun` with the MS2-D-13 fields, including the MS2-D-22/-23/-25
+    state columns; `SourceConfig.collection_provider` + CHECK;
     `Listing.collection_scope` + index.
   - `_apply_delist` scope filter (None ⇔ NULL).
   - Tests: CHECK, uniqueness of `(provider_kind, external_run_id)` and of the
     idempotency key, and `test_scoped_complete_sweep_cannot_delist_other_scopes`.
     Frozen eBay delist tests stay green.
-- **D3 — Client.** Add a thin `httpx.AsyncClient` wrapper for the five calls,
-  with dataset pagination and the token from `HW_RADAR_APIFY_TOKEN`.
+- **D3 — Client.** Add a thin `httpx.AsyncClient` wrapper for the seven calls
+  (MS2-D-15), with dataset pagination and the token from `HW_RADAR_APIFY_TOKEN`.
+  - Start passes `memory` (MB) and `timeout` (s) as run options, following the
+    MS2-D-15 naming trap. It returns the run's `options` so the caller can verify
+    them.
   - Tests: `httpx.MockTransport`; the token never appears in logs, errors, or
-    `detail_json`.
-  - Verify live field names (`usageTotalUsd`, `defaultDatasetId`,
-    `defaultKeyValueStoreId`, `startedAt`, `finishedAt`, `buildId`,
-    `buildNumber`) against the official API reference before merge. They are
-    flagged unconfirmed in the prep evidence.
+    `detail_json`. `test_start_sends_memory_and_timeout_run_options` asserts the
+    query parameters and that the httpx request timeout is independent of them.
+    `test_delete_404_is_success`.
+  - Before merge, verify the wire names still unconfirmed in MS2-D-15 against
+    the official API reference: `usageTotalUsd`, `buildNumber`, the `usage`
+    component keys (the proxy keys matter to MS2-D-26), and platform `maxItems`
+    semantics. Record the URL and date in the client docstring.
 - **D4 — Import provider.** Add `ApifyImportProvider(provider_run)` as a
   `CollectionProvider` of kind `apify`:
-  - `fetch` reads the dataset + `OUTPUT` into a `RawBatch` with
-    `fetched_at=startedAt`;
-  - `parse` validates rows, rejects `siteKey` ≠ the run's site, and carries
-    `category_hint`/`collection_scope`;
-  - `delist_scope` returns a scope only for `complete`, with `scope_key`;
-  - `run_evidence` comes from `classify_run` and is never stale-eligible.
+  - `fetch` reads the dataset into a `RawBatch` of dataset rows only, with
+    `fetched_at=startedAt`. `OUTPUT` is stored on `provider_run` (MS2-D-14);
+  - `parse` validates rows, rejects `siteKey` ≠ the run's site, rejects rows over
+    the byte cap, and carries `category_hint`/`collection_scope`;
+  - `delist_scope` returns a scope only for `complete` (including
+    complete-empty), with `scope_key`;
+  - `run_evidence` comes from `classify_run` and is never stale-eligible;
+  - retention comes from `source_retention(site_key)` (MS2-D-25), never from
+    defaults;
+  - `_classify_batch` is not applied to dataset rows, and `_median_body_bytes`
+    counts local runs only (MS2-D-28). Test:
+    `test_provider_switch_does_not_soft_block_imports_or_local_runs`.
 - **D5 — Jobs.**
   - The start job runs through `check_admission`, then a `BudgetAdmission`
     protocol. Its production binding is `DenyAllAdmission`, so live starts are
     impossible until E.
-  - The `apify-poll` interval job moves terminal runs to import:
-    `select_for_update` claim → `run_collection` with the persistence
-    transaction hook → `imported` → delete the dataset (failure logged and
-    retried).
+  - The `apify-poll` interval job runs the two MS2-D-23 selectors. Terminal rows
+    enter the MS2-D-22 stage machine (D10). Storage cleanup is its own unit of
+    work (D11).
   - Actor failure maps to ADR-0017 lifecycle events via the existing
-    classification.
-  - Tests: `tests/db/test_apify_poll_job.py`.
+    classification, at stage 5 or at reject.
+  - Tests (`tests/db/test_apify_poll_job.py`):
+    - `test_active_selector_polls_only_non_terminal_runs`;
+    - `test_outstanding_selector_picks_terminal_rows_with_unfinished_import`;
+    - `test_one_failing_row_does_not_block_others`.
 - **D6 — Idempotency (AC-6).**
   - `test_duplicate_completion_is_noop`: a second import of the same run adds no
     `ScraperRun`, `OfferSnapshot`, or `RawPayload` rows.
-  - `test_crash_between_persist_and_mark_replays_once`.
+  - `test_crash_between_persist_and_mark_replays_once`: a crash inside the
+    stage-1 transaction rolls back, and the replay imports exactly once.
   - `test_replayed_dataset_read_does_not_duplicate_snapshots`.
+  - `test_retry_reuses_scraper_run`.
 - **D7 — Provider switch (AC-4).** On a synthetic fixture source, run a local
   fake adapter, then import an Apify fixture with the same keys and scope, then
   switch back to local.
@@ -1128,50 +1726,153 @@ gate.
     created.
   - `WatchEvaluation` rows persist.
   - Covered by `test_provider_switch_preserves_identity_history_and_watch_state`.
-- **D8 — Truncation (AC-5).**
+- **D8 — Truncation and emptiness (AC-5, ADR 0021 :100).**
   `test_truncated_actor_fixture_cannot_delist` runs end to end through import;
-  so does the timed-out case.
-- **D9 — Close-out.** Gate; TODO/STATUS. Record that live Actor runs remain
-  owner-gated.
+  so does the timed-out case. Two more tests also run end to end:
+  - `test_complete_empty_run_delists_scope_end_to_end`: the complete-empty
+    fixture passes classification, passes the zero-record parser-rot guard, and
+    delists only its own scope's listings as `ABSENT_FROM_SWEEP`.
+  - `test_ambiguous_empty_run_cannot_delist` and
+    `test_nonempty_unusable_run_is_rejected_and_cannot_delist`: each is
+    rejected, delists nothing, and breaks continuity.
+- **D10 — Durable staged import (MS2-D-22, MS2-D-23).** Extract the stage
+  functions from `run_collection`. The frozen pipeline tests must stay green.
+  Then implement the importer state machine.
+  - Tests (`tests/db/test_apify_import.py`, crash injection by raising a
+    `BaseException` subclass from a patched stage boundary):
+    - `test_crash_after_observation_commit_resumes_without_duplicates`;
+    - `test_crash_during_resolution_resumes_and_evaluates`;
+    - `test_crash_during_evaluation_resumes_and_evaluates`;
+    - `test_crash_before_finalization_finalizes_once` (the lifecycle outcome is
+      applied once, and the `ScraperRun` goes SUCCESS once).
+
+    Each asserts that no rows are duplicated, the same `ScraperRun` pk is
+    reused, and the `WatchEvaluation` ends bound to the imported snapshot.
+  - Restart recovery for each state (`test_apify_poll_job.py`):
+    `test_restart_recovers_each_unfinished_import_state` (parametrized over the
+    four intermediate states) and
+    `test_restart_retries_storage_cleanup_after_finalized_import`.
+- **D11 — Source retention and storage cleanup (MS2-D-25).**
+  - Tests (`tests/db/test_apify_retention.py`):
+    - `test_bounded_source_import_retains_listings_snapshots_raw_and_evaluations`:
+      a synthetic bounded fixture source with a 6 h TTL class. After import,
+      every listing, snapshot, raw payload, and watch evaluation carries the
+      class and `expires_at`. After expiry the purge sweep removes all of them.
+    - `test_unregistered_source_import_rejected_not_merchant_fact`.
+    - `test_registry_matches_every_local_adapter_retention`.
+  - Tests (`tests/db/test_apify_storage_cleanup.py`):
+    - `test_cleanup_after_successful_import`;
+    - `test_cleanup_after_rejected_import`;
+    - `test_cleanup_after_failed_remote_run`;
+    - `test_cleanup_of_abandoned_run_at_deadline`;
+    - `test_deadline_before_stage1_rejects_import_and_deletes_storage`;
+    - `test_cleanup_failure_retries_with_backoff`;
+    - `test_bounded_source_deadline_is_half_ttl`.
+- **D12 — Provider-dispatched recovery probes (MS2-D-24).**
+  - Tests (`tests/db/test_apify_recovery_probe.py`; admission is bound to a
+    test-only `AllowAllAdmission`, and production stays deny-all):
+    - `test_local_success_cannot_clear_actor_provider_failure`: a paused
+      apify-provider source also has a registered local fake that would succeed.
+      The local fake's `fetch` is never called, and the source stays paused.
+    - `test_budget_admitted_actor_probe_recovers_source`: a PROBE fixture import
+      finalizes `complete` and the source is reactivated.
+    - `test_actor_probe_never_delists_or_touches_continuity`.
+    - `test_partial_failure_probe_keeps_source_paused`.
+    - `test_denied_actor_probe_starts_nothing_and_stays_paused`.
+    - `test_one_outstanding_probe_per_source`.
+    - `test_local_provider_probe_path_unchanged`.
+- **D9 — Close-out.** This runs last in D (core). Gate; TODO/STATUS. Record
+  that live Actor runs remain owner-gated.
 
 **Acceptance:**
 - AC-4, AC-5, and AC-6 are proven against fixtures.
+- Every import crash window resumes to exactly one finalized result, and the
+  result is evaluated.
+- Remote retention never defaults, and Apify storage is deleted by deadline in
+  every run outcome.
+- Recovery probes honor the selected provider.
+- A complete-empty result is distinguishable from a failed one.
 - No code path can start a live run (deny-all).
 - The schemas are committed for the Actor repository to copy.
 
 ## Slice E — Apify spend ledger and admission
 
-**Scope:** MS2-D-17.
+**Scope:** MS2-D-17, -26.
 
 **Files:**
 - new `acquisition/apify/budget.py`;
-- `catalog/models/provider.py` (`ApifySpendReservation`);
+- `catalog/models/provider.py` (`ApifySpendReservation`, `ApifyBudgetLatch`);
 - migration `0022`;
-- `acquisition/apify/jobs.py` (bind the real admission);
-- settings keys `HW_RADAR_APIFY_ENABLED`, `…_USD_PER_CU`, `…_MARGIN`,
-  `…_PER_RUN_OVERHEAD_USD` (defaults committed; values are not secret);
-- new command `apify_spend_report`.
+- `acquisition/apify/jobs.py` (bind the real admission; the reconcile unit in
+  the outstanding selector);
+- settings keys (values are not secret):
+  - `HW_RADAR_APIFY_ENABLED`, default false;
+  - the unit prices `…_USD_PER_CU`, `…_DATASET_*`, `…_KV_*`, and
+    `…_TRANSFER_USD_PER_GB`. They carry no live default; each carries its URL
+    and date;
+  - `…_MARGIN`, `…_SAFETY_MARGIN_USD` (2.00), `…_CAP_DEDUCTION_USD` (unset
+    until OQ23), `…_OVERRUN_TOLERANCE` (0.10), `…_ESTIMATOR_VERSION`,
+    `…_MAX_TIMEOUT_S`, and `…_STORAGE_CLEANUP_MAX`.
+
+  The revision-1 `…_PER_RUN_OVERHEAD_USD` key is withdrawn.
+- new commands `apify_spend_report` and `apify_budget_reset`.
 
 - **E1 — Schema (0022).** Add `ApifySpendReservation` with:
   - `provider_run` OneToOne null (null for denials) and `source_site`;
   - `admission_class` (`watch_refresh | discovery`) and `status`
     (`reserved | reconciled | released | denied`);
-  - `estimate_usd` and `actual_usd` (Decimal 10,4), `reserved_at`,
-    `reconciled_at`, `denial_reason`;
+  - `estimate_usd` and `actual_usd` (Decimal 10,4), a `component_bounds` JSON
+    breakdown, `estimator_version`, `reserved_at` (the attribution time, never
+    changed), `reconciled_at`, and `denial_reason`;
   - indexes on `reserved_at` and `status`.
-- **E2 — Pure policy.** Implement `estimate_run_cost` and `decide_admission`.
-  - Tests: `tests/unit/test_apify_budget.py` covers the estimate formula,
-    equality at the limit (admitted), +0.0001 over (denied), discovery denied
-    above $12 while watch_refresh is admitted up to $20, outstanding
-    reservations counted, the kill switch, and invalid inputs.
-- **E3 — Ledger service.** Implement `reserve()` under a
-  `pg_advisory_xact_lock` and a rolling-31-day aggregation.
-  - Tests: `tests/db/test_apify_ledger.py` covers concurrent reserve
-    serialization (two threads, one admitted at the boundary), window roll-off,
-    and stuck reservations still counted.
-- **E4 — Reconcile.** Reconcile at terminal state; a null `usage_total_usd`
-  keeps the estimate and is retried; an overrun is recorded.
-  - Tests: reconcile paths.
+  - `ApifyBudgetLatch` (MS2-D-26): `tripped_at`, `provider_run` null, `reason`,
+    `cleared_at`, `cleared_reason`, and `estimator_version`.
+- **E2 — Pure policy.** Implement `estimate_run_cost` (the MS2-D-26 component
+  sum) and `decide_admission`.
+  - Before writing the price defaults, re-verify every unit price and the
+    direction semantics of data transfer on the official pricing page. Record
+    the URL and date. If transfer semantics cannot be verified, keep live
+    admission denied (`pricing_unverified`).
+  - Tests (`tests/unit/test_apify_budget.py`):
+    - the component formula;
+    - `test_exact_boundary_admitted_and_epsilon_over_denied` (equality at the
+      effective cap is admitted; +0.0001 is denied);
+    - `test_safety_margin_and_oq23_deduction_lower_hard_cap`;
+    - `test_unset_cap_deduction_denies_live_admission`;
+    - `test_missing_unit_price_denies_live_admission`;
+    - discovery is denied above `min($12, effective cap)` while watch_refresh is
+      admitted;
+    - outstanding reservations are counted;
+    - the kill switch;
+    - `test_tripped_latch_denies_everything`;
+    - invalid inputs.
+- **E3 — Ledger service.** Implement `reserve()` under the budget advisory lock,
+  with the MS2-D-26 window (31 days + max timeout, attribution at
+  `reserved_at`).
+  - Tests (`tests/db/test_apify_ledger.py`):
+    - `test_concurrent_reservations_one_admitted_at_boundary` (two threads);
+    - `test_run_spanning_window_boundary_is_counted`;
+    - `test_reconciled_spend_rolls_off_after_window`;
+    - `test_unreconciled_reservation_never_ages_out`;
+    - `test_stuck_reservation_still_counted`.
+- **E4 — Reconcile and the overrun latch.** Reconcile under the same lock once
+  `usage_total_usd` is non-null. The reconcile unit joins the MS2-D-23
+  outstanding selector. A null value keeps the estimate and is retried. After
+  31 days the row is flagged `unreconciled_stale`.
+  - Latch trips: an overrun beyond tolerance, non-zero proxy usage, a dataset
+    count over `max_items`, or a start-option mismatch (the start job aborts
+    that run).
+  - Tests:
+    - `test_overrun_latch_denies_admission_until_reset`;
+    - `test_estimator_version_bump_clears_latch`;
+    - `test_proxy_usage_trips_latch`;
+    - `test_dataset_over_cap_trips_latch`;
+    - `test_start_option_mismatch_aborts_and_trips_latch`;
+    - `test_reconcile_concurrent_with_admission_serializes`: the reconcile
+      thread and the reserve thread interleave under the lock, and the admission
+      decision sees either the pre-reconcile or the post-reconcile total, never a
+      torn one;
+    - `test_late_usage_reconciled_on_later_tick`.
 - **E5 — Wire admission.** Replace `DenyAllAdmission` with the ledger in the
   start job, and derive `budget_paused` into C's freshness.
   - Tests: a denied start records a denial and the source shows `budget_paused`
@@ -1180,11 +1881,18 @@ gate.
   window, calendar-month, and per-source/provider totals from the ledger and
   `provider_run.usage_total_usd`.
   - Test: output for a seeded ledger.
-- **E7 — Close-out.** Gate; TODO/STATUS. Record the owner tasks: account-level
-  `max_monthly_usage_usd`, scoped token, and plan choice.
+- **E8 — Budget-admitted probe (MS2-D-24 with the real ledger).**
+  `test_budget_admitted_actor_probe_recovers_source_with_ledger`: a probe is
+  admitted under the `discovery` class, reserved, imported, and reconciled, and
+  the source recovers. `test_probe_denied_when_discovery_exhausted`.
+- **E7 — Close-out.** This runs last. Gate; TODO/STATUS. Record the owner
+  tasks: account-level `max_monthly_usage_usd`, the scoped token, the plan
+  choice, and the OQ23 answer that sets `…_CAP_DEDUCTION_USD`.
 
-**Acceptance:** AC-7 holds; admission fails closed on the kill switch, at the
-limit, on an unreconciled overrun, and on missing settings.
+**Acceptance:** AC-7 holds. Admission fails closed on the kill switch, at the
+effective cap, on a tripped overrun latch, on missing prices, on an unset OQ23
+deduction, and on missing settings. Reconciliation and admission are
+serialized. No reservation ages out unreconciled.
 
 ## Slice F — Pilot sources, measurement, end-to-end proof
 
@@ -1197,19 +1905,51 @@ limit, on an unreconciled overrun, and on missing settings.
 - `docs/STATUS.md` evidence.
 
 - **F1 — eBay category sweeps.**
+  - **Facts** (developer.ebay.com Browse `item_summary/search` and Taxonomy
+    docs; the eBay prep report retrieved these 2026-09-24, some via verbatim
+    search-engine snippets because the pages blocked direct fetch):
+    - US leaf categories (tree `0` for `EBAY_US`): GPU / Graphics & Video
+      Cards **27386**, RAM **170083**, CPU **164**.
+    - eBay has **no dedicated datacenter-accelerator category**. Datacenter
+      accelerators and consumer cards share 27386, so disambiguation falls to
+      GPU extraction (R8).
+    - `category_ids` accepts **one** ID per request, so each category is its
+      own sweep.
+    - `limit` is at most 200. `offset` is 0–9,999 and a multiple of `limit`. A
+      result set is capped at **10,000 items**, so `complete=True` is
+      achievable only when `total ≤ 10,000`.
+    - Today `fetch()` issues exactly one GET (`ebay.py:192-208`) and has no
+      pagination loop. `_sweep_is_complete` (`:268-291`) needs no `next` href
+      and `total ≤ seen`, so a category whose `total` exceeds 200 can never be
+      proven complete without a loop.
+    - The Browse daily quota is **unconfirmed**. Several secondary sources say
+      5,000/day, but the official limits table only footnotes Buy APIs. Even
+      four sweeps at a 5-minute cadence (about 1,152 calls/day) fit within that
+      figure. Confirm it with `getRateLimits` before setting cadence.
+    - Category IDs change periodically, with quarterly category-change notices.
   - **Sweeps.** Configure per-category sweeps: GPU 27386, RAM 170083, CPU 164,
-    one `category_ids` per request. Verify the IDs via the Taxonomy API at
-    implementation time and record the date. Each sweep has a `category_hint`
-    and `collection_scope="ebay:<slug>:<query_id>"`. The legacy drive keyword
-    sweep keeps scope None and hint None, so no data backfill is needed.
-  - **Pagination.** Paginate with `limit=200`/`offset` up to a page cap below
-    the 10,000-item ceiling.
+    one `category_ids` per request. Re-verify the IDs via the Taxonomy API
+    (`getCategorySuggestions` / category subtree) at implementation time, record
+    the date, and add a periodic re-verification TODO. Each sweep has a
+    `category_hint` and `collection_scope="ebay:<slug>:<query_id>"`, which is the
+    MS2-D-12 key format. The legacy drive keyword sweep keeps scope None and hint
+    None, so no data backfill is needed.
+  - **Pagination.** Add a pagination loop, `limit=200` with `offset` cycling,
+    until there is no `next` href or a page cap below the 10,000-item ceiling.
+    Hitting the page cap makes the sweep incomplete: it is never
+    `complete=True`.
   - **Multi-scope delist.** The adapter returns one scope per sweep via a new
-    optional multi-scope capability that the pipeline applies per scope.
+    optional multi-scope capability that the pipeline applies per scope. Each
+    per-scope absence uses MS2-D-12's `collection_scope` filter, so a complete
+    GPU sweep can never delist RAM, CPU, or drive listings.
   - **Retention.** Retention and delete-on-delist are unchanged (class
-    `ebay_listing_observation`).
+    `ebay_listing_observation`, ≤6 h, delete-on-delist). The API License
+    Agreement's obligations attach to the Browse mechanism, not to a category.
+    The 2026-09-24 check found nothing category-specific.
   - **Tests** (cassettes):
     - per-sweep completeness;
+    - `test_pagination_reaches_complete_when_total_within_cap`;
+    - `test_page_cap_hit_is_incomplete`;
     - every non-drive item carries a hint;
     - a GPU complete sweep cannot delist drive listings (scoped absence);
     - the frozen drive tests stay green.
@@ -1219,14 +1959,17 @@ limit, on an unreconciled overrun, and on missing settings.
   runs, completeness distribution, identifier (MPN) coverage, condition and
   shipping presence, freshness lag, failures, and cost (Task 6).
 - **F4 — Category corpora (prep for owner gate R4).** Harvest GPU/RAM/CPU samples
-  with the existing `harvest_corpus` tooling. Labeling and ratification are
-  owner-in-the-loop, as in MS-1e.
+  with `harvest_corpus`. Its hint round trip landed in B6 (MS2-D-27), so the
+  harvested entries replay through their own category rules. F4 changes no
+  tooling. Labeling and ratification are owner-in-the-loop, as in MS-1e.
 - **F5 — Actor proof (owner-gated: R1, R2, R3).** After the owner selects a
   source and clears its ToS/robots review and the repository admission gate:
   1. Open the Actor PR in the separate Actor repository (private beta, copying
      the committed schemas).
   2. Set that source to `collection_provider=apify`.
   3. Run one bounded live run and one deliberately truncated run (AC-5 live).
+     Live admission also requires the MS2-D-26 preconditions: verified unit
+     prices, the OQ23 deduction set, and the latch clear.
   4. Switch local ↔ Actor where a local path exists (AC-4 live).
   5. Record cost and completeness.
 - **F6 — End-to-end exit (owner-gated: R5).** With pilot sources enabled by the
@@ -1240,25 +1983,65 @@ recorded after the owner gates clear.
 
 | ID | Risk / gate | Owner action | Blocks |
 | --- | --- | --- | --- |
-| R1 | **Actor-proof source is an owner (legal) decision.** Newegg's Terms of Use prohibit automated access and scraping "for any purpose", and robots.txt blocks a named price-watch bot. **Excluded** unless the owner decides otherwise. B&H, ServerPartDeals, and refurbished server-parts sellers are candidates only after a ToS/robots review. Apify execution does not change permissibility. | Choose the source after review | F5 live proof only |
+| R1 | **Actor-proof source is an owner (legal) decision.** Newegg's Terms of Use (kb.newegg.com policy-agreement page, retrieved 2026-09-24) prohibit access "through any automated means, including ... scripts or web crawlers" and to "'Scrape' ... the Site for any purpose". No non-commercial carve-out was observed. Its robots.txt (retrieved 2026-09-24) fully blocks the `ChangeDetection` price-watch user agent, though it does not disallow product or search paths generally. No sanctioned data feed exists: the affiliate program (Rakuten) is link-based, and the Marketplace API is seller-only. Newegg is therefore **excluded** unless the owner decides otherwise. Whether that KB page is the footer-linked canonical ToU is unconfirmed. B&H, ServerPartDeals, and refurbished server-parts sellers are candidates only after a ToS/robots review. Apify execution does not change permissibility. | Choose the source after review | F5 live proof only |
 | R2 | The separate Actor repository's product-admission gate (opportunity brief → BUILD) and its no-self-merge/branch rules apply to an internal Actor unless the owner explicitly directs the build. | Direct or brief | F5 |
-| R3 | Account-level Apify configuration: `max_monthly_usage_usd` backstop, a scoped Run-only token, and the plan choice. **Open question:** does a paid plan's base subscription (Starter $19/mo on the 2026-09-24 official pricing page) count against the $20/month ceiling? If it does, a paid plan leaves ~$1 of usage headroom. The ledger caps *usage*. Recommend opening OQ23. | Configure; answer OQ | E live admission; F5 |
+| R3 | Account-level Apify configuration: the `max_monthly_usage_usd` backstop, a scoped Run-only token, and the plan choice. **OQ23 is an owner gate:** does a paid plan's base subscription (Starter is $19/mo on the 2026-09-24 official pricing page) count against the $20/month ceiling? The answer sets `HW_RADAR_APIFY_CAP_DEDUCTION_USD` (MS2-D-26). Until it is set, live admission is denied. If the base fee counts, a paid plan leaves about $1 before the safety margin, which makes paid-plan live admission effectively impossible. | Configure; open and answer OQ23 | E live admission; F5 |
 | R4 | GPU/RAM/CPU auto-accept needs an owner-ratified category corpus. The drive corpus does not validate other categories. | Label/ratify F4 corpora | Flipping `auto_accept` |
 | R5 | MS-1e drive-matcher ratification is still pending, and all sources ship disabled. The real-observation exit proof (AC-3 live) needs the owner to enable pilot sources. | Ratify; enable | F6 |
 | R6 | GPU/RAM/CPU reference seeds come from first-party pages. The ToS/licence of each manufacturer spec page should be spot-checked. Curated manual rows are the fallback. | Spot-check | B4 authoritative flag |
-| R7 | Apify `usageTotalUsd` is recomputed at current pricing ("informational"), and its availability right at `SUCCEEDED` is unconfirmed. Storage and transfer outside run usage are covered only by the labeled overhead assumption. | — (the design reserves worst case) | E accuracy |
-| R8 | eBay category IDs can change (Taxonomy API). eBay does not separate datacenter accelerators from consumer GPUs, so disambiguation falls to extraction. The Browse quota (5,000/day) is corroborated, not officially confirmed. | — | F1 |
+| R7 | Apify `usage_total_usd` is nullable and recomputed at current pricing ("informational"). Its availability right at `SUCCEEDED` is unconfirmed. MS2-D-26 therefore reserves component bounds, counts a reservation until it is reconciled, and trips the latch on an overrun. Two residuals remain: storage and transfer bounds rely on Actor-side caps in reviewed Actor code (hw-radar detects a violation only after the fact, via the dataset count and the `usage` breakdown); and the direction semantics of data transfer must be verified in E2. | Review the Actor PR's caps | E accuracy; live admission |
+| R8 | eBay category IDs can change (quarterly category-change notices), so they are re-verified via the Taxonomy API. eBay does not separate datacenter accelerators from consumer GPUs (both are in 27386), so disambiguation falls to extraction. The Browse quota (5,000/day) is corroborated by secondary sources only; the official table footnotes Buy APIs. Per-category `total` above 10,000 can never be proven complete. | Confirm the quota via `getRateLimits` | F1 |
 | R9 | The deferred MS-2a plan names migrations 0018–0026, which collide with this plan. Its own header requires a rebase at activation (D2). | Rebase at reactivation | MS-2a only |
 | R10 | ADR 0022 confirmation #3 and STATUS say "shortlist + exactly-one alert". Master spec §19 puts the alert in MS-4 (applied, D1). §10.1/§11 still show score-first wording. This is a documentation conflict and was not edited here. | Reconcile docs | none |
 | R11 | Soft-threshold semantics (target price annotates, never decides) are an inference from ADR 0022, not a stated rule. | Confirm or override MS2-D-07 | C |
 | R12 | Watch/requirement persistence (MS2-D-07) and the rolling-31-day budget window (MS2-D-17) are plan-level decisions. The master spec allows "milestone implementations", so no ADR is strictly required. An ADR would make them durable if the owner prefers. | Decide ADR vs plan | none |
-| R13 | Slice A intentionally adds provenance keys to new resolution edges (`category`, `category_source`) and `detail_json["provider"]`. A run whose `delist_scope()` raises no longer advances continuity. Both changes are additive or strictly more conservative. | — | none |
+| R13 | Slice A intentionally adds provenance keys to new resolution edges (`category`, `category_source`) and `detail_json["provider"]`. A run whose `delist_scope()` raises no longer advances continuity. An ineligible remote run breaks continuity (MS2-D-11). Remote `complete` evidence with an incomplete scope cannot stale-delist. All of these changes are additive or strictly more conservative. | — | none |
 | R14 | Legacy default `category_hint=None ⇒ drive` is a trap for any future multi-category source that forgets to hint. F1's test enforces hints for eBay category sweeps. Every new multi-category collector must copy that test. | — | F1 and later sources |
+| R15 | Slice A residual, reported by the coordinator 2026-09-24. A listing whose current edge is `none` or `review` keeps a stale `evidence["category"]` when a later snapshot changes the hint, because no-spam writes no edge when the outcome is unchanged. B3 closes this by treating a category change as a decision-input change. | — | B3 |
+| R16 | Evaluations become `pending` whenever new evidence arrives and evaluation fails (MS2-D-20). No scheduled backlog job exists in MS-2, so a persistently failing evaluator leaves rows pending until the next observation or `evaluate_watches --pending`. | Watch F3 pending counts | none |
+| R17 | The overrun latch pauses **all** paid Apify admission until the owner resets it or the estimator version is bumped. That is deliberately blunt: one bad estimate can stop Actor-backed freshness (`budget_paused`) until owner action. | Reset after review | E live operation |
 
-No new ADR or OQ file is created by this plan. R3 recommends OQ23, and R12 an
-optional ADR, for the owner to open.
+No new ADR or OQ file is created by this plan. R3 makes OQ23 an owner gate for
+live admission, and R12 recommends an optional ADR, for the owner to open.
+
+## Review lineage
+
+**Round 1: cross-agent delegate `42deeff0`** (opposite provider, static
+read-only review of revision 1 at `df114de`).
+- **Verdict:** REVISION NEEDED, with 12 findings (F-01..F-12).
+- **Disposition:** all 12 ACCEPTED and resolved in this revision.
+- The review's "verified correct" items stand unchanged: the migration head, the
+  spine and satellite pattern, the listing and snapshot keys, the three veto
+  sites, site-wide absence, the gate contents, and the milestone boundary.
+- Slice A text also reflects what landed for A0–A3 and the Slice A verifier's
+  gate tightening.
+
+| Finding | Sev. | Disposition | Plan location (changed text) | Named tests |
+| --- | --- | --- | --- | --- |
+| F-01 veto result locals collide with the injected callable | medium | Accepted. The locals are renamed `vetoed` (as landed); the evidence is byte-identical; basedpyright is added to A1 | MS2-D-02 *Ladder veto*; A1 step 2 and step 5 | `test_ladder_veto.py::test_custom_veto_is_consulted_at_rung1`, `::test_custom_veto_is_consulted_at_rung0_prior`; A0 `test_ladder_golden_baseline`; `basedpyright` 0 errors |
+| F-02 map misses direct callers; F4 loses the category hint | high | Accepted. Map Q3 is corrected with grep-verified callers. A backward-compatible corpus schema, harvest, and replay task lands in B (MS2-D-27 says why B, not F) | MS2-D-10 *Callers outside the seam*; MS2-D-27; B6; F4; map Q3 | `test_corpus_category_hint.py::test_harvested_non_drive_entry_reaches_category_rules`, `::test_unhinted_staging_entry_bytes_unchanged`, `::test_existing_drive_corpus_loads_unchanged` |
+| F-03 stale eligibility stays a shortlist match | high | Accepted. An evaluation is bound to its snapshot, resolution, requirement, and evaluator version. A non-current row is `pending` and never qualifies. The production evaluator is the `run_collection` default, so poll, heartbeat, probe, and import paths all evaluate | MS2-D-09; MS2-D-20; C1, C3, C4; MS2-D-22 stage 4 | `test_evaluation_binding.py::test_prior_match_then_contradictory_evidence_updates_verdict`, `::test_evaluator_failure_after_prior_match_leaves_shortlist`, `::test_heartbeat_fired_run_updates_watch_evaluation`, `::test_recovery_probe_run_evaluates`; `test_shortlist.py::test_prior_match_then_contradictory_evidence_leaves_shortlist` |
+| F-04 skipped continuity lets truncated runs bridge a gap | high | Accepted (orchestrator decision). An ineligible successful FULL run **breaks** continuity via `_break_sweep_continuity`; eligible runs are unchanged; rejected remote runs also break it | MS2-D-11 *Continuity*; A5 step 2; A6; Slice A acceptance; R13 | `test_collection_provider.py::test_ineligible_run_breaks_existing_continuity`, `::test_local_after_prolonged_truncated_remote_cannot_mass_delist`; `test_apify_import.py::test_ambiguous_empty_run_cannot_delist` |
+| F-05 import commit point precedes required work | high | Accepted. A durable stage machine runs pending → observations_committed → absence_applied → resolved → evaluated → finalized, with compare-and-set transitions, `ScraperRun` reuse, and the terminal marker only after every effect | MS2-D-13; MS2-D-22; D10 | `test_apify_import.py::test_crash_after_observation_commit_resumes_without_duplicates`, `::test_crash_during_resolution_resumes_and_evaluates`, `::test_crash_during_evaluation_resumes_and_evaluates`, `::test_crash_before_finalization_finalizes_once`, `::test_retry_reuses_scraper_run` |
+| F-06 poller selection excludes the work it promises to retry | high | Accepted. Remote status is separate from local work, and two selectors run: active, and outstanding (import, cleanup, reconcile, late usage) | MS2-D-16; MS2-D-23; D5; D10; E4 | `test_apify_poll_job.py::test_outstanding_selector_picks_terminal_rows_with_unfinished_import`, `::test_restart_recovers_each_unfinished_import_state`, `::test_restart_retries_storage_cleanup_after_finalized_import`; `test_apify_ledger.py::test_late_usage_reconciled_on_later_tick` |
+| F-07 recovery probes ignore the selected provider | high | Accepted. Probes dispatch by provider. A remote probe gets budget admission (discovery class), a bounded start, async completion, retention, and PROBE semantics, and it never authorizes absence | MS2-D-16; MS2-D-24; D12; E8 | `test_apify_recovery_probe.py::test_local_success_cannot_clear_actor_provider_failure`, `::test_budget_admitted_actor_probe_recovers_source`, `::test_actor_probe_never_delists_or_touches_continuity`; `::test_budget_admitted_actor_probe_recovers_source_with_ledger` |
+| F-08 estimate called a hard bound without bounding every cost | high | Accepted. Every charge component is bounded by an enforced option or disallowed (no proxies). There is a safety margin below $20, the OQ23 deduction gates live admission, and an overrun latch applies. Reconcile and admission share one lock. Attribution is pinned at `reserved_at`, the window is 31 days + max timeout, and unreconciled rows never age out | MS2-D-17; MS2-D-26; E1–E4; R3; R7; R17 | `test_apify_budget.py::test_exact_boundary_admitted_and_epsilon_over_denied`, `::test_unset_cap_deduction_denies_live_admission`; `test_apify_ledger.py::test_overrun_latch_denies_admission_until_reset`, `::test_reconcile_concurrent_with_admission_serializes`, `::test_run_spanning_window_boundary_is_counted`, `::test_concurrent_reservations_one_admitted_at_boundary`, `::test_unreconciled_reservation_never_ages_out`, `::test_proxy_usage_trips_latch` |
+| F-09 no authoritative-alias gate for new categories | high | Accepted. For new categories a category `AcceptancePolicy` allows only `catalog_authoritative` hits at model or variant grain. Manual and listing-derived aliases stay reviewable; drive is untouched | MS2-D-05; MS2-D-21; B3 | `test_resolver_categories.py::test_non_authoritative_alias_never_auto_accepts_new_category`, `::test_alias_learned_from_earlier_observation_goes_to_review`, `::test_family_grain_fanout_is_review_for_new_categories`, `::test_prior_from_non_authoritative_edge_is_review`, `::test_drive_acceptance_unchanged` |
+| F-10 remote retention lacks an execution and cleanup path | high | Accepted. A code registry of source retention is forwarded explicitly on every remote import, and unknown retention is rejected. Deadline-based cleanup of the dataset and KV store covers every run outcome, with retries | MS2-D-13; MS2-D-14; MS2-D-25; D4; D11 | `test_apify_retention.py::test_bounded_source_import_retains_listings_snapshots_raw_and_evaluations`, `::test_unregistered_source_import_rejected_not_merchant_fact`; `test_apify_storage_cleanup.py::test_cleanup_after_rejected_import`, `::test_cleanup_of_abandoned_run_at_deadline`, `::test_cleanup_failure_retries_with_backoff` |
+| F-11 complete-empty enumeration classified as failure | medium | Accepted. Proven complete-empty (all counts zero, complete evidence) is `complete`; non-empty unusable output and ambiguous empty output are `failed`. OUTPUT is not a `RawItem`, so the parser-rot guard holds | MS2-D-14; D1; D4; D8 | `test_apify_contract.py::test_complete_empty_requires_all_zero_counts_and_pages_fetched`, `::test_empty_without_evidence_is_failed_ambiguous`; `test_apify_import.py::test_complete_empty_run_delists_scope_end_to_end`, `::test_ambiguous_empty_run_cannot_delist`, `::test_nonempty_unusable_run_is_rejected_and_cannot_delist` |
+| F-12 invalid D-before-B merge alternative | medium | Accepted. The alternative is removed. D is split into D-prep (D1 and D3, depending on A only) and D (core, depending on C and D-prep). Merge order follows the dependency graph | *Slice order and migration assignment*; Slice D *PRs* | Dependency table; no migration in D-prep (`makemigrations --check` in D-prep's gate) |
+
+**Also folded in revision 2** (not review findings):
+- The Slice A verifier's `gate_delist_scope` tightening (MS2-D-11, A4, A6).
+- The landed A0–A3 details (MS2-D-02, A0–A3).
+- The MS2-D-28 soft-block hazard, found while re-reading `_classify_batch`.
+- The R15 Slice A residual, closed in B3.
+- The prep evidence: eBay categories (F1, R8), Apify API facts (MS2-D-15),
+  Newegg terms (R1, MS2-D-19), and Slice B reference-data sources and importer
+  gaps (MS2-D-06, B4a–B4c).
 
 ## Next slice after A
 
 **Slice B — first-class category specs and rules** (migrations `0018`, `0019`),
-starting with B1 (satellites + CHECK pair + AC-1 coexistence test).
+starting with B1 (satellites + CHECK pair + AC-1 coexistence test). D-prep
+(D1 + D3) may proceed in parallel after A (see *Slice order*).
