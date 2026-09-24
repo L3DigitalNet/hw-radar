@@ -33,6 +33,9 @@ Last updated: 2026-07-06
    project gate.
 6. **DB-backed tests require live TimescaleDB.** Bring the compose DB up first,
    or set the documented port override when the host owns `5432`.
+
+## More Numbered Conventions
+
 7. **Handoff files are routed by lifetime.** Live state goes in `state.md`,
    current human orientation in `STATUS.md`, open work in `TODO.md`, component
    graph/backlog in `architecture.md`, deployment truth in `deployed.md`, and

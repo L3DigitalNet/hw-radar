@@ -22,7 +22,8 @@ GitHub Actions CD. The Python verification gate (uv · Ruff · BasedPyright
 strict · pytest + coverage · pip-audit) is green locally and in CI. All
 marketplace sources still ship disabled: the MS-1e evaluation harness and
 harvest tooling are merged and deployed, but the owner-in-the-loop
-ratification step is pending before any source goes live. The detailed drive-scoring design (former MS-2 next step) is owner-ratified but
+ratification step is pending before any source goes live. The detailed
+drive-scoring design (former MS-2 next step) is owner-ratified but
 **deferred from the immediate critical path**. The 2026-09-24 strategy re-baseline
 ([ADR 0021](docs/adr/adr-0021-hybrid-acquisition-apify.md),
 [ADR 0022](docs/adr/adr-0022-multi-category-watch-first-v1.md)) moves next work to
@@ -30,6 +31,12 @@ multi-category requirement matching plus a complete watch → shortlist → aler
 workflow, using hybrid acquisition: inexpensive direct/local collectors where they
 fit and self-owned private Apify Actors selectively under a hard **$20/month**
 Hardware Radar Apify ceiling.
+
+**The multi-category watch core is under way on `dev`, not yet merged to `main`
+or deployed:** GPU/RAM/CPU first-class categories, category-specific
+`match | no_match | unknown` requirement evaluation, and hw-radar's first
+self-owned Apify Actor project (`actors/hw-radar-synthetic-collector`, no
+Apify push/build/run yet).
 
 ## Documentation
 
@@ -40,6 +47,9 @@ Hardware Radar Apify ceiling.
 | [`docs/open-questions.md`](docs/open-questions.md) · [`docs/resolved-questions.md`](docs/resolved-questions.md) | Decision backlog (open) and settled provenance. |
 | [`docs/research/index.md`](docs/research/index.md) | Generated index of the research corpus (in-depth context behind decisions). |
 | [`AGENTS.md`](AGENTS.md) | The toolchain/agent contract (verification gate, dependency/typing/testing rules). |
+| [`docs/STATUS.md`](docs/STATUS.md) · [`docs/TODO.md`](docs/TODO.md) | Current status snapshot and the open work queue. |
+| [`actors/`](actors/) | Hardware Radar's own Apify Actors, one uv project per Actor. |
+
 ## Development
 
 ```bash
@@ -52,7 +62,9 @@ uv run python -m scripts.check  # full verification gate (fmt · lint · types �
 uv run ruff format . && uv run ruff check . --fix   # fix pass
 ```
 
-The verification gate needs the dev database running.
+The verification gate needs the dev database running. Actor projects under
+`actors/<name>/` are separate uv projects with their own lockfiles;
+`scripts.check` gates them too.
 
 **Branching:** `main` is protected and advances only via a pull request from `dev`. `dev` is the long-lived working branch — **commit and push to it directly** (no PR needed); use a short-lived `feature/*` branch only when you want isolation. To update `main`, open a PR from `dev` and **merge with a merge commit** (not squash — keeps `dev` in sync with `main` and preserves history); the PR must pass CI and carry signed commits.
 
