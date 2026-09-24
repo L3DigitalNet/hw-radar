@@ -5,6 +5,11 @@ back to 0019, write deployed-shape rows through the historical models, then roll
 forward and back. Transactional because schema changes must commit to be visible
 across executor calls; every test migrates back to the leaf in a `finally` so a
 failed assertion cannot strand the shared test DB on an old schema.
+
+serialized_rollback=True for the same reason as test_category_migrations.py: a
+plain transactional flush re-emits post_migrate and recreates content types
+under new primary keys, which breaks every later serialized_rollback test at
+setup with a content-type unique-constraint violation.
 """
 
 from __future__ import annotations
@@ -37,7 +42,7 @@ EXISTING_TABLES = (
     "listing_resolution",
 )
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.django_db(transaction=True, serialized_rollback=True)
 
 
 def _migrate(target: tuple[str, str]) -> Apps:
@@ -51,13 +56,9 @@ def _migrate(target: tuple[str, str]) -> Apps:
 def at_0019() -> Iterator[Apps]:
     leaf = MigrationExecutor(connection).loader.graph.leaf_nodes("catalog")[0]
     try:
-        apps = _migrate(BEFORE)
-        # A deployed DB always holds the category rows (0001, 0019), but
-        # pytest-django's post-test flush of transactional tests deletes them.
-        category = apps.get_model("catalog", "Category")
-        for slug in ("drive", "gpu"):
-            category.objects.get_or_create(slug=slug, defaults={"name": slug})
-        yield apps
+        # serialized_rollback restored the deployed category rows (0001, 0019)
+        # that _seed_deployed_rows and the reverse test look up by slug.
+        yield _migrate(BEFORE)
     finally:
         _migrate(leaf)
 
@@ -114,10 +115,10 @@ def _seed_deployed_rows(apps: Apps) -> None:
         source_kind="catalog_authoritative",
         retention_class="manufacturer_reference",
     )
-    # get_or_create: 0005 seeds source rows on a fresh test DB, and a flush
-    # between transactional tests removes them, so either state must work.
-    site, _ = get("catalog", "SourceSite").objects.get_or_create(
-        normalized_name="watchmigdemo", defaults={"name": "Demo"}
+    # A dedicated site name, so the 0005 seed rows restored by
+    # serialized_rollback never collide with it.
+    site = get("catalog", "SourceSite").objects.create(
+        name="Watch migration demo", normalized_name="watchmigdemo"
     )
     listing = get("catalog", "Listing").objects.create(
         source_site=site,

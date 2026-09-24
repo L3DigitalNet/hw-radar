@@ -6,6 +6,15 @@ are transactional because the schema changes must commit to be observable across
 executor calls, and every test ends by migrating back to the leaf in a `finally`
 so a failed assertion cannot leave the shared test DB on an old schema for the
 tests that run after it.
+
+serialized_rollback=True is load-bearing, not cosmetic. A plain transactional
+test ends with a flush that re-emits post_migrate, which recreates content types
+and permissions under fresh sequence values (flush does not reset sequences).
+Every later serialized_rollback test then re-inserts the content types captured
+at DB creation under their original primary keys and hits the
+(app_label, model) unique constraint at setup. With serialized_rollback the
+teardown flush inhibits post_migrate, and setup restores the deployed seed rows
+(0001 drive category, 0019 categories) that the tests below build on.
 """
 
 from __future__ import annotations
@@ -23,7 +32,7 @@ CATEGORY_ROWS = ("catalog", "0019_seed_categories")
 NEW_SLUGS = {"gpu", "ram", "cpu", "nic", "hba", "motherboard", "server"}
 DRIVE_TABLES = ("category", "product_family", "product_model", "drive_spec", "product_alias")
 
-pytestmark = pytest.mark.django_db(transaction=True)
+pytestmark = pytest.mark.django_db(transaction=True, serialized_rollback=True)
 
 
 def _migrate(target: tuple[str, str]) -> Apps:
@@ -37,14 +46,9 @@ def _migrate(target: tuple[str, str]) -> Apps:
 def at_0017() -> Iterator[Apps]:
     leaf = MigrationExecutor(connection).loader.graph.leaf_nodes("catalog")[0]
     try:
-        apps = _migrate(BEFORE)
-        # A deployed 0017 DB always holds the drive row (0001). pytest-django's
-        # post-test flush of transactional tests deletes it, so re-establish it
-        # rather than depend on this test running first.
-        apps.get_model("catalog", "Category").objects.get_or_create(
-            slug="drive", defaults={"name": "Drive"}
-        )
-        yield apps
+        # serialized_rollback restored the leaf-state seed, so the 0019 reverse
+        # leaves exactly the deployed 0017 shape: the drive row from 0001.
+        yield _migrate(BEFORE)
     finally:
         _migrate(leaf)
 
