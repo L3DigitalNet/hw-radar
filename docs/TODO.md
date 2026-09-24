@@ -27,6 +27,14 @@ Instructions for AI agents:
   Micron-authored PDFs are hosted on third-party domains and are blocked by OQ27).
 - [ ] Add `ProviderRunEvidence.truncation_reason` (MS2-D-11), deferred out of D1 into D2 or a
   follow-up.
+- [ ] Split the committed input contract into a common schema + synthetic extension so a future
+  merchant Actor can't inherit `faultMode` (verifier finding, low priority).
+- [ ] Harden D3 client's proxy guard: currently top-level only; nested proxy config is blocked via
+  `prepare_run_input`'s `extra=forbid`, but a dedicated nested-key guard is a cleaner fix (low).
+- [ ] Add listing-row fields (`title_raw`, `condition_label_raw`, `is_international`) to the
+  eligibility evaluation binding; not currently read by the evaluator (verifier finding, low).
+- [ ] Land the post-battery hardening leg started this session: `classify_run`
+  complete-with-count-mismatch -> failed; Actor total wall-clock time budget.
 - [ ] Run the Slice D entry-gate design review before D2 (plan: Slice D entry gate): a focused
   review of the D/E async-ordering design (watermarks, continuity, retention, charge horizon, R23).
 - [ ] **Blocked on owner (OQ25):** provision a Hardware Radar Apify credential
