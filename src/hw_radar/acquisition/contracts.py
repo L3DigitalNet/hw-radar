@@ -11,11 +11,17 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, Self, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hw_radar.catalog.models import RetentionClass, RunKind
+from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG_RE
+
+# Reserved OfferSnapshot.attrs_json key under which persist.append_snapshot stores
+# a non-null ParsedListing.category_hint, and from which the resolver reads it
+# back. ParsedListing rejects it in `attrs` so the two can never disagree.
+CATEGORY_HINT_ATTR: Final = "category_hint"
 
 
 class RawItem(BaseModel):
@@ -52,6 +58,26 @@ class ParsedListing(BaseModel):
     ships_from_country: str = "US"
     attrs: dict[str, object] = Field(default_factory=dict)
     raw_url: str = ""  # RawItem.url this listing was parsed from (per-item raw association)
+    # MS2-D-03: the category the collector's QUERY SCOPE asserts (eBay category
+    # sweep, Actor input scope) — never inferred from title text. None = no
+    # assertion, which the resolver treats as the legacy drive default.
+    category_hint: str | None = Field(
+        default=None,
+        max_length=CATEGORY_SLUG_MAX_LENGTH,
+        pattern=CATEGORY_SLUG_RE.pattern,
+    )
+
+    @model_validator(mode="after")
+    def _attrs_do_not_carry_category_hint(self) -> Self:
+        # attrs lands verbatim in attrs_json, where the hint is persisted under
+        # the same key: an attrs-borne value would masquerade as a collector
+        # assertion (or clobber the real one) at resolution time.
+        if CATEGORY_HINT_ATTR in self.attrs:
+            raise ValueError(
+                f"attrs may not carry the reserved {CATEGORY_HINT_ATTR!r} key; "
+                "set ParsedListing.category_hint instead"
+            )
+        return self
 
 
 class NormalizedListing(ParsedListing):
