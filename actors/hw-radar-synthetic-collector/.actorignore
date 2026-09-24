@@ -1,0 +1,12 @@
+# Limits what `apify push` uploads to the build (MS2-D-43): the image needs only
+# .actor/, contract/, src/, pyproject.toml, uv.lock, and README.md.
+.venv/
+tests/
+fixtures/
+DEPLOYMENTS.md
+.coverage
+.coverage.*
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]

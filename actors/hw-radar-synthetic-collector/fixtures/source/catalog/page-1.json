@@ -1,0 +1,29 @@
+{
+  "note": "Synthetic Hardware Radar fixture page (MS2-D-42). Not a real merchant or product.",
+  "pagesDeclared": 2,
+  "itemsDeclared": 3,
+  "listings": [
+    {
+      "id": "syn-hdd-0001",
+      "title": "Synthetic Enterprise HDD 16TB SATA 7200rpm (fixture)",
+      "price": "189.99",
+      "currency": "USD",
+      "shippingPrice": "0.00",
+      "stockStatus": "in_stock",
+      "quantityAvailable": 7,
+      "seller": "Synthetic Seller A",
+      "condition": "Recertified",
+      "shipsFrom": "US",
+      "mpn": "SYN-HDD-16T-A"
+    },
+    {
+      "id": "syn-hdd-0002",
+      "title": "Synthetic NAS HDD 8TB SATA 5400rpm (fixture)",
+      "price": "99.50",
+      "currency": "USD",
+      "stockStatus": "out_of_stock",
+      "seller": "Synthetic Seller B",
+      "condition": "New"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "note": "Synthetic Hardware Radar fixture page (MS2-D-42). Not a real merchant or product.",
+  "pagesDeclared": 2,
+  "itemsDeclared": 3,
+  "listings": [
+    {
+      "id": "syn-hdd-0003",
+      "title": "Synthetic Enterprise HDD 20TB SAS 7200rpm (fixture)",
+      "price": "279.00",
+      "currency": "USD",
+      "shippingPrice": "12.5",
+      "stockStatus": "in_stock",
+      "quantityAvailable": 2,
+      "shipsFrom": "US",
+      "mpn": "SYN-HDD-20T-S"
+    }
+  ]
+}

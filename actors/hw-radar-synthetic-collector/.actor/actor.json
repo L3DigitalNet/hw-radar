@@ -1,0 +1,13 @@
+{
+  "actorSpecification": 1,
+  "name": "hw-radar-synthetic-collector",
+  "title": "Hardware Radar synthetic collector",
+  "description": "Fetches pinned synthetic fixture pages from the public hw-radar repository and emits the hw-radar Actor contract. Private; started only through hw-radar's budget admission.",
+  "version": "1.0",
+  "buildTag": "candidate",
+  "defaultMemoryMbytes": 256,
+  "minMemoryMbytes": 128,
+  "maxMemoryMbytes": 512,
+  "input": "./input_schema.json",
+  "dockerfile": "./Dockerfile"
+}

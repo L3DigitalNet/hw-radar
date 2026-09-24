@@ -1,0 +1,69 @@
+# hw-radar-synthetic-collector — the first Hardware Radar Apify Actor (MS2-D-38, MS2-D-42).
+#
+# A standalone uv project, deliberately NOT a workspace member of the root hw-radar
+# project: the Apify SDK and its transitive dependencies stay out of hw-radar's
+# uv.lock and pip-audit surface (MS2-D-38 rejected alternative (a)). The root gate
+# (scripts/check.py) runs this project's basedpyright, pytest+coverage, and
+# pip-audit inside this directory's own environment.
+
+[project]
+name = "hw-radar-synthetic-collector"
+version = "1.0.0"
+description = "Hardware Radar synthetic collector Actor: fetches pinned fixture pages and emits the hw-radar Actor contract."
+readme = "README.md"
+# The Actor image is apify/actor-python:3.14 (see .actor/Dockerfile); the floor
+# matches it so local tests run on the interpreter the image ships.
+requires-python = ">=3.14"
+dependencies = [
+    "apify>=4.0.2,<5",
+    "httpx>=0.28.1",
+    "jsonschema>=4.26",
+]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.40.1",
+    "coverage[toml]>=7.16.1",
+    "pip-audit>=2.10.1",
+    "pytest>=9.0",
+    "types-jsonschema>=4.26.0.20260518",
+]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "synthetic_collector"
+
+[tool.ruff]
+# Inherit the root lint/format policy; only the target changes. The target MUST
+# equal the Actor image's Python (MS2-D-38): the root's target could otherwise
+# emit syntax the image's interpreter cannot parse if the two ever diverge.
+extend = "../../pyproject.toml"
+target-version = "py314"
+src = ["src", "tests"]
+
+[tool.basedpyright]
+include = ["src", "tests"]
+typeCheckingMode = "strict"
+pythonVersion = "3.14"
+pythonPlatform = "All"
+failOnWarnings = true
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+# The module entry only calls asyncio.run(main()); main() itself is tested.
+omit = ["*/__main__.py"]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# Never below the root project's threshold (MS2-D-38).
+fail_under = 85

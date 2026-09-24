@@ -1,0 +1,133 @@
+{
+  "title": "Hardware Radar synthetic collector input (hw-radar-input/v1)",
+  "description": "Apify-dialect view of contract/hw-radar-input-v1.schema.json. The contract file is authoritative; hw-radar's tests pin this file to it.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "siteKey": {
+      "title": "siteKey",
+      "description": "hw-radar SourceSite key the run collects for.",
+      "type": "string",
+      "editor": "textfield",
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "collectionScope": {
+      "title": "collectionScope",
+      "description": "Scope key <site_key>:<category>:<query_id> the run was admitted for; echoed in OUTPUT.",
+      "type": "string",
+      "editor": "textfield",
+      "pattern": "^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9_-]*$",
+      "minLength": 5,
+      "maxLength": 100
+    },
+    "categoryHint": {
+      "title": "categoryHint",
+      "description": "hw-radar category slug stamped on every row.",
+      "type": "string",
+      "editor": "textfield",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "minLength": 1,
+      "maxLength": 50
+    },
+    "maxItems": {
+      "title": "maxItems",
+      "description": "Hard cap on dataset rows. The Actor enforces it itself.",
+      "type": "integer",
+      "editor": "number",
+      "minimum": 1,
+      "maximum": 500
+    },
+    "maxPages": {
+      "title": "maxPages",
+      "description": "Hard cap on pages attempted.",
+      "type": "integer",
+      "editor": "number",
+      "minimum": 1,
+      "maximum": 50
+    },
+    "maxRequests": {
+      "title": "maxRequests",
+      "description": "Hard cap on HTTP requests sent.",
+      "type": "integer",
+      "editor": "number",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "maxBytes": {
+      "title": "maxBytes",
+      "description": "Hard cap on response-body bytes received across the run.",
+      "type": "integer",
+      "editor": "number",
+      "minimum": 1,
+      "maximum": 10000000
+    },
+    "timeBudgetSecs": {
+      "title": "timeBudgetSecs",
+      "description": "The Actor's own time budget; each request's timeout is the remaining budget. hw-radar always also sends an explicit run timeout.",
+      "type": "integer",
+      "editor": "number",
+      "minimum": 10,
+      "maximum": 900,
+      "default": 120
+    },
+    "schemaVersion": {
+      "title": "schemaVersion",
+      "description": "Contract version of this input. Must be hw-radar-input/v1.",
+      "type": "string",
+      "editor": "select",
+      "enum": [
+        "hw-radar-input/v1"
+      ]
+    },
+    "fixtureCommit": {
+      "title": "fixtureCommit",
+      "description": "40-hex commit SHA of the public hw-radar repository whose fixture pages are fetched.",
+      "type": "string",
+      "editor": "textfield",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "fixturePaths": {
+      "title": "fixturePaths",
+      "description": "Page paths relative to actors/hw-radar-synthetic-collector/fixtures/source/, fetched in order.",
+      "type": "array",
+      "editor": "stringList",
+      "minItems": 1,
+      "maxItems": 20
+    },
+    "faultMode": {
+      "title": "faultMode",
+      "description": "Synthetic Actor only: forces one deterministic MS2-D-14 classification row.",
+      "type": "string",
+      "editor": "select",
+      "enum": [
+        "none",
+        "truncate_items",
+        "truncate_pages",
+        "truncate_time",
+        "truncate_bytes",
+        "partial_failure",
+        "contradictory_report",
+        "count_mismatch",
+        "unknown_schema",
+        "fail"
+      ],
+      "default": "none"
+    }
+  },
+  "required": [
+    "siteKey",
+    "collectionScope",
+    "categoryHint",
+    "maxItems",
+    "maxPages",
+    "maxRequests",
+    "maxBytes",
+    "timeBudgetSecs",
+    "schemaVersion",
+    "fixtureCommit",
+    "fixturePaths",
+    "faultMode"
+  ]
+}

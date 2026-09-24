@@ -1,0 +1,73 @@
+{
+  "fixture": "complete-empty",
+  "description": "A source that declares zero items: proven complete-empty.",
+  "generatedBy": "actors/hw-radar-synthetic-collector/tests/support.py",
+  "actorInput": {
+    "schemaVersion": "hw-radar-input/v1",
+    "siteKey": "synthetic",
+    "collectionScope": "synthetic:hdd:catalog",
+    "categoryHint": "hdd",
+    "maxItems": 50,
+    "maxPages": 5,
+    "maxRequests": 10,
+    "maxBytes": 1000000,
+    "timeBudgetSecs": 60,
+    "fixtureCommit": "1111111111111111111111111111111111111111",
+    "fixturePaths": [
+      "empty/page-1.json"
+    ],
+    "faultMode": "none"
+  },
+  "startedAt": "2026-09-24T12:00:00Z",
+  "platformEffects": [],
+  "remoteStatus": "SUCCEEDED",
+  "admitted": {
+    "actorName": "hw-radar-synthetic-collector",
+    "queryScope": {
+      "siteKey": "synthetic",
+      "collectionScope": "synthetic:hdd:catalog",
+      "categoryHint": "hdd",
+      "maxItems": 50,
+      "maxPages": 5,
+      "maxRequests": 10,
+      "maxBytes": 1000000,
+      "timeBudgetSecs": 60
+    }
+  },
+  "datasetItems": [],
+  "output": {
+    "schemaVersion": "hw-radar-run/v1",
+    "status": "succeeded",
+    "completeness": {
+      "complete": true,
+      "truncated": false,
+      "limitsHit": {
+        "pages": false,
+        "requests": false,
+        "items": false,
+        "time": false,
+        "bytes": false
+      },
+      "pagesDeclared": 1,
+      "pagesFetched": 1,
+      "itemsDeclared": 0,
+      "itemsEmitted": 0
+    },
+    "queryScope": {
+      "siteKey": "synthetic",
+      "collectionScope": "synthetic:hdd:catalog",
+      "categoryHint": "hdd",
+      "maxItems": 50,
+      "maxPages": 5,
+      "maxRequests": 10,
+      "maxBytes": 1000000,
+      "timeBudgetSecs": 60
+    },
+    "provider": {
+      "actorName": "hw-radar-synthetic-collector",
+      "actorVersion": "1.0",
+      "sourceKind": "synthetic"
+    },
+    "errors": []
+  }
+}
