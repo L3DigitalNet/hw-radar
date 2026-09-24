@@ -789,6 +789,8 @@ The implementer fills this in as completion evidence (Appendix B.3). MS-0 rows �
 | IR-005 | systemd `EnvironmentFile=/run/bao-agent/hw-radar.env` plus `After=bao-agent` in `deploy/systemd/*`; live check at acceptance | Verified (MS-0 live) |
 | ADR-0010 confirmation | `catalog` migrations 0001-0003 plus `tests/db/test_identity.py`, `tests/db/test_market.py::test_offer_snapshot_is_a_hypertable` | Verified |
 | §17.2 Database layer | `tests/db/test_migrations.py::test_no_missing_migrations` plus pytest-django creating the test DB from empty on every run | Verified |
+| FR-014 | MS-2 category fixtures + DB integration prove `match/no_match/unknown`; hard unknown/contradictory fields never pass | Pending (MS-2 re-baseline) |
+| IR-008 / DR-011 | Apify provider integration tests: bounded run metadata, idempotent duplicate import, provider-switch identity preservation, truncated-run delist veto, budget fail-closed | Pending (MS-2 re-baseline) |
 
 ---
 
@@ -800,10 +802,10 @@ The implementer fills this in as completion evidence (Appendix B.3). MS-0 rows �
 | --- | --- |
 | Runtime | Python (repo pins 3.14 via `.python-version`); uv-managed env (`uv sync --frozen` on the CT) |
 | OS / Platform | Debian 13 in a dedicated Proxmox **LXC container** on the Hetzner dedicated server ([ADR 0003](../adr/adr-0003-deploy-as-lxc-container.md)) |
-| CT resources (v1 starting allocation — tunable, hot-resizable) | **2 vCPU · 4 GiB RAM (4096 MiB) · 32 GiB rootfs · 512 MiB swap.** Sized for the v1 HTTP-first workload (in-CT PostgreSQL+TimescaleDB — the RAM/disk driver — plus gunicorn + APScheduler/Scrapy, single user; headless browser deferred, [ADR 0014](../adr/adr-0014-scraping-runtime-escalation-stack.md)). **MS-5 bump:** ≥4 vCPU · 8 GiB when `curl_cffi`/Playwright and ≥15 sources land (browser RAM is the driver). Disk growth guarded by the §18.5 disk-space threshold alert (raw payloads grow unbounded; DR-008 retention bounds heartbeats) — grow rootfs online on trigger. CT ID assigned at provisioning (`homelab` plan §6). |
+| CT resources (v1 starting allocation — tunable, hot-resizable) | **2 vCPU · 4 GiB RAM (4096 MiB) · 32 GiB rootfs · 512 MiB swap.** In-CT PostgreSQL+TimescaleDB remains the main local RAM/disk driver. Raise resources from measured local workload (browser execution, concurrency, DB/cache pressure), not a fixed source-count milestone; selected expensive collection may run remotely in Apify under ADR 0021. Disk growth remains guarded by the §18.5 threshold alert. |
 | Datastore | PostgreSQL + TimescaleDB, in the same CT ([ADR 0007](../adr/adr-0007-datastore-postgresql-timescaledb.md); own-CT placement per OQ4) |
-| External services | See §2.4 Boundaries (marketplaces, search APIs, Frankfurter, OpenBao, M365 Graph, Tailscale, GitHub Actions) |
-| Scheduling | APScheduler 3.11.x in one systemd-supervised poller ([ADR 0012](../adr/adr-0012-orchestration-apscheduler.md)); systemd timers only for genuinely independent stateless jobs (nightly VACUUM, backup verification) |
+| External services | See §2.4 Boundaries (marketplaces, selected Apify Actor execution, search APIs, Frankfurter, OpenBao, M365 Graph, Tailscale, GitHub Actions) |
+| Scheduling | APScheduler 3.11.x in one systemd-supervised poller remains the production scheduling/admission owner ([ADR 0012](../adr/adr-0012-orchestration-apscheduler.md), [ADR 0021](../adr/adr-0021-hybrid-acquisition-apify.md)); selected Actor runs execute remotely but are not independently scheduled twice. |
 | Hosting | Hetzner dedicated server (Proxmox); public URL `https://hw-radar.l3digital.net` |
 
 Runtime services:
@@ -971,6 +973,7 @@ The former fixed target of "≥15 sources live" is **not a first-release gate**.
 | MS-5 Hardening/breadth/intelligence | Measured source/category expansion + backups/observability + optional category scorers | Restore/health gates green; expansion stays inside quality/cost contracts |
 
 ---
+
 ## 20. Success Evaluation
 
 | Area | Target | Measurement |
@@ -1002,7 +1005,7 @@ Repo convention: open decisions live in [`open-questions.md`](../open-questions.
 | OQ-009 (repo OQ9) | Acquisition cadence, throttle & skip policy | Per-tier baseline→ceiling + earned auto-ramp; back-off ladder w/ 24 h cap; soft-block detection; skip decision tree | No | Owner | MS-1+ | Answered (provisional — no ADR) |
 | OQ-010 (repo [OQ10](../resolved-questions.md#oq10--reliability--resilient-acquisition)) | Reliability / resilient acquisition | Per-source isolation + circuit-break lifecycle (`paused_pending_fix` → SKIP) + silent-degradation detection + health alerts ([ADR 0017](../adr/adr-0017-resilient-acquisition.md)); only MS-5 wiring remains | No | Owner | MS-5 | **Resolved (ADR 0017)** |
 | OQ-015 (repo [OQ15](../resolved-questions.md#oq15--amazon-acquisition-path-after-pa-api-deprecation)) | Amazon acquisition path after PA-API 5 `GetItems` **2026-05-15 deprecation** (→ Creators API) | **Resolved 2026-07-04 (research-backed):** **discovery-only via the existing search-API stack** (ASIN from `/dp/<ASIN>` URLs; SERP price = low-confidence 24 h hint). Both official APIs blocked — **SP-API seller-only** (categorical), **Creators API** gated behind 10 qualified sales/30 days (not clearable); PA-API closed to new registrations. No direct Amazon scraper (higher ToS exposure). Retention (DR-001) unchanged. | No — Amazon is churning, not a value source | Owner | ~MS-5 (Amazon connector) | **Resolved** |
-| OQ-016 (repo [OQ16](../resolved-questions.md#oq16--ssd-cohort-key-endurance-dimension-dwpd)) | Does the SSD price-scoring cohort key include a DWPD endurance class? | **Owner-resolved 2026-07-04:** No — the cohort key stays [ADR 0011](../adr/adr-0011-composite-deal-score.md)'s four-part key; DWPD folds into the _fitness_ subscore for SSDs (avoids thinning cohorts that already need warm-up/relaxation) | No | Owner | MS-2 | **Resolved** |
+| OQ-016 (repo [OQ16](../resolved-questions.md#oq16--ssd-cohort-key-endurance-dimension-dwpd)) | Does the SSD price-scoring cohort key include a DWPD endurance class? | **Owner-resolved 2026-07-04:** No — the cohort key stays [ADR 0011](../adr/adr-0011-composite-deal-score.md)'s four-part key; DWPD folds into the _fitness_ subscore for SSDs (avoids thinning cohorts that already need warm-up/relaxation) | No | Owner | Future HDD/SSD scoring activation | **Resolved** |
 | OQ-017 (repo [OQ17](../resolved-questions.md#oq17--heartbeat-grain-retention--storage-policy)) | Retention/TTL + storage policy for `availability_heartbeat_observation` rows | **Owner-resolved 2026-07-04 (research-backed):** hypertable, 30-day raw retention, indefinite per-source daily continuous aggregate, non-`unchanged` rows dual-written to a plain 365-day `availability_heartbeat_event` table, compression ≈7 d — values tunable; no new ADR (rides [ADR 0015](../adr/adr-0015-availability-heartbeat-grain-volatility-scheduling.md)); DR-008 carries the policy | No | Owner | First fast-lane source (MS-1+) | **Resolved** |
 | OQ-018 (repo [OQ18](../resolved-questions.md#oq18--recovery-time-objective-rto-for-v1)) | RTO target for v1 | **Owner-resolved 2026-07-04:** ≤24 h, manual-runbook restore — no restore automation for v1; stated in §18.6, verified by the ≥once-by-MS-5 timed restore test | No | Owner | Pre-production | **Resolved** |
 | OQ-019 (repo [OQ19](../resolved-questions.md#oq19--accessibility--i18n-declaration)) | Accessibility & i18n target (§11) | **Owner-resolved 2026-07-04:** out of scope for v1 — single sighted user, English-only (Engineered to Needs); declared in §11, deferred as WH-008 | No | Owner | MS-3 | **Resolved** |
@@ -1248,7 +1251,7 @@ A **view** (no second source of truth): listings below model grain, plus the run
 #### C.3.5 Targets & validation
 
 - **Auto-accept precision ≥ 99.5%** (rungs 0–2), demonstrated pre-ratification on a hand-labeled corpus of ~150–200 real titles from the primary recert sources (the ADR 0011 validate-before-ratify precedent). In production this operationalizes as **zero unresolved confirmed false merges**: each one found triggers a veto rule + `matcher_version` bump + re-run of affected listings.
-- **Coverage expectation (not a gate):** ≥ 80% of primary-recert-source listings at model grain or better by end of MS-2; shortfall signals catalog/rule gaps, never a reason to loosen precision.
+- **Drive coverage expectation (not a first-release gate):** ≥ 80% of primary-recert-source listings at model grain or better before declaring the advanced drive-scoring/matching surface mature; shortfall signals catalog/rule gaps, never a reason to loosen precision.
 - Testing: table-driven pytest over a golden title corpus; per-vendor decoder test vectors derived from datasheets; normalizer parity + idempotence property tests; a `grain = none` rate spike is the §18.5 monitoring signal (the Unresolved-listing-spike alert).
 
 Population reality (accepted, ADR 0010): no target merchant reliably exposes GTIN and eBay `epid` is Partner-gated, so resolution leans on normalized MPN + parsed attributes; the seeded catalog (ADR 0018) plus learned aliases are the mitigation. Never let critical automation depend on untrusted free text unless reviewed; filter/score/alert on normalized fields.
