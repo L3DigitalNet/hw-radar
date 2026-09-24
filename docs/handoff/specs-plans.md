@@ -1,12 +1,19 @@
 # Specs And Plans
 
-Last updated: 2026-09-24 (Slice A landed; MS-2 plan rev 2, round-2 review in progress)
+Last updated: 2026-09-24 (Slice A landed and post-closeout fixed; MS-2 plan rev 4, review converged)
+
+## MS-2 Plan Review Lineage
+
+- r1 `42deeff0`: REVISION NEEDED, 12 findings, all dispositioned in plan rev 2.
+- r2 `537cd698`: REVISION NEEDED, 7 resolved / 5 partial / 3 new, addressed in plan rev 3.
+- r3 `f1b156e6`: REVISION NEEDED, 5 resolved / 3 partial / 1 new, addressed in plan rev 4.
+- r4 `a4b2e45b`: READY WITH ADVISORIES, no new findings. Converged at rev 4.
 
 ## Active Design Artifacts
 
 | Artifact | Role | Status |
 | --- | --- | --- |
-| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 2. Slice A (behavior-preserving seams, no migration) implemented on `dev`. Review lineage: Codex delegate `42deeff0` round 1 = REVISION NEEDED, 12 findings, all dispositioned in rev 2; round 2 in progress. |
+| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 4, review converged (see "Review lineage" below). Slice A implemented on `dev`, post-closeout fixed (`27b0c1d`). Rev 4 adds a mandatory Slice D entry gate before D2. Next: Slice B. |
 | `docs/research/2026-09-24-ms2-code-dependency-map.md` | Code dependency map supporting the MS-2 plan | Active; keep alongside the plan |
 | `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` | Advanced HDD/SSD scoring design | Revision 14 owner-accepted; **deferred from immediate milestone sequencing by ADR 0022**; retain for later category-local drive scoring |
 | `docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md` | Deferred HDD/SSD scoring-substrate plan | Revision 4 reviewed; **do not execute now**. Rebase schema/migration assumptions before any future owner-authorized activation. |

@@ -15,15 +15,17 @@ Instructions for AI agents:
 
 ## Agent tasks
 
-- [ ] Re-baseline the implementation around [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
-  and [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md). **Plan cut** (rev 2,
-  `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`); Codex round 1 findings
-  all dispositioned; round 2 in progress.
+- [x] Re-baseline the implementation around [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
+  and [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md). **Plan converged at rev 4**
+  (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`); Codex r1-r4 review
+  READY WITH ADVISORIES.
 - [ ] Establish the category-domain boundary around the existing ADR-0010 identity spine.
-  **Slice A done:** category registry, injectable ladder veto, optional `category_hint`, resolver
-  dispatch (drive slug hard-code removed). **Next (Slice B):** GPU/RAM/CPU typed spec satellites,
-  category rows, authoritative-alias policy MS2-D-21, refdata importer generalization, corpus
-  category-hint round trip (B6).
+  **Slice A done and post-closeout fixed** (`27b0c1d`): category registry, injectable ladder veto,
+  optional `category_hint`, resolver dispatch (drive slug hard-code removed). **Next (Slice B):**
+  GPU/RAM/CPU typed spec satellites, category rows, authoritative-alias policy MS2-D-21, refdata
+  importer generalization, corpus category-hint round trip (B6).
+- [ ] Run the Slice D entry-gate design review before D2 (plan: Slice D entry gate): a focused
+  review of the D/E async-ordering design (watermarks, continuity, retention, charge horizon, R23).
 - [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
   saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
   Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.
@@ -66,7 +68,8 @@ Instructions for AI agents:
   $20/month Hardware Radar ceiling. Live Apify admission stays disabled until resolved.
 - [ ] **Blocked on owner (OQ24):** rule on the Actor-proof source. Newegg is excluded on ToU
   evidence (automated access/scraping prohibited "for any purpose", retrieved 2026-09-24); B&H
-  and refurbished server-parts sellers still need ToS/robots review.
+  and refurbished server-parts sellers still need ToS/robots review. Plan finding R20: bounded-
+  retention sources (e.g. eBay, 6h TTL) need a verified per-run Apify storage expiry for an Actor path.
 - [ ] **Blocked on owner:** admission decision for a new internal Actor in the separate
   `L3DigitalNet/apify-actors` repo's opportunity/admission gate.
 - [ ] **Blocked on owner:** configure the Apify account-level monthly usage limit as a spend backstop.
