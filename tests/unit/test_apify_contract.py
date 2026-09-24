@@ -426,6 +426,39 @@ def test_other_self_contradictions_are_failed(
     assert contradiction in result.reason
 
 
+@pytest.mark.parametrize(
+    ("changes", "contradiction"),
+    [
+        # The source declared 3 items; a complete report must have emitted all 3.
+        ({"itemsDeclared": 4}, "complete_with_items_declared_mismatch"),
+        ({"itemsDeclared": 2}, "complete_with_items_declared_mismatch"),
+        # The source declared 2 pages; a complete report must have fetched both.
+        ({"pagesFetched": 1}, "complete_with_pages_unfetched"),
+        ({"pagesDeclared": 3}, "complete_with_pages_unfetched"),
+    ],
+)
+def test_complete_report_contradicting_declared_counts_is_failed(
+    changes: dict[str, object], contradiction: str
+) -> None:
+    fixture = _fixture("complete")
+    assert _classify(fixture) == RunClassification(C.COMPLETE, "complete", None)
+
+    result = _classify(fixture, output=_with_report("complete", **changes))
+
+    assert result == RunClassification(C.FAILED, f"contradictory_report: {contradiction}", None)
+
+
+def test_incomplete_report_may_fall_short_of_declared_counts() -> None:
+    # Truncated and partial runs legitimately fetch fewer pages and items than
+    # the source declared; only a completeness claim makes the shortfall a lie.
+    fixture = _fixture("truncated-by-pages")
+    report = fixture["output"]["completeness"]
+    assert report["pagesFetched"] < report["pagesDeclared"]
+    assert report["itemsEmitted"] < report["itemsDeclared"]
+
+    assert _classify(fixture).completeness is C.TRUNCATED
+
+
 def test_scope_mismatch_is_failed() -> None:
     assert _classify(_fixture("scope-mismatch")) == RunClassification(
         C.FAILED, "scope_mismatch", None

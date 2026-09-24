@@ -362,10 +362,30 @@ def _contradictions(remote_status: str, run: RunOutput, dataset_count: int) -> l
         found.append("truncated_without_limit_hit")
     if remote_status == RUN_STATUS_SUCCEEDED and run.status != "succeeded":
         found.append("status_mismatch")
+    # The declared-count checks below mirror the Actor's own refusal to claim
+    # completeness (synthetic_collector.core._finish) and are repeated here on
+    # purpose: only a complete run may authorize absence/delist evidence, so a
+    # report claiming completeness while the source declared more (or fewer)
+    # items or pages than were collected must not be trusted merely because the
+    # Actor that wrote it was supposed to have checked.
     if report.items_emitted != dataset_count:
         found.append("count_mismatch")
+    elif (
+        report.complete
+        and report.items_declared is not None
+        and report.items_emitted != report.items_declared
+    ):
+        # elif: once itemsEmitted disagrees with the dataset it is already void,
+        # and comparing the source's declaration against it adds no evidence.
+        found.append("complete_with_items_declared_mismatch")
     if report.pages_declared is not None and report.pages_fetched > report.pages_declared:
         found.append("pages_fetched_exceed_declared")
+    if (
+        report.complete
+        and report.pages_declared is not None
+        and report.pages_fetched < report.pages_declared
+    ):
+        found.append("complete_with_pages_unfetched")
     return found
 
 
