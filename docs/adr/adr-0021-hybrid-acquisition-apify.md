@@ -247,6 +247,27 @@ toggle, disable execution. Runtime credentials come only from a Hardware
 Radar-scoped OpenBao reference, never the venture's token. The operator
 workflow is MS2-D-43 in the MS-2 plan.
 
+**Addendum (MS-2 plan revision 6, review round 5).** Sharpens items 2, 3, 4, and 6
+without changing the owner's rule:
+- Hardware Radar's admission debits its own reconciled spend for the cycle on top
+  of the account usage figure until there is evidence that the figure already
+  includes it; reconciliation never makes spend disappear from the check.
+- The account is shared, and neither the ~10% margin nor the account usage limit
+  bounds what other workloads consume. The owner supplies a Hardware Radar-side
+  bound on other workloads' consumption per cycle (equivalently, Hardware Radar's
+  share of the prepaid allowance). Until it is set, Hardware Radar's paid
+  admission is denied. The account limit (currently $19, with enforcement
+  deviation of up to about 10%) is a secondary backstop, not proof of zero
+  overage.
+- Elapsed time after a run is not evidence that its usage is final. Usage counts
+  at its execution bound until a stable-read settlement rule is met, and a later
+  upward correction still counts.
+- Hardware Radar keeps one budget across environments: one environment holds
+  paid-admission authority per cycle, and a handoff happens only after it is
+  disabled and every liability is settled.
+- Operator builds and inspections are reserved in the same ledger before they
+  run.
+
 **Verified account state, 2026-09-24** (read-only API; a record of fact, not
 part of the rule): plan Starter, $19 base price, $19 prepaid usage credit,
 account usage limit $19; billing cycle 2026-09-05T00:00:00Z →

@@ -87,6 +87,27 @@
 > - **Category tests added for owner §29:** B3 and C3 name the exact-authoritative
 >   acceptance, fuzzy/merchant-only, hard-contradiction, and missing-attribute
 >   tests explicitly. Slice B's task order is unchanged.
+>
+> **Revision 6 (review round 5, 2026-09-24).** Resolves Codex round 5 (delegate
+> `0469e098`, REVISION NEEDED, findings R5-01..R5-05, all accepted). Every change
+> is confined to the Apify budget design; Slices A–C and D's ordering design are
+> unchanged. See *Review lineage*, Round 5.
+> - **R5-01:** MS2-D-40 debits reconciled Hardware Radar spend on top of the
+>   account snapshot until an evidence-backed inclusion watermark exists.
+> - **R5-02:** MS2-D-40 adds an owner-supplied external-liability bound for the
+>   shared account (owner gate R33; paid admission denied while unset) and
+>   withdraws the claim that the 10% margin bounds other workloads.
+> - **R5-03:** MS2-D-41 replaces elapsed-time finalization with a stable-read
+>   settlement predicate, a default `bound` settlement, append-only usage-read
+>   evidence (`ApifyUsageRead`), and upward corrections that can trip the latch.
+> - **R5-04:** new MS2-D-45: one ledger authority per cycle, handed off only
+>   after the old environment is disabled and fully drained; MS2-D-42's
+>   target-reduction handoff is withdrawn.
+> - **R5-05:** new MS2-D-46: builds and operator inspection are reserved in the
+>   same ledger (`operator` class).
+> - Tasks: E settings, E1 (`ApifyUsageRead`, `ApifyLedgerAuthority`, class
+>   `operator`, `settlement_basis`), E2–E7 tests, and F5a steps 1, 2, 4, and 5.
+>   New risks R33–R36; R26, R27, and R30 updated.
 
 **Goal:** prove the smallest complete multi-category decision path without an
 ADR-0011 score:
@@ -207,6 +228,12 @@ bounded, idempotent, completeness-honest, and budget-admitted.
   Do not treat the first usage figure at run completion as final, and do not mark
   a reservation reconciled because the Actor process stopped (MS2-D-41).
   Do not derive one clock from another (MS2-D-39).
+  Revision 6: do not treat elapsed time as usage finality (MS2-D-41); do not
+  drop reconciled spend from the account check while no inclusion watermark
+  exists, or admit paid work without the owner's external-liability bound
+  (MS2-D-40); do not admit paid work in an environment without the cycle's
+  ledger authority (MS2-D-45); and do not build or inspect an Actor without an
+  operator reservation (MS2-D-46).
   Do not anchor a retention deadline at a locally observed event (MS2-D-33).
   Do not change the eBay delist path or the lane-continuity gate (migration 0015)
   (D5).
@@ -892,7 +919,9 @@ polls.
   - A kill switch `HW_RADAR_APIFY_ENABLED` (default false) denies everything.
     So do missing unit prices, a tripped overrun latch (MS2-D-26), an unknown or
     stale billing cycle, an unobservable account state, and a plan whose base
-    price exceeds the cash ceiling (MS2-D-40).
+    price exceeds the cash ceiling (MS2-D-40). Revision 6 adds an unset or
+    exceeded external-liability bound (MS2-D-40) and a missing ledger authority
+    (MS2-D-45).
 - **Reconciliation.** Settlement follows MS2-D-32 and MS2-D-41. A non-null
   `usage_total_usd` alone never releases a reservation. The reservation is
   reconciled only after the import is terminal, storage deletion is verified,
@@ -1930,30 +1959,69 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
   HW_RADAR_APIFY_OPERATOR_ALLOWANCE_USD`.
   - The target defaults to 12.00, and settings validation rejects a value above
     12.00, the owner's operating target. Raising it is an owner decision.
-  - The operator allowance (default 0.50, an assumption) covers
-    Hardware Radar-attributable spend that bypasses the ledger: builds, and
-    dataset or log reads by an operator through the Console, CLI, or MCP
-    (MS2-D-43).
-- **Account prepaid headroom.** A paid run is admitted only if also
-  `account_usage_usd + Σ Hardware Radar unreconciled reservations + estimate ≤
-  account_prepaid_credit_usd − HW_RADAR_APIFY_ACCOUNT_MARGIN_USD`.
-  - Hardware Radar's outstanding reservations are counted in full even though
-    part of them may already appear in the account usage. That double counting
-    fails closed.
-  - The margin defaults to 10% of the observed prepaid credit. Apify states that
-    the platform limit may deviate by up to about 10% at enforcement, and other
-    workloads keep consuming between snapshots, so the ~$20 cash ceiling rests on
-    this admission margin, not on the account limit alone.
-  - So Hardware Radar uses the lesser of its target and the prepaid allowance
-    actually remaining. It never assumes the whole allowance is available, and
-    it never relies on pay-as-you-go overage.
+  - The operator allowance (default 0.50, an assumption) is the cap of the
+    `operator` admission class. Revision 6 (review R5-05): it is no longer an
+    untracked deduction. Builds and operator reads through the Console, CLI, or
+    MCP are reserved in the same ledger before they run (MS2-D-46).
+- **Account prepaid headroom** (revision 6 rewrites this bullet for review
+  findings R5-01 and R5-02). Let `P = account_prepaid_credit_usd −
+  HW_RADAR_APIFY_ACCOUNT_MARGIN_USD`, and let `HR_cycle` be Hardware Radar's
+  own debit for the cycle: the settled amount of every `reconciled` row whose
+  charge interval touches the cycle, plus the full estimate of every
+  unreconciled row (all classes, operator included), plus any carried handoff
+  consumption (MS2-D-45). A paid run is admitted only if **both** hold:
+  1. *Snapshot check (R5-01):* `account_usage_usd + HR_cycle − HR_included +
+     estimate ≤ P`.
+     - `HR_included` is the settled amount of reconciled rows whose whole charge
+       interval ended before `account_observed_at −
+       HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S`. That setting has **no default**;
+       unset means no trustworthy inclusion watermark exists, so
+       `HR_included = 0` and all of Hardware Radar's reconciled cycle spend is
+       debited locally on top of the snapshot. The double counting of spend the
+       snapshot already contains is accepted: it fails closed.
+     - Reconciliation therefore never makes spend disappear from this check,
+       however stale or lagging the snapshot. The owner may set the lag only
+       from F5a evidence that the account usage figure includes a charge within
+       that lag.
+  2. *External-liability check (R5-02):* `HR_cycle + estimate +
+     HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD ≤ P`.
+     - `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD` is an **owner-supplied** upper
+       bound on everything other workloads sharing the account may consume in
+       one billing cycle. Equivalently, `P −` that bound is Hardware Radar's
+       owner-allocated share of the prepaid allowance. It is purely a
+       Hardware Radar setting: Hardware Radar never reads another workload's
+       code, records, or lifecycle state to derive it.
+     - It has **no default**. While it is unset, every paid admission is denied
+       with `external_liability_unbounded` (owner gate R33). It is also denied
+       when the snapshot is older than
+       `HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S`, or when
+       `account_usage_usd − HR_cycle`, a lower bound on other workloads'
+       consumption, already exceeds the declared bound
+       (`external_liability_exceeded`, which also trips the overrun latch and is
+       reported, because the owner's bound no longer holds).
+     - The bound covers a whole cycle, and a reservation that straddles a cycle
+       edge (MS2-D-34) is checked against both cycles' bounds, so the external
+       liability is reserved over the whole outstanding-work horizon.
+  - The margin defaults to 10% of the observed prepaid credit. It absorbs price
+    and rounding error only. **It does not bound uncoordinated consumption by
+    other workloads**; only the owner's declared bound does. Revision 5's claim
+    that the cash ceiling "rests on this admission margin" is withdrawn.
+  - Hardware Radar therefore uses the lesser of its target, its declared share,
+    and the observed remaining allowance, and it never relies on pay-as-you-go
+    overage. Whether the account as a whole stays within its prepaid credit
+    also depends on the other workloads honoring the owner's bound; Hardware
+    Radar cannot enforce that, and it detects a breach only at the next
+    snapshot.
 - **Cash-ceiling guard.** If the observed base price exceeds
   `HW_RADAR_APIFY_CASH_CEILING_USD` (20.00), every paid admission is denied with
   `cash_ceiling_exceeded_by_plan`. With the verified Starter plan ($19 base,
-  $19 prepaid credit), cash outlay is $19 plus any overage, and the headroom
-  check keeps Hardware Radar from causing overage.
+  $19 prepaid credit), cash outlay is $19 plus any overage. The two checks keep
+  Hardware Radar's own admitted work within its share; they are not proof that
+  the account incurs no overage.
 - **Account backstop (owner-clarified).** The account-level usage limit is a
-  secondary defense only. Verified account state 2026-09-24: it equals the
+  secondary defense only, **not proof of zero overage**: Apify documents that
+  enforcement may deviate by up to about 10%, so a $19 limit can still let
+  usage pass $19. Verified account state 2026-09-24: it equals the
   prepaid credit ($19). The plan recommends keeping it at or below the prepaid
   credit and never raising it for Hardware Radar. No agent changes any billing
   or account setting without explicit owner authority. The project-level
@@ -1977,6 +2045,12 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
   conflated cash with consumption and ignored other workloads.
 - *Rejected (b):* the account limit as the enforcement point. It is shared,
   approximate (about 10%), and an owner billing setting.
+- *Rejected (c)* (revision 6): the 10% margin as the shared-account bound
+  (review R5-02). Another workload can consume more than the margin between a
+  snapshot and the end of an admitted run.
+- *Rejected (d)* (revision 6): adding only unreconciled reservations to the
+  snapshot (review R5-01). A reconciled run's spend then vanished from the check
+  while the snapshot still predated it.
 - *Reopen if* the owner changes plans, target, or cash ceiling, or Apify
   documents per-workload limits.
 
@@ -1987,21 +2061,55 @@ This decision refines MS2-D-17, MS2-D-26, and MS2-D-32.
   start run → poll completion → import bounded output → obtain finalized usage →
   account post-run retrieval, transfer, and storage cost → reconcile → release
   the unused reservation`.
-- **Reserve.** Under the budget lock, both MS2-D-40 checks run against the
-  worst-case estimate. A reservation exactly equal to the remaining amount is
-  admitted; one cent more is denied. Concurrent reservations serialize on the
-  lock, so the account is never oversubscribed.
+- **Reserve.** Under the budget lock, the MS2-D-40 class check and both
+  account checks run against the worst-case estimate. A reservation exactly
+  equal to the remaining amount is admitted; one cent more is denied.
+  Concurrent reservations serialize on the lock, so this ledger never
+  oversubscribes Hardware Radar's allocation or its declared share. (Revision 6:
+  the lock serializes one database only; other environments are excluded by
+  MS2-D-45 and other workloads are bounded only by the owner's declared
+  external liability, MS2-D-40.)
 - **Usage states.** `reserved → usage_provisional → usage_finalized →
-  reconciled`.
-  - The first non-null `usage_total_usd` is `usage_provisional`.
-  - It becomes `usage_finalized` on the first read taken at least
-    `HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S` (default 10 s, from Apify's guidance;
-    F5a measures it) after the run's Apify `finishedAt`. The finalized figure
-    and its read time are written once, and later reads never overwrite them,
-    because historical re-reads are recomputed at current pricing.
-  - A provider value that is still null or unsettled leaves the row in its
-    state, with the full estimate counted, and it is retried. No state is
-    corrupted.
+  reconciled`. Revision 6 (review R5-03) replaces revision 5's rule that the
+  first read ≥ 10 s after `finishedAt` is final. **Elapsed time is only a
+  minimum polling delay, never evidence of finality.**
+  - *Evidence, kept apart from state.* Every usage read is appended to an
+    immutable `ApifyUsageRead` row (`provider_run`, `read_at`,
+    `usage_total_usd`, the `usageUsd` breakdown, `finished_at` as reported, and
+    the unit-price settings version in force). Reads are never updated or
+    deleted; reconciliation state lives on the reservation and cites the read
+    rows it used.
+  - *Provisional.* The first non-null `usage_total_usd` makes the row
+    `usage_provisional`. No read earlier than
+    `HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S` (default 10 s, Apify's guidance)
+    after `finishedAt` can count toward settlement.
+  - *Settlement predicate.* Under `HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT =
+    stable_reads`, the row becomes `usage_finalized` only when
+    `HW_RADAR_APIFY_USAGE_STABLE_READS` (default 2) consecutive eligible reads,
+    each at least `HW_RADAR_APIFY_USAGE_STABLE_INTERVAL_S` (default 60 s) after
+    the previous one, return an identical `usage_total_usd` and an identical
+    `usageUsd` breakdown. If F5a finds a documented platform finality signal,
+    it may replace this predicate only through a plan revision.
+  - *Default is the bound.* `HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT` defaults to
+    `bound`: the settled run usage is `max(execution bound, every observed
+    read)`, so no capacity is returned. The owner may switch to `stable_reads`
+    only after F5a's 0/10/30/120 s readings (plus the stable-read trail)
+    converge. If those readings disagree at the last sample, the setting stays
+    `bound`, and the disagreement is recorded as F5a evidence.
+  - *Unfinalized runs.* A row that has not met the predicate by
+    `HW_RADAR_APIFY_USAGE_FINALIZE_DEADLINE_S` (default 86400 s, an assumption)
+    after `finishedAt` is settled at `max(execution bound, every observed
+    read)` with `settlement_basis = bound_unfinalized`. It stays visibly
+    `unreconciled_stale` in the report until then, and at every cycle end it is
+    carried at its full estimate. A null value never settles below the bound.
+  - *Upward correction.* After reconciliation the poll job keeps re-reading run
+    usage, at most every stable interval, until the end of the cycle after the
+    run's last charge. A later read above the settled run usage raises the
+    settled amount (appending evidence; never lowering it) and, if the new
+    settled amount exceeds the reservation, trips the overrun latch. A later
+    lower read never returns capacity, because historical re-reads may be
+    repriced. `GET` run polls must be verified free in E2; if they are billable,
+    this re-read is capped with the other poll costs.
 - **Post-run cost.** Dataset and KV reads, deletes, transfer, and timed storage
   after the run are account usage. Until F5a records the measurement
   (`HW_RADAR_APIFY_POST_RUN_COST_MODE=bound`, the default), the post-run cost
@@ -2009,7 +2117,8 @@ This decision refines MS2-D-17, MS2-D-26, and MS2-D-32.
   F5a's evidence, the mode may be set to `counted`: hw-radar's operation
   counters × verified unit prices × `(1 + margin)`. "Do not mark the budget
   reconciled merely because the Actor process stopped."
-- **Reconcile.** Settled amount = finalized run usage + post-run cost.
+- **Reconcile.** Settled amount = settled run usage (per *Usage states*,
+  including its basis) + post-run cost.
   - Lower than the reservation: the difference returns to capacity at
     reconciliation.
   - Higher than the reservation: the overrun latch trips (MS2-D-26), which
@@ -2052,10 +2161,12 @@ fixtures, F5a; revision 5, owner-clarified (s2, 2026-09-24); OQ24 part (a)).**
   migration. It is registered in `SOURCE_RETENTION` with an indefinite class
   (`merchant_fact`), because MS2-D-33 denies bounded-class sites an Actor path.
 - **Environment.** The proof runs from a non-production hw-radar environment,
-  so synthetic rows never enter the production catalog. At most one hw-radar
-  environment has `HW_RADAR_APIFY_ENABLED=true` in a billing cycle. If a second
-  environment is enabled in the same cycle, its `HW_RADAR_APIFY_CYCLE_TARGET_USD`
-  is first lowered by the first environment's reported consumption (R27).
+  so synthetic rows never enter the production catalog. Revision 6 (review
+  R5-04): revision 5's "lower the second environment's target by the first's
+  reported consumption" is withdrawn. Moving paid admission between
+  environments follows MS2-D-45: one Hardware Radar ledger authority per cycle,
+  and a handoff only after the first environment is disabled and every one of
+  its liabilities is settled.
 
 **MS2-D-43 — Operator and agent workflow for Hardware Radar Actors (F5a, E7;
 revision 5, owner-clarified (s2, 2026-09-24)).** The procedure is binding; the
@@ -2081,16 +2192,17 @@ command spellings are illustrative and are verified in D-prep and F5a.
   - *Rejected:* GitHub-integration auto-build on push. It deploys automatically
     from pushed code, which the owner ruled out, and it ignores `actor.json`'s
     version and tag.
-- **Build.** `apify push` builds; a rebuild is an explicit build API call. The
-  build cost is covered by the operator allowance (MS2-D-40).
+- **Build.** `apify push` builds; a rebuild is an explicit build API call.
+  Revision 6: every build is preceded by an operator reservation and followed
+  by its recorded cost (MS2-D-46).
 - **Smoke run.** A management command (`apify_smoke`, F5a) starts the
   `candidate` build on the synthetic source **through hw-radar's own admission
   and ledger**, imports it, and prints the contract checks. Never the MCP
   `call-actor` tool or Console "Start", which bypass the ledger.
 - **Inspect output.** The authoritative inspection is hw-radar's import and
   `provider_run` record. Operator reads through the MCP (if widened), CLI, or
-  Console are allowed read-only, and their dataset-read cost falls in the
-  operator allowance.
+  Console are allowed read-only, each preceded by an operator reservation
+  (MS2-D-46).
 - **Measure resource usage.** `provider_run` records `stats` and the finalized
   `usageUsd` breakdown. F5a runs the measurement protocol: the finalization
   delta at 0, 10, 30, and 120 s; the account usage diff around a dataset read;
@@ -2123,7 +2235,8 @@ command spellings are illustrative and are verified in D-prep and F5a.
   - It excludes `call-actor` and the RAG web-browser Actor tool (both
     spend-capable), `abort-actor-run`, and the task tools.
   - Spend: the listed tools start no run, but dataset and KV reads after a run
-    are billed account usage. They fall in the operator allowance.
+    are billed account usage. Each inspection session is reserved first
+    (MS2-D-46).
   - Authentication: any non-anonymous tool requires OAuth (account-wide) or a
     bearer token. A token cannot be committed to `.mcp.json` in this public
     repository, so it must come from a local, uncommitted configuration.
@@ -2152,6 +2265,81 @@ decision (F5b; revision 5, owner-clarified (s2, 2026-09-24); OQ24 part (b)).**
   own admission record or an open question), not folded into an Actor decision.
 - **Gate.** F5b starts only after the owner answers OQ24 for a named candidate
   with an `eligible` record.
+
+**MS2-D-45 — One Hardware Radar ledger authority per billing cycle across
+environments (Slice E, migration 0022; revision 6, review R5-04).**
+- **Hazard.** Each hw-radar environment has its own database, ledger, and
+  advisory lock, so two enabled environments could each admit up to the target
+  in one cycle. Revision 5's handoff subtracted only reported consumption, so a
+  proof environment's still-running or late-finalizing run could settle after
+  production had been given the remaining target.
+- **Authority record.** A new `ApifyLedgerAuthority` table records, per billing
+  cycle, whether this environment holds Hardware Radar's paid-admission
+  authority: `cycle_start`, `kind` (`origin | handoff | continued`),
+  `ledger_id` (a per-environment identifier setting), `carried_consumption_usd`,
+  `attested_by`, `created_at`, and `handed_off_at`. Every paid admission (all
+  classes) is denied with `ledger_authority_missing` unless the current cycle
+  has an authority row that is not handed off.
+  - `origin`: created by the owner-only command `apify_ledger_claim --origin
+    --reason`, attesting that no other environment admitted paid Hardware Radar
+    work in this cycle. It is the only row whose truth rests on an attestation
+    rather than a check (R35).
+  - `continued`: created automatically at cycle rollover for the environment
+    that held authority at the previous cycle's end and never handed it off.
+  - `handoff`: created only by importing the previous holder's export (below).
+- **Handoff, fully drained.** `apify_ledger_handoff --export` in the current
+  holder succeeds only if `HW_RADAR_APIFY_ENABLED` is false and the ledger has
+  **no** reservation in any state other than `reconciled`, `released`, or
+  `denied` (so no running run, no provisional or unfinalized usage, no retained
+  storage, no open operator reservation). It then marks its own authority
+  `handed_off` (so it can never admit again that cycle) and writes a handoff
+  record: ledger id, cycle start, the settled consumption of every class that
+  touches the cycle, and the drain attestation. `--import` in the next
+  environment refuses a record for another cycle or with any open liability,
+  and creates its `handoff` authority with `carried_consumption_usd`. Carried
+  consumption counts in `HR_cycle` and against the class caps (MS2-D-40).
+- **Unsettled handoff is not supported.** If the old environment cannot drain
+  (for example a permanently unfinalized run), the new environment waits for
+  the next cycle, or for the old run to settle at its bound
+  (`bound_unfinalized`, MS2-D-41). Transferring open liabilities between
+  databases was rejected because it needs cross-database reconciliation
+  ownership the design does not otherwise require.
+- *Rejected (a):* one shared ledger database for all environments. It couples
+  a proof environment to production's database for a one-time handoff.
+- *Rejected (b):* revision 5's target reduction by reported consumption.
+- *Reopen if* more than one environment must admit paid work in the same cycle.
+
+**MS2-D-46 — Operator operations are reserved in the same ledger (Slice E,
+F5a; revision 6, review R5-05).**
+- **Class.** Builds, rebuilds, and operator inspection through the Console, CLI,
+  or MCP (dataset, KV, and log reads) use admission class `operator`, capped by
+  `HW_RADAR_APIFY_OPERATOR_ALLOWANCE_USD`. Runtime classes are capped by `A`
+  (MS2-D-40), so runtime plus operator stays within the target.
+- **Before execution.** The operator (or agent) runs `apify_operator_reserve
+  --kind build|inspect --reason …`, which creates an `operator` reservation
+  under the budget lock at a conservative bound and passes both account checks
+  (MS2-D-40):
+  - build: `HW_RADAR_APIFY_OPERATOR_BUILD_BOUND_USD`, default 0.41 (the fixed
+    4,096 MB build memory × the fixed 1,800 s build timeout × $0.20/CU, research
+    input `apify-billing.md` B6–B7);
+  - inspect: `HW_RADAR_APIFY_OPERATOR_INSPECT_BOUND_USD`, default 0.01 per
+    inspection session (an assumption), with the session limited to the named
+    run's default storages.
+
+  When the allowance cannot fit the bound, the command refuses and the
+  operation must not be performed (`operator_allowance_exhausted`). This is a
+  procedural stop: the Console, CLI, and MCP cannot be intercepted, so R36
+  records the residual.
+- **After execution.** `apify_operator_reserve --settle <id>` records the build's
+  cost read from the build record once it meets the MS2-D-41 settlement
+  predicate, or, for inspection, the bound itself (per-read attribution in the
+  shared account is not separable). Unsettled operator reservations count at
+  their bound, block a handoff export (MS2-D-45), and appear in the spend
+  report.
+- **Reporting.** The cycle report and the handoff record include operator
+  consumption, so Hardware Radar's reported consumption covers every
+  attributable operation that went through this procedure.
+- *Rejected:* revision 5's untracked $0.50 deduction. It bounded nothing.
 
 ## Requirement traceability
 
@@ -2219,7 +2407,10 @@ Task IDs refer to the slices below.
 | AC-7 — reservation bounds cumulative work (MS2-D-32) | spec :943 | D10, E1–E4 | `test_apify_ledger.py::test_repeated_pre_commit_reads_are_capped_and_reserved`, `::test_non_null_usage_before_cleanup_completes_does_not_release_liability`, `::test_delayed_deletion_keeps_storage_liability_outstanding` |
 | AC-7 — settled spend counts in every billing cycle its charge interval touches (MS2-D-34 as revised in rev 5) | spec :943 | E1, E3, E4 | `test_apify_ledger.py::test_late_cleanup_settled_spend_counts_in_the_cycle_of_its_final_charge`, `::test_reconciled_spend_leaves_a_cycle_its_charge_interval_does_not_touch` |
 | C-011 / AC-7 — billing cycle is the period; cash ceiling = project allocation + account prepaid headroom (MS2-D-40, OQ23) | spec :181, :943 | E1–E3 | `test_apify_budget.py::test_cycle_bounds_come_from_account_limits_not_calendar`, `::test_account_headroom_below_project_target_binds`, `::test_project_target_below_account_headroom_binds`, `::test_admission_never_relies_on_overage`, `::test_plan_base_price_above_cash_ceiling_denies_all`; `test_apify_ledger.py::test_arbitrary_non_calendar_cycle_boundary` |
-| AC-7 — provisional → finalized usage; reconcile and release (MS2-D-41) | spec :943 | E4 | `test_apify_ledger.py::test_first_usage_read_is_provisional_until_settle_delay`, `::test_finalized_usage_written_once_not_recomputed`, `::test_reconcile_below_reservation_returns_capacity`, `::test_reconcile_above_reservation_trips_overrun_and_pauses_paid_work` |
+| AC-7 — provisional → finalized usage; reconcile and release (MS2-D-41) | spec :943 | E4 | `test_apify_ledger.py::test_first_usage_read_is_provisional_until_settle_delay`, `::test_finalized_usage_written_once_not_recomputed`, `::test_reconcile_below_reservation_returns_capacity`, `::test_reconcile_above_reservation_trips_overrun_and_pauses_paid_work`; revision 6 (R5-03): `::test_nonnull_usage_rising_after_ten_seconds_is_not_finalized_early`, `::test_permanently_unfinalized_run_stays_at_bound_and_is_stale_at_cycle_end`, `::test_upward_correction_after_reconciliation_raises_settled_and_trips_latch` |
+| AC-7 / C-011 — reconciled spend stays debited; shared-account external liability owner-bounded (MS2-D-40, rev 6 R5-01/R5-02) | spec :943 | E2, E3 | `test_apify_ledger.py::test_repeated_reserve_reconcile_against_one_unchanged_snapshot_keeps_debit`, `::test_refreshed_snapshot_that_still_lags_keeps_reconciled_debit`; `test_apify_budget.py::test_unset_external_liability_denies_all_paid_admission`, `::test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_prepaid` |
+| AC-7 — one HR ledger authority per cycle; drained handoff (MS2-D-45, rev 6 R5-04) | spec :943 | E1, E3, F5a | `test_apify_ledger_authority.py::test_handoff_export_refused_while_proof_run_is_running`, `::test_handoff_export_refused_while_usage_is_provisional_or_unfinalized`, `::test_second_environment_denied_until_handoff_imported` |
+| AC-7 — operator operations reserved in the ledger (MS2-D-46, rev 6 R5-05) | spec :943 | E2, E4, F5a | `test_apify_budget.py::test_operator_allowance_exhausted_refuses_reservation`; `test_apify_ledger.py::test_unsettled_operator_reservation_counts_at_bound` |
 | IR-008 / DR-011 — three clocks (MS2-D-39) | spec :285, :301 | D10, E3 | ordering tests in `test_apify_import_ordering.py` (observation clock); `test_apify_storage_cleanup.py::test_deadline_is_anchored_at_admission_not_terminal_observation` (processing clock); `test_apify_ledger.py::test_cycle_attribution_uses_charge_interval_not_observation_time` (billing clock) |
 | DR-001/DR-008 — absolute remote retention deadline (MS2-D-33) | spec :290 | D5, D11 | `test_apify_storage_cleanup.py::test_restart_after_source_ttl_rejects_expired_content_before_persistence`, `::test_unobserved_run_past_deadline_is_aborted_and_cleaned` |
 
@@ -3483,6 +3674,14 @@ the then-current code. D-prep (D1, D3) is not gated.
     (900), `…_CYCLE_BOUNDARY_GUARD_S` (3600), `…_USAGE_SETTLE_DELAY_S` (10),
     `…_POST_RUN_COST_MODE` (`bound`), `…_ACTOR_ID` (no default), and
     `…_ACTOR_BUILD` (`prod`);
+  - revision 6 (MS2-D-40, -41, -45, -46): `…_EXTERNAL_LIABILITY_USD` (**no
+    default; unset denies all paid admission**, owner gate R33),
+    `…_USAGE_INCLUSION_LAG_S` (no default; unset means no inclusion
+    watermark), `…_RUN_USAGE_SETTLEMENT` (`bound`), `…_USAGE_STABLE_READS` (2),
+    `…_USAGE_STABLE_INTERVAL_S` (60), `…_USAGE_FINALIZE_DEADLINE_S` (86400),
+    `…_LEDGER_ID` (no default), `…_OPERATOR_BUILD_BOUND_USD` (0.41), and
+    `…_OPERATOR_INSPECT_BOUND_USD` (0.01). `…_USAGE_SETTLE_DELAY_S` (10) is now
+    only a minimum polling delay;
   - withdrawn in revision 5 (owner-overridden by OQ23 and MS2-D-41):
     `…_SAFETY_MARGIN_USD`, `…_CAP_DEDUCTION_USD`, and `…_OVERRUN_TOLERANCE`;
   - revision 3 (MS2-D-32, -33): `…_MAX_DATASET_READS` (3),
@@ -3494,16 +3693,24 @@ the then-current code. D-prep (D1, D3) is not gated.
     the operator uses to set `…_STORAGE_MAX_LIFETIME`.)
 
   The revision-1 `…_PER_RUN_OVERHEAD_USD` key is withdrawn.
-- new commands `apify_spend_report` and `apify_budget_reset`.
+- new commands `apify_spend_report` and `apify_budget_reset`; revision 6 adds
+  `apify_ledger_claim`, `apify_ledger_handoff` (MS2-D-45), and
+  `apify_operator_reserve` (MS2-D-46).
 
 - **E1 — Schema (0022).** Add `ApifySpendReservation` with:
   - `provider_run` OneToOne null (null for denials) and `source_site`;
-  - `admission_class` (`watch_refresh | discovery`) and `status`
+  - `admission_class` (`watch_refresh | discovery | operator`, revision 6) and
+    `status`
     (`reserved | usage_provisional | usage_finalized | reconciled | released |
     denied`, MS2-D-32, MS2-D-41);
   - revision 5: `usage_provisional_usd`, `usage_finalized_usd` and
     `usage_finalized_at` (written once), `post_run_cost_usd` and
     `post_run_cost_mode`, and `denial_reason` values for the MS2-D-40 denials;
+  - revision 6: `settlement_basis` (`stable_reads | bound | bound_unfinalized`),
+    `settled_run_usage_usd` (raised by upward corrections, never lowered), and
+    `operator_kind` (`build | inspect`, operator rows only). Revision 5's
+    "written once" `usage_finalized_usd` is kept as the first finalized figure;
+    the immutable history lives in `ApifyUsageRead`;
   - `estimate_usd` and `actual_usd` (Decimal 10,4); `execution_bound_usd` and
     `post_run_liability_usd` (Decimal 10,4, MS2-D-32); a `component_bounds`
     JSON breakdown; `estimator_version`; `reserved_at` (admission time,
@@ -3518,6 +3725,11 @@ the then-current code. D-prep (D1, D3) is not gated.
     `account_base_price_usd`, `account_limit_usd`, `account_usage_usd`,
     `account_observed_at`, and `opened_at`. It is not retention-bearing (no
     merchant content).
+  - Revision 6: `ApifyUsageRead` (append-only evidence, MS2-D-41):
+    `provider_run` null, `reservation`, `read_at`, `usage_total_usd`,
+    `usage_usd` JSON, `finished_at_reported`, and `price_settings_version`; no
+    update or delete path. `ApifyLedgerAuthority` (MS2-D-45) with the fields
+    listed there, unique on `cycle_start`.
 - **E2 — Pure policy.** Implement `estimate_run_cost` (the MS2-D-26 component
   sum) and `decide_admission`.
   - Before writing the price defaults, re-verify every unit price and the
@@ -3541,6 +3753,15 @@ the then-current code. D-prep (D1, D3) is not gated.
       `test_stale_or_unreadable_account_snapshot_denies`;
       `test_target_setting_above_twelve_rejected`;
       `test_trailing_window_is_report_only`;
+    - revision 6 (R5-02): `test_unset_external_liability_denies_all_paid_admission`;
+      `test_external_liability_consumes_share_before_target`;
+      `test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_prepaid`
+      (a declared bound E, an admitted run, then other workloads consume up to
+      E before the run completes: the sum stays ≤ `P`);
+      `test_observed_external_consumption_above_bound_denies_and_trips_latch`;
+      `test_straddling_reservation_checked_against_both_cycles_external_bound`;
+    - revision 6 (R5-05): `test_operator_reservation_counts_against_operator_class_and_account_checks`;
+      `test_operator_allowance_exhausted_refuses_reservation`;
     - withdrawn with the OQ23 deduction (revision 5):
       `test_safety_margin_and_oq23_deduction_lower_hard_cap` and
       `test_unset_cap_deduction_denies_live_admission`;
@@ -3579,6 +3800,22 @@ the then-current code. D-prep (D1, D3) is not gated.
       is reconciled with `last_charge_at` there. The settled amount counts in
       both cycles, and a new reservation in the second cycle that fits only
       without it is denied;
+    - revision 6 (R5-01): `test_repeated_reserve_reconcile_against_one_unchanged_snapshot_keeps_debit`
+      (several reserve → reconcile cycles against one snapshot: each settled
+      amount stays in the snapshot check, and the admission that would pass
+      the prepaid limit is denied);
+      `test_refreshed_snapshot_that_still_lags_keeps_reconciled_debit`;
+      `test_inclusion_watermark_unset_debits_all_reconciled_cycle_spend`;
+      `test_inclusion_lag_set_drops_only_rows_ended_before_watermark`;
+    - revision 6 (R5-04, `tests/db/test_apify_ledger_authority.py`):
+      `test_admission_denied_without_cycle_authority`;
+      `test_handoff_export_refused_while_proof_run_is_running`;
+      `test_handoff_export_refused_while_usage_is_provisional_or_unfinalized`;
+      `test_handoff_export_refused_with_open_operator_reservation`;
+      `test_second_environment_denied_until_handoff_imported`;
+      `test_drained_handoff_carries_settled_consumption_into_second_environment`;
+      `test_exporting_environment_can_never_admit_again_in_that_cycle`;
+      `test_authority_continues_at_cycle_rollover`;
     - `test_cycle_attribution_uses_charge_interval_not_observation_time`
       (MS2-D-39);
     - `test_unreconciled_reservation_never_ages_out`;
@@ -3628,8 +3865,10 @@ the then-current code. D-prep (D1, D3) is not gated.
       - `test_orphaned_start_trips_latch`.
     - revision 5 (MS2-D-41; owner §29):
       - `test_first_usage_read_is_provisional_until_settle_delay`;
-      - `test_finalized_usage_written_once_not_recomputed` (a later read at a
-        different price leaves the finalized figure unchanged);
+      - `test_finalized_usage_written_once_not_recomputed` (revision 6
+        meaning: the first finalized figure is recorded once as evidence; a
+        later *lower* read changes nothing, while a later higher read is an
+        upward correction, below);
       - `test_unsettled_usage_keeps_full_reservation_and_retries`;
       - `test_post_run_cost_uses_bound_until_measured` and
         `test_post_run_cost_counted_mode_uses_operation_counters`;
@@ -3637,6 +3876,18 @@ the then-current code. D-prep (D1, D3) is not gated.
       - `test_reconcile_above_reservation_trips_overrun_and_pauses_paid_work`;
       - `test_overrun_never_admits_repair_run_or_dataset_reread`;
       - `test_process_stop_alone_never_reconciles`.
+    - revision 6 (R5-03; these replace revision 5's single-read finalization):
+      - `test_nonnull_usage_rising_after_ten_seconds_is_not_finalized_early`
+        (reads at 10 s and 30 s differ; the row stays provisional at its
+        bound, and the later, higher figure is the one settled);
+      - `test_stable_reads_predicate_requires_identical_consecutive_reads`;
+      - `test_bound_mode_settles_at_max_of_execution_bound_and_reads`;
+      - `test_permanently_unfinalized_run_stays_at_bound_and_is_stale_at_cycle_end`;
+      - `test_upward_correction_after_reconciliation_raises_settled_and_trips_latch`;
+      - `test_later_lower_read_never_returns_capacity`;
+      - `test_usage_reads_are_append_only_evidence`.
+    - revision 6 (R5-05): `test_operator_build_settles_from_build_cost` and
+      `test_unsettled_operator_reservation_counts_at_bound`.
 - **E5 — Wire admission.** Replace `DenyAllAdmission` with the ledger in the
   start job, and derive `budget_paused` into C's freshness.
   - Tests: `test_denied_start_records_denial_and_starts_nothing`;
@@ -3646,7 +3897,10 @@ the then-current code. D-prep (D1, D3) is not gated.
   per billing cycle (the authoritative view): the cycle bounds, the project
   allocation, consumed finalized usage, outstanding reservations, remaining
   project budget, and the observed account usage, prepaid credit, and remaining
-  prepaid allowance; then per-source and per-provider totals from the ledger and
+  prepaid allowance; revision 6 adds the declared external liability, the
+  inclusion-watermark status, the ledger authority and any carried handoff
+  consumption, and operator consumption by kind; then per-source and
+  per-provider totals from the ledger and
   `provider_run`; unsettled and overrun rows with their reasons; and a
   trailing-31-day trend line labeled secondary (MS2-D-17). The calendar-month
   view of revision 4 is withdrawn.
@@ -3658,16 +3912,21 @@ the then-current code. D-prep (D1, D3) is not gated.
 - **E7 — Close-out.** This runs last. Gate; TODO/STATUS. Record the owner
   tasks (revision 5): keep the account-level usage limit at or below the
   prepaid credit; provision the Hardware Radar runtime token and its OpenBao
-  path (R25); decide the MCP tool filter (R24). OQ23 is resolved; no deduction
-  setting remains.
+  path (R25); decide the MCP tool filter (R24); set the external-liability
+  bound (R33), without which paid admission stays denied. OQ23 is resolved; no
+  deduction setting remains.
 
 **Acceptance:** AC-7 holds. Admission fails closed on the kill switch, at the
-class cap, at the account prepaid headroom, on a tripped overrun latch, on
+class cap, at either account check (with reconciled spend still debited and the
+owner's external-liability bound reserved), with the external-liability bound
+unset, without a ledger authority for the cycle (revision 6), on a tripped overrun latch, on
 missing prices, on an unknown cycle or unobservable account state, on a plan
 above the cash ceiling, on any component without an enforceable bound, and on
 missing settings. Reconciliation and admission are serialized. No reservation
 ages out unreconciled, and none is released while charge-producing work remains
-or before its usage is finalized and its post-run cost accounted. Settled spend
+or before its usage meets the settlement predicate (or settles at its bound)
+and its post-run cost is accounted; a later upward correction still trips the
+latch. Operator operations are reserved in the same ledger. Settled spend
 counts in every billing cycle its charge interval touches, however late cleanup
 succeeded (revision 5).
 
@@ -3747,13 +4006,16 @@ succeeded (revision 5).
   withdrawn (owner-overridden, MS2-D-38).
 - **F5a — Synthetic proof through a real private Actor (MS2-D-42, -43).** Gated
   on: E merged; the Hardware Radar runtime token provisioned (R25); verified
-  unit prices; `…_STORAGE_MAX_LIFETIME` set; the latch clear; and an explicit
-  owner or orchestrator instruction to deploy. No merchant legal decision is
-  needed.
+  unit prices; `…_STORAGE_MAX_LIFETIME` set; the external-liability bound set
+  (R33, revision 6); the latch clear; and an explicit owner or orchestrator
+  instruction to deploy. No merchant legal decision is needed.
   1. Create the synthetic site with its idempotent setup command, in a
-     non-production environment (MS2-D-42).
-  2. Deploy `hw-radar-synthetic-collector` by the MS2-D-43 procedure, verify the
-     push uploaded only the Actor directory, and record the deployment.
+     non-production environment (MS2-D-42), and claim the cycle's ledger
+     authority there (`apify_ledger_claim --origin`, MS2-D-45).
+  2. Reserve the build (`apify_operator_reserve --kind build`, MS2-D-46), deploy
+     `hw-radar-synthetic-collector` by the MS2-D-43 procedure, verify the push
+     uploaded only the Actor directory, settle the build reservation, and
+     record the deployment.
   3. Run through hw-radar's own path:
      `APScheduler/provider admission → budget reservation → Actor start →
      remote execution → bounded output → completion polling → completeness
@@ -3766,8 +4028,17 @@ succeeded (revision 5).
   4. Run the measurement protocol (MS2-D-43): finalization deltas, the post-run
      account usage diff, storage accrual after deletion, and the `date`
      parameter cycle read. Record the results; the owner decides whether
-     `…_POST_RUN_COST_MODE` may become `counted`.
-  5. Record every §21 item's live evidence (see *Synthetic Actor proof
+     `…_POST_RUN_COST_MODE` may become `counted`. Revision 6 (R5-03): continue
+     reading each run's usage past 120 s until the stable-read predicate holds,
+     and record the full trail. If the 0/10/30/120 s readings disagree at the
+     last sample, `…_RUN_USAGE_SETTLEMENT` stays `bound`. Also measure the
+     account usage inclusion lag, the only evidence on which the owner may set
+     `…_USAGE_INCLUSION_LAG_S` (R5-01).
+  5. Before any production environment admits paid work in the same cycle,
+     disable this environment, drain every liability, and hand off
+     (`apify_ledger_handoff`, MS2-D-45). A still-running or late-finalizing
+     proof run blocks the handoff.
+  6. Record every §21 item's live evidence (see *Synthetic Actor proof
      acceptance*) in STATUS.
 - **F5b — Production Actor-backed merchant source (owner-gated: OQ24, R1).**
   After the owner answers OQ24 for a candidate with an `eligible` source-admission
@@ -3818,19 +4089,24 @@ F5b lands is an owner decision (R31).
 | R23 | MS2-D-35 residual. Stale-absence sweeps raise no scope watermark, and `last_seen` is `auto_now`, so an import stamps it at persistence time rather than at `observed_at`. A delayed current-eligible import therefore makes a listing look fresher to stale absence by up to the import delay, which the storage deadline bounds (default 24 h). A previously unknown key that a stale sweep would have treated as absent stays active for about one grace longer. This fails toward keeping a listing active, never toward a false delist. Preserved property (revision 5, verbatim): "a delayed import may delay a correct delist, never cause a false delist". Any improvement needs out-of-order tests (MS2-D-39). The fix, stamping `last_seen` from `observed_at` on the import path, touches the `auto_now` contract that `redact_merchant_content` documents. | Decide at the *Slice D entry gate* | none (D entry gate decision) |
 | R24 | The project `.mcp.json` loads only the four anonymous Apify MCP tools, so MCP cannot inspect runs, logs, datasets, or KV records. Widening it needs OAuth (account-wide) or a bearer token kept out of this public repository, and the recommended read-only value is in MS2-D-43. `call-actor` is spend-capable and stays excluded; MCP dataset reads are billed account usage (operator allowance). | Decide whether to widen the filter and how to authenticate | Operator inspection only; not the runtime |
 | R25 | Hardware Radar has no Apify token of its own yet; only the apify-actors venture's agent token exists, and Hardware Radar must not use it. Whether a limited-permission token can read `/users/me/limits` and `/users/me/usage/monthly` is unverified (MS2-D-15). | Provision a Hardware Radar runtime token at the proposed `secret/apps/hw-radar/apify` path, rendered as `HW_RADAR_APIFY_TOKEN`, and a separate operator deploy credential | D3 live verification; E live admission; F5a |
-| R26 | Usage finalization is unverified on this account: Apify documents a preliminary first figure and advises a re-read after about 10 s, but the actual settle time is unmeasured. | Review F5a's finalization measurements | E accuracy |
-| R27 | Post-run consumption (dataset reads, storage, transfer) is unmeasured, so the post-run cost counts at its full bound, which makes admission tighter than actual spend. The account is shared: other workloads (the apify-actors venture) reduce the prepaid allowance Hardware Radar may use, and two hw-radar environments enabled in one cycle could each spend the full target unless the second is lowered (MS2-D-42). | Approve `counted` mode after F5a; keep one enabled environment per cycle | E live admission |
+| R26 | Usage finalization is unverified on this account: Apify documents a preliminary first figure and advises a re-read after about 10 s, but the actual settle time is unmeasured. Revision 6 (R5-03): elapsed time is only a minimum delay; settlement needs identical consecutive reads, and the default `…_RUN_USAGE_SETTLEMENT=bound` returns no capacity until F5a's readings converge. | Review F5a's finalization trail; approve `stable_reads` only if it converges | E accuracy |
+| R27 | Post-run consumption (dataset reads, storage, transfer) is unmeasured, so the post-run cost counts at its full bound, which makes admission tighter than actual spend. The account is shared: other workloads (the apify-actors venture) reduce the prepaid allowance Hardware Radar may use (bounded only by R33). Revision 6: two environments in one cycle are governed by the ledger authority and drained handoff (MS2-D-45), replacing revision 5's target reduction. | Approve `counted` mode after F5a | E live admission |
 | R28 | The residential-proxy feature is available on the account (verified 2026-09-24), so nothing at the account level stops an Actor from using it. Code tests, the input schema, and the proxy usage latch are the controls (MS2-D-26, MS2-D-38, MS2-D-44). | — | none |
 | R29 | Monorepo `apify push` scoping is unconfirmed: whether it uploads only `actors/<name>/` when run there. D-prep verifies it through the version's `sourceFiles`; the fallback is a Git-source Actor with no push webhook (MS2-D-43). | — | F5a deployment |
-| R30 | The platform limit may deviate by up to about 10% at enforcement (Apify help center). The ~$20 cash ceiling therefore rests on Hardware Radar's account margin (MS2-D-40), not on the account limit. Whether the platform aborts a running run at the limit is unverified, and the enforcement experiment must not run on the shared account without owner sign-off. | Sign off before any enforcement experiment | none |
+| R30 | The platform limit may deviate by up to about 10% at enforcement (Apify help center). The account limit is therefore a secondary backstop, not proof of zero overage. Revision 6 (R5-02): the margin does not bound other workloads either; Hardware Radar's own admission stays within the owner-declared share (R33), and whole-account safety also depends on other workloads honoring that bound. Whether the platform aborts a running run at the limit is unverified, and the enforcement experiment must not run on the shared account without owner sign-off. | Sign off before any enforcement experiment | none |
 | R31 | MS-2 Task 6 names a self-owned-Apify pilot source, but F5b waits on OQ24. Whether MS-2 may exit on the synthetic proof (F5a) while F5b is pending is not decided. | Decide the MS-2 exit condition for Task 6 | MS-2 exit only |
 | R32 | (Implementation-driven, Slice B.) No retention class exists for non-first-party reference rows, so the importer refuses non-first-party seed documents and B4c seeds first-party rows only; RAM coverage is two rows. Adding a class rewrites every `*_retention_ttl_coherent` CHECK, as migration `0017` did (MS2-D-06). | Decide the retention class for non-first-party reference data | B4c RAM expansion; any non-first-party seed |
+| R33 | **Owner gate (revision 6, R5-02).** Paid admission needs `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD`, an owner-declared maximum that other workloads sharing the Apify account may consume in one billing cycle (equivalently, Hardware Radar's allocated share of the prepaid credit). It has no default, so live paid admission, including F5a, stays denied until the owner sets it. Hardware Radar derives it from no other workload's code or records, cannot enforce it on those workloads, and detects a breach only when a snapshot shows it. | Declare the bound (or Hardware Radar's share) | E live admission; F5a; F5b |
+| R34 | Revision 6 admission is deliberately conservative and may leave Hardware Radar well under its $12 target: reconciled spend is debited on top of the snapshot while no inclusion watermark exists (R5-01); run usage settles at its execution bound until F5a supports `stable_reads` (R5-03); and the external-liability bound is reserved in full. With the verified figures ($19 prepaid, $1.90 margin) and no watermark, late-cycle headroom falls roughly by Hardware Radar's own settled spend. | Set `…_USAGE_INCLUSION_LAG_S` and `stable_reads` only from F5a evidence | E live capacity |
+| R35 | The first ledger authority in a cycle (`apify_ledger_claim --origin`, MS2-D-45) rests on an owner attestation that no other environment admitted paid work that cycle; every later authority is machine-checked (continuation or drained handoff). | Attest only when true | E live admission |
+| R36 | Operator reservations (MS2-D-46) are a procedural control: the Console, CLI, and MCP cannot be intercepted, so an operation run without a reservation is unaccounted. The build bound ($0.41) nearly fills the $0.50 allowance, and under the default `bound` settlement a settled build returns little capacity, so about one build per cycle fits until F5a evidence allows `stable_reads` or the owner raises the allowance. | Reserve before every build or inspection; revisit the allowance after F5a | F5a deployment cadence |
 
 No new ADR or OQ file is created by this plan. Revision 5: OQ23 is resolved and
 OQ24 split by the owner's 2026-09-24 decisions, recorded in
 `resolved-questions.md`, `open-questions.md`, and ADR 0021's amendment (not by
 this plan). R12 still offers an optional ADR for MS2-D-07. New owner decisions
-this plan needs are R24, R25, R31, and R32.
+this plan needs are R24, R25, R31, R32, R33 (revision 6), and the R35
+attestation at the first origin claim.
 
 ## Review lineage
 
@@ -3954,7 +4230,7 @@ changelog at the top, and MS2-D-38..-44). Rounds 1–4 above are unchanged, and
 every decision not named in the changelog keeps its round-4 status.
 - **Review status:** a Codex review of revision 5 is **pending**. The
   orchestrator runs round 5 after this revision lands; its verdict and
-  disposition are recorded here as *Round 5*.
+  disposition are recorded here as *Round 5*. (Done: see *Round 5* below.)
 - **Design choices beyond the owner's words**, offered for that review:
   the contract artifact location and conformance direction (MS2-D-14); the
   Actor project and gate layout (MS2-D-38); the `TruncationReason` vocabulary
@@ -3964,6 +4240,30 @@ every decision not named in the changelog keeps its round-4 status.
   (MS2-D-41); the pinned raw-GitHub synthetic source and the non-production
   proof environment (MS2-D-42); and `apify push` from a reviewed checkout with
   a `candidate` → `prod` tag promotion (MS2-D-43).
+
+**Round 5: cross-agent delegate `0469e098`** (Codex, opposite provider, static
+read-only review of revision 5 at `3970234`).
+- **Verdict:** REVISION NEEDED, five findings (R5-01..R5-05): four high, one
+  medium. **All five accepted → revision 6.**
+- The review's "verified correct" items stand: repository ownership, the
+  in-build-context contract, the cash/consumption distinction, single-database
+  lock serialization, billing-cycle discovery, reconciliation preconditions,
+  the D-core ordering decisions, the OQ24 split, the 18 §21 mappings, the
+  migration chain, and the separate `TruncationReason`.
+
+| Finding | Sev. | Status | Decision / plan location (changed text) | Named tests |
+| --- | --- | --- | --- | --- |
+| R5-01 reconciliation removes spend from account-headroom admission while the snapshot predates it | high | Accepted; resolved | MS2-D-40 *Account prepaid headroom* check 1 (`HR_cycle` includes reconciled spend; `…_USAGE_INCLUSION_LAG_S` unset ⇒ no watermark); *Rejected (d)*; E settings; F5a step 4; R34 | `test_apify_ledger.py::test_repeated_reserve_reconcile_against_one_unchanged_snapshot_keeps_debit`, `::test_refreshed_snapshot_that_still_lags_keeps_reconciled_debit`, `::test_inclusion_watermark_unset_debits_all_reconciled_cycle_spend`, `::test_inclusion_lag_set_drops_only_rows_ended_before_watermark` |
+| R5-02 a 10% margin cannot bound uncoordinated shared-account consumption | high | Accepted; resolved; owner gate R33 | MS2-D-40 check 2 (`…_EXTERNAL_LIABILITY_USD`, no default, unset ⇒ deny; breach detection), margin bullet, *Cash-ceiling guard*, *Account backstop*, *Rejected (c)*; MS2-D-41 *Reserve*; R30, R33; ADR 0021 amendment addendum | `test_apify_budget.py::test_unset_external_liability_denies_all_paid_admission`, `::test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_prepaid`, `::test_observed_external_consumption_above_bound_denies_and_trips_latch`, `::test_straddling_reservation_checked_against_both_cycles_external_bound` |
+| R5-03 ten elapsed seconds treated as irreversible finalization | high | Accepted; resolved | MS2-D-41 *Usage states* (evidence table, stable-read predicate, default `bound`, unfinalized deadline, upward correction), *Reconcile*; E1 (`ApifyUsageRead`, `settlement_basis`); F5a step 4 (disagreement ⇒ stay `bound`); R26, R34 | `test_apify_ledger.py::test_nonnull_usage_rising_after_ten_seconds_is_not_finalized_early`, `::test_permanently_unfinalized_run_stays_at_bound_and_is_stale_at_cycle_end`, `::test_upward_correction_after_reconciliation_raises_settled_and_trips_latch`, `::test_later_lower_read_never_returns_capacity`, `::test_usage_reads_are_append_only_evidence` |
+| R5-04 second-environment handoff omits outstanding liabilities | high | Accepted; resolved | MS2-D-45 (new; ledger authority, drained handoff, unsettled handoff unsupported); MS2-D-42 *Environment*; E1 (`ApifyLedgerAuthority`); F5a steps 1 and 5; R27, R35 | `test_apify_ledger_authority.py::test_handoff_export_refused_while_proof_run_is_running`, `::test_handoff_export_refused_while_usage_is_provisional_or_unfinalized`, `::test_second_environment_denied_until_handoff_imported`, `::test_drained_handoff_carries_settled_consumption_into_second_environment` |
+| R5-05 operator allowance is an untracked deduction | medium | Accepted; resolved | MS2-D-46 (new; `operator` class, pre-execution reservation, settle, reporting, handoff); MS2-D-40 *Project allocation*; MS2-D-43 *Build*, *Inspect output*, MCP spend; E6 report; F5a step 2; R36 | `test_apify_budget.py::test_operator_reservation_counts_against_operator_class_and_account_checks`, `::test_operator_allowance_exhausted_refuses_reservation`; `test_apify_ledger.py::test_operator_build_settles_from_build_cost`, `::test_unsettled_operator_reservation_counts_at_bound`; `test_apify_ledger_authority.py::test_handoff_export_refused_with_open_operator_reservation` |
+
+**Migrations (round 5):** no number changes. The new tables
+(`ApifyUsageRead`, `ApifyLedgerAuthority`) and columns (`settlement_basis`,
+`settled_run_usage_usd`, `operator_kind`) land in Slice E's unmerged `0022`.
+
+**Revision 6 review status:** a Codex review of revision 6 is pending (round 6).
 
 ## Next slice after A
 
