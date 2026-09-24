@@ -75,6 +75,15 @@ from hw_radar.catalog.models.resolution import (
     ResolutionMethod,
     UnknownModelBackfill,
 )
+from hw_radar.catalog.models.watch import (
+    CpuRequirement,
+    DriveRequirement,
+    EligibilityVerdict,
+    GpuRequirement,
+    RamRequirement,
+    Watch,
+    WatchEvaluation,
+)
 
 __all__ = [
     "BOUNDED_RETENTION_CLASSES",
@@ -86,15 +95,19 @@ __all__ = [
     "Category",
     "CheapSignal",
     "Condition",
+    "CpuRequirement",
     "CpuSpec",
     "DelistReason",
+    "DriveRequirement",
     "DriveSpec",
     "DriveUnit",
+    "EligibilityVerdict",
     "FetchRequestStatus",
     "FxRateDaily",
     "GpuChipVendor",
     "GpuCooling",
     "GpuInterface",
+    "GpuRequirement",
     "GpuSpec",
     "HeartbeatDecision",
     "LifecycleState",
@@ -111,6 +124,7 @@ __all__ = [
     "ProviderKind",
     "RamGeneration",
     "RamModuleType",
+    "RamRequirement",
     "RamSpec",
     "RawPayload",
     "RecertChannel",
@@ -141,5 +155,7 @@ __all__ = [
     "VerificationEvent",
     "VolatilityProfile",
     "WarrantyChannel",
+    "Watch",
+    "WatchEvaluation",
     "retention_constraints",
 ]

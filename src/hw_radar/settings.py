@@ -51,6 +51,9 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # Required by Django's postgres.E005 system check for the ArrayField
+    # requirement columns on catalog.Watch and its requirement satellites.
+    "django.contrib.postgres",
     "hw_radar.accounts",
     "hw_radar.catalog",
     "hw_radar.web",

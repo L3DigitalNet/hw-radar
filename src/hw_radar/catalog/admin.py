@@ -1,12 +1,16 @@
 from django.contrib import admin
+from django.db.models import Model
 from django.http import HttpRequest
 
 from hw_radar.catalog.models import (
     Category,
+    CpuRequirement,
     CpuSpec,
+    DriveRequirement,
     DriveSpec,
     DriveUnit,
     FxRateDaily,
+    GpuRequirement,
     GpuSpec,
     Listing,
     ListingResolution,
@@ -15,6 +19,7 @@ from hw_radar.catalog.models import (
     ProductFamily,
     ProductModel,
     ProductVariant,
+    RamRequirement,
     RamSpec,
     RefdataConfig,
     ReferenceFetchRequest,
@@ -23,6 +28,8 @@ from hw_radar.catalog.models import (
     SourceConfig,
     SourceSite,
     UnknownModelBackfill,
+    Watch,
+    WatchEvaluation,
 )
 
 admin.site.register(Category)
@@ -134,3 +141,37 @@ class ReferenceFetchRequestAdmin(
     )
     list_filter = ("status", "vendor_hint")
     search_fields = ("hypothesis_key", "mpn_hypothesis")
+
+
+class WatchInspectionAdmin(
+    admin.ModelAdmin  # pyright: ignore[reportMissingTypeArgument]
+    # see ListingResolutionAdmin: runtime ModelAdmin isn't subscriptable
+):
+    """Read-only inspection of watches, requirement satellites, and verdicts.
+
+    Watch requirements have one writer, the requirement service in
+    hw_radar.eligibility. It enforces satellite category = watch category and
+    bumps Watch.requirement_version on every edit. An admin edit would skip the
+    bump, so verdicts computed against the old requirements would still read as
+    current (MS2-D-20). WatchEvaluation rows are evaluator output and are never
+    hand-edited."""
+
+    def has_add_permission(self, request: HttpRequest) -> bool:
+        return False
+
+    def has_change_permission(self, request: HttpRequest, obj: Model | None = None) -> bool:
+        return False
+
+    def has_delete_permission(self, request: HttpRequest, obj: Model | None = None) -> bool:
+        return False
+
+
+for _watch_model in (
+    Watch,
+    DriveRequirement,
+    GpuRequirement,
+    RamRequirement,
+    CpuRequirement,
+    WatchEvaluation,
+):
+    admin.site.register(_watch_model, WatchInspectionAdmin)
