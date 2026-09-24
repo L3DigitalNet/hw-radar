@@ -1,8 +1,20 @@
-"""Stage runner: fetch → parse → normalize → persist → delist → resolve, in a ScraperRun.
+"""Stage runner: fetch → parse → normalize → persist → delist → resolve → evaluate,
+in a ScraperRun.
 
 Stages are independently re-runnable (§8.1); a resolver failure never blocks
-persistence (C.3 — the listing lands unresolved). ORM work runs through
-sync_to_async because the runner lives on the poller's event loop.
+persistence (C.3 — the listing lands unresolved), and neither does an evaluator
+failure (MS2-D-20). ORM work runs through sync_to_async because the runner lives
+on the poller's event loop.
+
+The evaluate stage (MS-2 Slice C, MS2-D-20) runs the eligibility evaluator for
+every listing whose resolution did not raise in this run. `evaluator=None` binds
+the production WatchEvaluator rather than skipping the stage, so the poll,
+heartbeat-fired FULL and recovery-probe paths — all of which reach this runner
+through run_source with no evaluator argument — evaluate without per-caller
+wiring. A listing the stage did not assess (resolver raised, evaluator raised)
+keeps its old WatchEvaluation rows, which the read model then sees as
+non-current (`pending`) because their snapshot binding no longer matches: the
+failure path fails closed without writing anything.
 
 The delist stage (CR-004) is opt-in per source: an adapter that can describe what
 its sweep proves implements DelistDetector, and listings this site owns that the
@@ -63,6 +75,7 @@ from hw_radar.catalog.models import (
     SourceConfig,
     SourceSite,
 )
+from hw_radar.eligibility import ListingEvaluator, WatchEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -385,7 +398,10 @@ async def run_source(
     """Run one in-process SourceAdapter through the pipeline (see run_collection).
 
     Signature kept stable for the poller, heartbeat and probe call sites; retention
-    must still be forwarded from adapter_retention(adapter) by the caller.
+    must still be forwarded from adapter_retention(adapter) by the caller. It
+    deliberately takes no evaluator: run_collection's default binds the
+    production WatchEvaluator, so every one of those call sites evaluates
+    (MS2-D-20) without being edited.
     """
     return await run_collection(
         LocalCollectionProvider(adapter),
@@ -405,13 +421,24 @@ async def run_collection(
     expires_policy: Callable[[datetime], datetime | None] | None = None,
     run_kind: RunKind | None = None,
     fetch_timeout_s: float = FETCH_TIMEOUT_S,
+    evaluator: ListingEvaluator | None = None,
 ) -> tuple[ScraperRun, RunOutcome]:
-    """Fetch, classify, parse, persist, delist and resolve one provider run.
+    """Fetch, classify, parse, persist, delist, resolve and evaluate one provider run.
 
     Always returns a recorded ScraperRun: every failure is classified and
     finalized rather than raised (NFR-001). A successful run stores the
-    provider's ProviderRunEvidence in detail_json["provider"].
+    provider's ProviderRunEvidence in detail_json["provider"] and the count of
+    listings whose eligibility evaluation raised in
+    detail_json["evaluator_errors"]; an evaluator failure never fails the run.
+
+    `evaluator=None` means the production WatchEvaluator, not "no evaluation"
+    (MS2-D-20); tests inject a fake through this parameter.
     """
+    # Rejected: a null-object default that each caller must override. That is
+    # exactly the omission plan review F-03 found on the heartbeat path — any
+    # caller that forgot the argument would silently leave stale verdicts
+    # standing — so the production evaluator is the default instead.
+    listing_evaluator: ListingEvaluator = evaluator if evaluator is not None else WatchEvaluator()
     effective_kind = run_kind or provider.run_kind
     site = await sync_to_async(SourceSite.objects.get)(normalized_name=provider.site_key)
     run = await sync_to_async(ScraperRun.objects.create)(
@@ -475,12 +502,15 @@ async def run_collection(
         else:
             evidence = provider.run_evidence(batch, parsed, None, run_kind=effective_kind)
         resolver_errors = 0
+        resolver_failed: set[int] = set()
         for listing_id in listing_ids:
             try:
                 await sync_to_async(resolver.resolve_listing)(listing_id)
             except Exception:  # resolver failure never blocks ingestion (C.3)
                 logger.exception("resolver failed for listing %s", listing_id)
                 resolver_errors += 1
+                resolver_failed.add(listing_id)
+        evaluator_errors = await _evaluate_all(listing_evaluator, listing_ids, resolver_failed)
         grain_counts = await sync_to_async(_grain_counts)(listing_ids)
         run.records_fetched = len(batch.items)
         run.records_valid = len(normalized)
@@ -489,6 +519,7 @@ async def run_collection(
         run.detail_json = {
             "body_bytes": sum(len(item.payload_text or "") for item in batch.items),
             "resolver_errors": resolver_errors,
+            "evaluator_errors": evaluator_errors,
             "grain_counts": grain_counts,
             "listings_delisted": delisted,
             "provider": evidence.model_dump(mode="json"),
@@ -508,6 +539,37 @@ async def run_collection(
         return await _finalize_failure(run, exc.failure_class, str(exc), effective_kind)
     except Exception as exc:  # every crash must classify + record (NFR-001)
         return await _finalize_failure(run, classify_exception(exc), repr(exc), effective_kind)
+
+
+async def _evaluate_all(
+    evaluator: ListingEvaluator, listing_ids: list[int], resolver_failed: set[int]
+) -> int:
+    """Evaluate each distinct listing of the run once; return how many raised.
+
+    Runs AFTER the resolve stage, because product clauses read the listing's
+    current resolution edge. A listing whose resolution raised in this run is
+    skipped (MS2-D-20): its edge may not reflect this run's observation, so a
+    verdict stamped now could bind a current-looking row to an input the
+    resolver never assessed. Skipping it writes nothing, which leaves its old
+    rows bound to the previous snapshot and therefore `pending`.
+
+    Each listing is isolated: one failure is logged and counted, never raised,
+    and the remaining listings are still evaluated (the evaluator writes
+    nothing for a listing it raised on, so that listing fails closed too).
+    """
+    errors = 0
+    # dict.fromkeys: listing_ids may repeat a pk (the case _grain_counts
+    # guards); a repeat would be evaluated twice under the listing's row lock
+    # for an identical result.
+    for listing_id in dict.fromkeys(listing_ids):
+        if listing_id in resolver_failed:
+            continue
+        try:
+            await sync_to_async(evaluator.evaluate_listing)(listing_id)
+        except Exception:  # evaluator failure never blocks ingestion (MS2-D-20)
+            logger.exception("eligibility evaluation failed for listing %s", listing_id)
+            errors += 1
+    return errors
 
 
 async def _finalize_failure(

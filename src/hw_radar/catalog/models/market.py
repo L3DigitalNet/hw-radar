@@ -332,10 +332,12 @@ class Listing(RetentionGoverned):
 
         Also pulls the DR-008 evidence TTLs forward to the delist instant for
         BOUNDED retention classes, so the retention sweeper physically removes the
-        offer SNAPSHOTS at its next pass instead of up to a full freshness window
-        later. Indefinite classes (merchant facts) are left alone — their
-        retention CHECK requires expires_at IS NULL, and delisting an offer is not
-        licence to drop a merchant fact.
+        offer SNAPSHOTS and the WATCH EVALUATIONS at its next pass instead of up
+        to a full freshness window later. Evaluations are evidence too: their
+        reasons quote the snapshot's prices (MS2-D-09). Indefinite classes
+        (merchant facts) are left alone — their retention CHECK requires
+        expires_at IS NULL, and delisting an offer is not licence to drop a
+        merchant fact.
 
         The listing's own expires_at moves with them, but for a different reason:
         the Listing is a retention ANCHOR (see the class docstring) and is never
@@ -367,10 +369,19 @@ class Listing(RetentionGoverned):
             # update_fields keeps last_seen (auto_now) where the source left it.
             self.save(update_fields=fields)
             if bounded:
+                # Function-local import: watch.py imports this module for the
+                # Listing FK, so a module-level import would be circular.
+                from hw_radar.catalog.models.watch import WatchEvaluation
+
+                bounded_values = [c.value for c in BOUNDED_RETENTION_CLASSES]
                 OfferSnapshot.objects.filter(
-                    listing=self,
-                    retention_class__in=[c.value for c in BOUNDED_RETENTION_CLASSES],
-                    expires_at__gt=stamp,
+                    listing=self, retention_class__in=bounded_values, expires_at__gt=stamp
+                ).update(expires_at=stamp)
+                # Same rule as the snapshots: without it an eBay evaluation
+                # would keep quoting the delisted offer's price until its
+                # original expiry, outliving the snapshot it was computed from.
+                WatchEvaluation.objects.filter(
+                    listing=self, retention_class__in=bounded_values, expires_at__gt=stamp
                 ).update(expires_at=stamp)
             if self.retention_class in {c.value for c in DELETE_ON_DELIST_CLASSES}:
                 self.redact_merchant_content()
