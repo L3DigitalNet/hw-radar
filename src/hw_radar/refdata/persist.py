@@ -15,9 +15,20 @@ Invariants:
 - Keys match the resolver's materialization exactly — family get_or_create on
   (manufacturer, canonicalize_title(name)), so seeding 'Exos' ADOPTS the rung-2
   provisional 'exos' row instead of duplicating it (carry-forward #4).
-- DR-009: every written ProductModel/DriveSpec/ProductAlias row carries
+- DR-009: every written ProductModel/spec-satellite/ProductAlias row carries
   retention_class=manufacturer_reference, expires_at NULL. Absent-from-seed
   models are never deleted (append-only).
+- Category-keyed (MS2-D-06): the document's category picks the Category row and
+  the spec satellite (_SPEC_MODELS). The drive path writes exactly what it wrote
+  before MS-2.
+- First-party only (MS2-D-06): catalog_authoritative / manufacturer_reference
+  are stamped only from first-party provenance. A `non_first_party` document is
+  refused before anything is written (UnratifiedProvenanceError): its aliases
+  would be `manual`, but no retention class for non-first-party reference rows
+  is ratified — manufacturer_reference asserts first-party provenance (DR-009)
+  and listing_derived_alias asserts a listing inference (OQ22). Lifting this
+  guard needs that decision first; it is a new RetentionClass, which rewrites
+  every *_retention_ttl_coherent CHECK (see migration 0017).
 - Never writes offer_snapshot/score/alert/heartbeat rows (ADR-0018 rule 1)."""
 
 from __future__ import annotations
@@ -25,17 +36,21 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Final
 
 from django.db import transaction
 
 from hw_radar.catalog.models import (
     AliasSourceKind,
     Category,
+    CpuSpec,
     DriveSpec,
+    GpuSpec,
     Manufacturer,
     ProductAlias,
     ProductFamily,
     ProductModel,
+    RamSpec,
     RetentionClass,
 )
 from hw_radar.matching.ladder import brands_consistent
@@ -43,6 +58,15 @@ from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.refdata.contracts import SeedAlias, SeedDocument, SeedModel, detect_conflicts
 
 logger = logging.getLogger(__name__)
+
+# Keys must equal contracts.SeedCategory: a seedable category without a
+# satellite here would fail every import of its documents with a KeyError.
+_SPEC_MODELS: Final[dict[str, type[DriveSpec | GpuSpec | RamSpec | CpuSpec]]] = {
+    "drive": DriveSpec,
+    "gpu": GpuSpec,
+    "ram": RamSpec,
+    "cpu": CpuSpec,
+}
 
 
 @dataclass
@@ -77,6 +101,22 @@ class ImportConflictError(Exception):
     def __init__(self, conflicts: list[str]) -> None:
         self.conflicts = conflicts
         super().__init__(f"{len(conflicts)} alias conflict(s); import aborted")
+
+
+class UnratifiedProvenanceError(ImportConflictError):
+    """A non-first-party document was offered — the import wrote NOTHING.
+
+    Subclasses ImportConflictError so refresh and the import command report it
+    through the same fail-into-review path instead of crashing the monthly job."""
+
+
+def _unratified_provenance(docs: Sequence[SeedDocument]) -> list[str]:
+    return [
+        f"{doc.manufacturer_key}/{doc.family_name}: {doc.provenance.source_kind} provenance "
+        "has no ratified retention class (non-first-party rows would be `manual`)"
+        for doc in docs
+        if not doc.provenance.is_first_party
+    ]
 
 
 def _seed_targets(docs: Sequence[SeedDocument]) -> dict[str, tuple[str, str]]:
@@ -126,6 +166,9 @@ def _db_conflicts(docs: Sequence[SeedDocument]) -> list[str]:
 
 
 def import_documents(docs: Sequence[SeedDocument]) -> ImportReport:
+    unratified = _unratified_provenance(docs)
+    if unratified:
+        raise UnratifiedProvenanceError(unratified)
     conflicts = [c.describe() for c in detect_conflicts(docs)]
     conflicts += _db_conflicts(docs)
     if conflicts:
@@ -149,7 +192,12 @@ def _import_document(doc: SeedDocument, report: ImportReport) -> None:
     elif manufacturer.name != doc.manufacturer_name:
         manufacturer.name = doc.manufacturer_name  # seed display name is authoritative
         manufacturer.save(update_fields=["name", "updated_at"])
-    category, _ = Category.objects.get_or_create(slug="drive", defaults={"name": "Drive"})
+    # Every seedable category row is created by migration (drive 0001, the rest
+    # 0019); the default only refills a deleted row, and for drive it is the
+    # same "Drive" the pre-MS-2 importer used.
+    category, _ = Category.objects.get_or_create(
+        slug=doc.category, defaults={"name": doc.category.title()}
+    )
     family, created = ProductFamily.objects.get_or_create(
         manufacturer=manufacturer,
         normalized_name=canonicalize_title(doc.family_name),
@@ -164,13 +212,15 @@ def _import_document(doc: SeedDocument, report: ImportReport) -> None:
         if family.name != doc.family_name:
             family.name = doc.family_name
             family.save(update_fields=["name", "updated_at"])
+    spec_model = _SPEC_MODELS[doc.category]
     for seed_model in doc.models:
-        _import_model(manufacturer, family, seed_model, report)
+        _import_model(manufacturer, family, spec_model, seed_model, report)
 
 
 def _import_model(
     manufacturer: Manufacturer,
     family: ProductFamily,
+    spec_model: type[DriveSpec | GpuSpec | RamSpec | CpuSpec],
     seed_model: SeedModel,
     report: ImportReport,
 ) -> None:
@@ -202,10 +252,13 @@ def _import_model(
     # later seed corrects a field to "unknown" (None), the stale prior value
     # survives untouched. An explicit-clear mechanism is future work, only if
     # a real correction ever needs one.
-    spec_defaults: dict[str, object] = seed_model.spec.model_dump(exclude_none=True)
+    # `category` is the contract's union tag, not a satellite column.
+    spec_defaults: dict[str, object] = seed_model.spec.model_dump(
+        exclude_none=True, exclude={"category"}
+    )
     spec_defaults["retention_class"] = RetentionClass.MANUFACTURER_REFERENCE
     spec_defaults["expires_at"] = None
-    DriveSpec.objects.update_or_create(product_model=model, defaults=spec_defaults)
+    spec_model.objects.update_or_create(product_model=model, defaults=spec_defaults)
     report.specs_written += 1
     for alias in seed_model.aliases:
         _import_alias(model, alias, report)

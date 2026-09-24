@@ -8,6 +8,7 @@ from hw_radar.refdata.contracts import (
     SEED_SCHEMA,
     SeedAlias,
     SeedDocument,
+    SeedDriveSpec,
     detect_conflicts,
 )
 
@@ -52,8 +53,10 @@ def _doc(**overrides: object) -> dict[str, object]:
 def test_valid_document_parses() -> None:
     doc = SeedDocument.model_validate(VALID_DOC)
     assert doc.manufacturer_key == "seagate"
-    assert doc.models[0].spec.capacity_tb is not None
-    assert doc.models[0].spec.rpm is None  # null = unknown, never guessed
+    spec = doc.models[0].spec
+    assert isinstance(spec, SeedDriveSpec)
+    assert spec.capacity_tb is not None
+    assert spec.rpm is None  # null = unknown, never guessed
 
 
 def test_alias_normalized_is_the_join_key() -> None:
