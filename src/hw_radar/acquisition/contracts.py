@@ -11,11 +11,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Final, Protocol, Self, runtime_checkable
+from typing import Final, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from hw_radar.catalog.models import RetentionClass, RunKind
+from hw_radar.catalog.models import ProviderKind, RetentionClass, RunCompleteness, RunKind
 from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG_RE
 
 # Reserved OfferSnapshot.attrs_json key under which persist.append_snapshot stores
@@ -189,3 +189,41 @@ class NullResolver:
 
     def resolve_listing(self, listing_id: int) -> None:
         return None
+
+
+class ProviderRunEvidence(BaseModel):
+    """What one collection run proves about its own completeness (MS2-D-11).
+
+    Recorded for every successful run in ScraperRun.detail_json["provider"] (the
+    Slice D provider-run table will hold it queryably). The delist stage consults
+    it through acquisition.providers.gate_delist_scope, never the provider's
+    DelistScope alone: a provider's scope says what it saw, this says whether that
+    sighting may be read as absence.
+
+    stale_absence_eligible — whether a TRUNCATED run may still feed the CR-004
+        stale-absence path (absence believed only after the adapter's grace, across
+        continuous polling). Only a local provider may claim it: the local
+        adapters' truncated sweeps are the long-standing eBay/lane-continuity
+        contract, whereas a remote run's truncation is set by budget and item
+        limits it reports after the fact, so it is never absence evidence of any
+        strength (ADR 0021).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    evidence_version: Literal[1] = 1
+    provider_kind: ProviderKind
+    provider_key: str = Field(min_length=1)
+    completeness: RunCompleteness
+    completeness_reason: str = Field(min_length=1)
+    stale_absence_eligible: bool
+
+    @model_validator(mode="after")
+    def _check_invariants(self) -> Self:
+        # A blank reason would make a non-complete run unexplainable in the run
+        # record, which is exactly when an operator needs the reason.
+        if not self.completeness_reason.strip():
+            raise ValueError("completeness_reason must be non-blank")
+        if self.stale_absence_eligible and self.provider_kind is not ProviderKind.LOCAL:
+            raise ValueError("only a local provider may be stale-absence eligible")
+        return self
