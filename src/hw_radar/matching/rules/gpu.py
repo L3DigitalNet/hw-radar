@@ -11,7 +11,10 @@ Name candidates (A100, RTX 4090, MI250X, ...) are emitted only when the title
 names the matching chip vendor or product line: short names like `t4` or `a2`
 are otherwise ordinary tokens. They are MANUFACTURER_MPN candidates with the
 chip vendor as the vendor hint, so they can only reach `mpn`/`retail_pn`/
-`region_pn` aliases.
+`region_pn` aliases. Each name is also emitted extended by the VRAM/interface
+qualifiers and the chip-vendor word the title writes contiguously around it,
+because the seeded data-center aliases are those longer spellings ('A100 80GB
+PCIe'); tests/db/test_category_seed_reachability.py pins every seeded alias.
 
 Veto fields: chip_vendor, vram_gb, interface, cooling. tdp_w is not vetoed —
 listings quote board power, configurable limits, or nothing, so a TDP mismatch
@@ -93,6 +96,21 @@ _NAMES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("amd", re.compile(r"\bradeon\s+(?:pro\s+)?((?:rx\s?)?\d{4}(?:\s?xtx?)?|w\d{4})\b")),
     ("intel", re.compile(r"\barc\s+([ab]\d{3}m?)\b")),
 )
+# A VRAM size or interface word directly after a product name. Data-center
+# parts are catalogued by the name plus these qualifiers ('A100 80GB PCIe',
+# 'H100 PCIe', 'Tesla V100 PCIe (32GB)'), and the alias join is exact, so the
+# bare name alone can never reach those aliases. Only qualifiers written
+# contiguously after a vendor-gated name extend it, in title order: nothing is
+# reordered or synthesized, so 'Tesla V100 32GB PCIe' never becomes the seeded
+# 'Tesla V100 PCIe (32GB)' key (it joins only the seed's own 'NVIDIA Tesla V100
+# (32GB, PCIe)' alias, via the vendor prefix below).
+_QUALIFIER = re.compile(r"\s*,?\s*\(?(?:\d{1,3}\s?gb(?!/s)|pci-?e|sxm\d?)\)?(?![a-z0-9])")
+_MAX_QUALIFIERS = 2  # at most one VRAM size and one interface
+# The chip-vendor word written directly before a name. Seeds also alias the
+# vendor-prefixed datasheet spelling ('NVIDIA RTX A6000', 'NVIDIA Tesla V100
+# (32GB, PCIe)'), which the vendor-less name spans can never join.
+_VENDOR_PREFIX = re.compile(r"\b(nvidia|amd|intel)\s$")
+
 # NVIDIA board part numbers (699-/900- prefixed), matched without a vendor gate:
 # the four-group shape is specific enough on its own.
 _NVIDIA_PN = re.compile(r"\b(?:699|900)-[0-9a-z]{5}-[0-9a-z]{4}-[0-9a-z]{3}\b")
@@ -127,8 +145,23 @@ def extract_candidates(
             if name_vendor != vendor.value:
                 continue
             for m in pattern.finditer(title):
-                out.add(m.group(0), TokenKind.MANUFACTURER_MPN, vendor=name_vendor, confidence=0.8)
-                out.add(m.group(1), TokenKind.MANUFACTURER_MPN, vendor=name_vendor, confidence=0.8)
+                starts = [m.start(), m.start(1)]
+                prefix = _VENDOR_PREFIX.search(title, 0, m.start())
+                if prefix is not None and prefix.group(1) == name_vendor:
+                    starts.append(prefix.start())
+                end = m.end()
+                for _ in range(_MAX_QUALIFIERS + 1):
+                    for start in starts:
+                        out.add(
+                            title[start:end],
+                            TokenKind.MANUFACTURER_MPN,
+                            vendor=name_vendor,
+                            confidence=0.8,
+                        )
+                    qualifier = _QUALIFIER.match(title, end)
+                    if qualifier is None:
+                        break
+                    end = qualifier.end()
     add_house_skus(out, title, source_key)
     add_code_tokens(out, title, _VOCAB_TAILS)
     return out.result()

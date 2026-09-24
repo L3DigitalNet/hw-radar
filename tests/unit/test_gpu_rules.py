@@ -143,3 +143,32 @@ def test_foreign_payloads_never_veto() -> None:
     extracted = gpu.extract(canonicalize_title("NVIDIA A100 40GB"))
     assert gpu.veto(extracted, ladder.HardAttrs(capacity_bytes=1)) == []
     assert gpu.veto(ExtractedAttributes(), ladder.HardAttrs(category=_SPEC)) == []
+
+
+@pytest.mark.parametrize(
+    ("title", "key"),
+    [
+        # The seeded data-center aliases are name + VRAM/interface qualifiers.
+        ("NVIDIA A100 80GB PCIe Tensor Core GPU", "a10080gbpcie"),
+        ("NVIDIA H100 PCIe 80GB HBM2e", "h100pcie"),
+        ("NVIDIA Tesla V100 PCIe (32GB) Accelerator", "teslav100pcie32gb"),
+        # The vendor word written directly before the name joins the seeds'
+        # vendor-prefixed datasheet spellings.
+        ("NVIDIA Tesla V100 32GB PCIe", "nvidiateslav10032gbpcie"),
+        ("NVIDIA RTX A6000 48GB", "nvidiartxa6000"),
+        ("AMD Instinct MI210 64GB", "amdinstinctmi210"),
+    ],
+)
+def test_name_extends_with_contiguous_qualifiers_and_vendor(title: str, key: str) -> None:
+    assert key in _keys(title)
+
+
+def test_qualifier_extension_is_contiguous_and_vendor_gated() -> None:
+    # Title order only: 'V100 32GB PCIe' never yields the 'V100 PCIe 32GB' key.
+    assert "teslav100pcie32gb" not in _keys("NVIDIA Tesla V100 32GB PCIe")
+    # A word between the name and a qualifier ends the run.
+    assert "a10080gb" not in _keys("NVIDIA A100 Tensor 80GB")
+    # A link speed is not a VRAM qualifier.
+    assert "a10080gb" not in _keys("NVIDIA A100 80GB/s")
+    # The vendor gate still applies to the extended spans.
+    assert _keys("A100 80GB PCIe accelerator") == []
