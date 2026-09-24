@@ -6,7 +6,7 @@ description: 'Model identity as a multi-grain ladder — category → product_fa
 doc_type: 'adr'
 status: 'active'
 created: '2026-07-03'
-updated: '2026-07-04'
+updated: '2026-09-24'
 reviewed: null
 owner: ''
 consumer: 'mix'
@@ -112,6 +112,20 @@ Four of the five extensibility axes are already met by the data-driven spine (ma
 ### Confirmation
 
 The spec's Database Schema section is updated to reference this ladder (superseding the `drive_model`/`listing`/`observation` shorthand). Implementation confirmation (MS-0/MS-1): initial migrations create `category → product_family → product_model → product_variant → listing → offer_snapshot` with `product_alias` and the `drive_spec` satellite; a recert and a new listing of the same drive resolve to **one `product_model`, two `product_variant`s**; `offer_snapshot` is a TimescaleDB hypertable; every evidence table has a non-null `retention_class`; no table stores image bytes.
+
+
+## 2026-09-24 Scope Amendment — multi-category v1
+
+[ADR 0022](adr-0022-multi-category-watch-first-v1.md) **supersedes only this ADR's original drives-only v1 scope assumption.** The identity topology remains accepted and unchanged.
+
+- v1 now treats HDD/SSD, GPU/accelerator, RAM, and CPU as first-class categories.
+- The category-generic spine remains `category → product_family → product_model → product_variant → listing → offer_snapshot`.
+- Category-specific attributes still belong in typed 1:1 satellites (`drive_spec`, later `gpu_spec`, `ram_spec`, `cpu_spec`, etc.); do not replace them with EAV or generic strings.
+- The existing drive-specific `drive_unit` / SMART/FARM grain remains drive-only.
+- Complete servers/barebones may start as exact/curated basic watches; do not overload `product_variant` to pretend materially different installed configurations are the same sellable identity. A configuration-aware representation must precede rich system-level comparison.
+
+The load-bearing decision of this ADR — the generic identity spine plus typed category satellites — is therefore **validated by the scope expansion rather than reopened**.
+
 
 ## More Information
 
