@@ -1,5 +1,6 @@
-"""Category rules registry (MS2-D-02/-03): slice A registers drive only, bound to the
-existing ADR-0019 functions by identity, with `None` hints dispatching to drive."""
+"""Category rules registry (MS2-D-02/-03): the MS-2 registry holds drive (bound to
+the existing ADR-0019 functions by identity), gpu/ram/cpu, and the basic-watch
+categories, with `None` hints dispatching to drive."""
 
 import pytest
 

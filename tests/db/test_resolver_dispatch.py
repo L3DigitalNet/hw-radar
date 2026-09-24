@@ -208,8 +208,11 @@ def test_spec_readers_match_registry() -> None:
 
 def test_unsupported_repoll_does_not_spam_edges(site: SourceSite) -> None:
     listing = _listing(site, "g2", _EXOS_TITLE)
-    _snapshot(listing, category_hint="gpu")
+    _snapshot(listing, category_hint="zz-unregistered")
     resolver_ = CatalogResolver()
     resolver_.resolve_listing(listing.pk)
     resolver_.resolve_listing(listing.pk)
     assert _edge_count(listing) == 1
+    edge = _current(listing)
+    assert edge.evidence["unsupported_category"] is True
+    assert edge.evidence["category"] == "zz-unregistered"
