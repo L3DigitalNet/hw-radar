@@ -5,3 +5,10 @@ type = "command"
 command = "\"$(git rev-parse --show-toplevel)/.agents/hooks/agent-handoff/session-start\""
 timeout = 10
 statusMessage = "Loading agent handoff state..."
+
+# Anonymous hosted Apify MCP, restricted to read-only Store/docs tools; none of
+# these execute Actors or need APIFY_TOKEN. Mirrors the Claude entry in .mcp.json.
+[mcp_servers.apify]
+url = "https://mcp.apify.com?tools=search-actors,fetch-actor-details,search-apify-docs,fetch-apify-docs"
+enabled_tools = ["search-actors", "fetch-actor-details", "search-apify-docs", "fetch-apify-docs"]
+default_tools_approval_mode = "approve"
