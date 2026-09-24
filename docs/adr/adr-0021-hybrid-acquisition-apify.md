@@ -267,6 +267,11 @@ without changing the owner's rule:
   disabled and every liability is settled.
 - Operator builds and inspections are reserved in the same ledger before they
   run.
+- (Plan revision 7, review round 6.) A run's usage is still re-read for a fixed
+  window after reconciliation; any upward correction re-checks every budget limit
+  and pauses paid work if one is exceeded. A handoff between environments waits
+  until those windows close and is bound to exactly one destination.
+  Inspections are reserved as finite, priced envelopes.
 
 **Verified account state, 2026-09-24** (read-only API; a record of fact, not
 part of the rule): plan Starter, $19 base price, $19 prepaid usage credit,
