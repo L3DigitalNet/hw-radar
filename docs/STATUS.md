@@ -28,8 +28,8 @@
   r6 `6af5388b` REVISION NEEDED (3 partial + 2 new) -> r7 `01639c2a` REVISION NEEDED (2 partial +
   1 new) -> r8 `b73b6633` READY, no new findings. All findings dispositioned in the plan.
 - **Session 2 owner decisions (2026-09-24):** Hardware Radar owns all its Apify Actors in this
-  repo under `actors/<name>/`, managed independently of `apify-actors` (PR #62, doc-only, awaiting
-  operator merge). OQ23 resolved (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12 attributable,
+  repo under `actors/<name>/`, managed independently of `apify-actors` (PR #62, doc-only, merged
+  by the operator). OQ23 resolved (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12 attributable,
   no PAYG). OQ24 split: synthetic proof first via a real private Actor; merchant-source admission
   separate; Newegg excluded; existing connectors not grandfathered.
 - **Slice B complete on `dev`:** GPU/RAM/CPU typed spec satellites (migration 0018), category rows

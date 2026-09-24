@@ -66,9 +66,6 @@ Instructions for AI agents:
   and managed in this repo** under `actors/` (not `apify-actors`, session-2 owner decision). Keep
   Actor output observation-only: no Django model imports, no production DB credentials, no
   canonical matching/persistence.
-- [ ] **User-owned:** merge `L3DigitalNet/apify-actors` PR #62 (doc-only awareness note that
-  Hardware Radar owns its Actors independently; CI green, awaiting operator merge per that
-  repo's governance rule).
 - [ ] Keep provider identity separate from marketplace/source identity so moving a source between
   local and Apify execution preserves listing identity and price history.
 - [ ] Run the existing MS-1e owner-in-the-loop ratification step for the drive matcher before
