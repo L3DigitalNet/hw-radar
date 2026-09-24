@@ -17,40 +17,30 @@
 
 ## Open questions
 
-Two decisions remain open, both raised by the 2026-09-24 MS-2 multi-category watch-core plan.
+One decision remains open, raised by the 2026-09-24 MS-2 multi-category watch-core plan.
 
-### OQ23 — Apify paid-plan base fee vs the $20/month Hardware Radar ceiling
+### OQ24 — Production Actor-backed merchant source admission
 
 **From:** the MS-2 plan (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`,
-MS2-D-26). **Decision needed:** does an Apify Starter-plan base fee ($19/month) count against
-the hard **$20/month** Hardware Radar Apify ceiling set by [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md),
-or is it a separate allocation? Live Apify admission stays disabled until this is decided.
+MS2-D-44, task F5b). **Decision needed:** which merchant source, if any, Hardware Radar may
+collect through its own private Apify Actor in production, decided per candidate from a
+source-admission record (`docs/research/source-admission/`) with a recommendation of
+`eligible | permission-required | exclude`.
 
 #### Agent notes
 
-- Options: (1) the base fee counts against the $20/month ceiling, leaving very little headroom
-  for actual Actor-run spend; (2) the base fee is excluded from the ceiling, which is a per-run
-  compute/proxy budget only; (3) the owner authorizes a separate allocation for the base fee.
-- Plan recommendation (MS2-D-26): the fee counts against the ceiling unless the owner authorizes
-  a separate allocation.
-
-#### My Comments
-
-_(none yet)_
-
----
-
-### OQ24 — Actor-proof source selection
-
-**From:** the MS-2 plan. **Decision needed:** which marketplace(s) serve as the self-owned
-private Actor integration proof, given per-source Terms of Use / robots constraints.
-
-#### Agent notes
-
+- Narrowed 2026-09-24 (owner split). The first Actor proof no longer needs this answer: it uses
+  a controlled synthetic source, recorded in
+  [`resolved-questions.md`](resolved-questions.md#oq24-part-a--first-actor-proof-uses-a-controlled-synthetic-source).
 - Newegg is excluded: its Terms of Use prohibit automated access/scraping "for any purpose"
   (retrieved 2026-09-24).
-- Other candidates (B&H, refurbished server-parts sellers) still need a ToS/robots review before
-  selection.
+- Other candidates (B&H, ServerPartDeals, refurbished server-parts sellers) each need an
+  admission record first. Robots permission is not contractual permission, and the absence of an
+  obvious prohibition is not permission. A source needing residential proxies, proxy rotation,
+  CAPTCHA solving, paid unblockers, or paid third-party Actors fails admission. Bounded-retention
+  sources also need a verified per-run storage expiry (plan risk R20).
+- Existing local connectors are not grandfathered into an Actor path; a conflict found for an
+  existing disabled connector is recorded separately.
 
 #### My Comments
 
@@ -65,7 +55,11 @@ All five questions raised by the **2026-07-04 spec gap analysis**
 day and recorded directly in `resolved-questions.md`. OQ22 (retention class for
 resolver-learned `ProductAlias` rows, raised by the migration-0016 follow-up) was
 owner-resolved 2026-09-06 and relocated to
-[`resolved-questions.md`](resolved-questions.md#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows).
+[`resolved-questions.md`](resolved-questions.md#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows). OQ23 (Apify base fee vs the
+$20/month ceiling) was owner-resolved 2026-09-24 and relocated to
+[`resolved-questions.md`](resolved-questions.md#oq23--apify-paid-plan-base-fee-vs-the-20month-hardware-radar-ceiling);
+OQ24 was split the same day, with its first-proof half relocated there and only the
+production-source fork left open above.
 
 ## How to maintain this document
 
