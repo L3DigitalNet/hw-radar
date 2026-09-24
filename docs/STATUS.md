@@ -46,9 +46,28 @@
   the deferred owner-in-the-loop step (design §6); `tests/db/test_ratification_corpus.py` skips
   with "corpus not yet harvested" until that step lands.
 - The full Python verification gate passes on `dev`; DB-backed tests require TimescaleDB.
-- **Current implementation focus:** align the domain/acquisition boundaries with ADRs 0021–0022,
-  then deliver the smallest complete multi-category watch path: saved requirement → collection →
-  normalization/matching → match/no-match/unknown eligibility → shortlist/evidence → exactly-one alert.
+- **MS-2 multi-category watch core is in progress.** The implementation plan
+  (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`, revision 2) is cut and
+  under cross-agent review: Codex delegate round 1 (`42deeff0`) returned REVISION NEEDED with 12
+  findings, all accepted and dispositioned in revision 2; round 2 is in progress.
+- **Slice A (behavior-preserving seams, no migration) is landed on `dev`** (unpushed pending this
+  closeout): category registry + injectable ladder veto, optional `ParsedListing.category_hint`,
+  resolver category dispatch (the hard-coded drive slug is removed), a provider run-evidence
+  contract with a completeness gate, a `CollectionProvider` seam, and a rule that truncated/
+  partial/failed provider runs cannot prove delisting. Integrated battery: 645 passed / 1 expected
+  skip / 95% coverage, fmt/lint/type/pip-audit clean; a fresh verifier confirmed all 8 Slice A claims.
+- The dependency-audit anyio CVEs (CVE-2026-63374/64847/63349) are cleared (`81876da`, anyio
+  4.14.1->4.14.2; CI run 36049719317 success).
+- **Next slice is B:** GPU/RAM/CPU typed spec satellites, category rows, the authoritative-alias
+  acceptance policy (MS2-D-21), refdata importer generalization, and corpus category-hint round
+  trip (B6). Catalog migrations 0018/0019 are assigned to Slice B (head remains 0017; nothing
+  migrated this session). Production is unchanged at `f3303b1`.
+- **Owner gates still open:** OQ23 (does an Apify paid-plan base fee count against the $20/month
+  ceiling — live admission stays disabled until resolved), OQ24 (Actor-proof source selection —
+  Newegg is excluded on ToU evidence; other candidates need ToS/robots review), the apify-actors
+  repo's own admission gate for a new internal Actor, an owner-configured Apify account-level
+  usage-limit backstop, MS-1e drive ratification, and a category corpus gate before GPU/RAM/CPU
+  auto-accept.
 - Work belongs on `dev`; protected `main` advances through pull requests.
 - Project Standards Catalog 5 is pinned to release 5.29.0 with Agent Handoff 1.17, contract 1.0, and the dual automatic Claude/Codex profile.
 - Upstream project-standards issue #80 (automatic handoff injection under the `uv-strict-python`

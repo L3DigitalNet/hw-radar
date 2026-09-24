@@ -2,24 +2,18 @@
 
 ## Current focus
 
-- **Strategy re-baselined 2026-09-24** by ADRs 0021–0022.
-- Immediate execution target is master-spec **MS-2 — Multi-category watch core**, not the old
-  MS-2a drive-scoring substrate.
-- Preserve the implemented/deployed MS-0/MS-1 foundation and drive matcher; generalize at the
-  category/domain and acquisition-provider boundaries rather than rewriting the application.
-- First-class v1 categories: HDD/SSD, GPU/accelerator, RAM, CPU. Saved requirements evaluate to
-  `match | no_match | unknown`; optional scores are category-local.
-- Acquisition direction: cheap official/direct/local collectors stay local; self-owned private
-  Apify Actors are added selectively through a provider adapter. Hardware Radar Apify spend is
-  hard-capped at **$20/month**, with a **$12/month** initial operating target.
-- Next implementation proof: one complete saved-requirement → collection → match/unknown →
-  shortlist/evidence → exactly-one-alert path, including one self-owned Actor integration proof.
-- Existing MS-2 scoring design rev 14 remains owner-accepted as the advanced drive-scoring
-  design; MS-2a plan rev 4 is explicitly deferred and must be rebased before any future execution.
-- MS-1e owner-in-the-loop real-corpus ratification still gates acceptance of ADR 0019 / affected
-  drive source enablement.
-- Production remains at `f3303b1` (migrations 0014–0017 deployed); the strategy PR is
-  documentation-only.
+- **MS-2 plan cut 2026-09-24**: `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` rev 2.
+- Cross-agent review lineage: Codex delegate 42deeff0 round 1 = REVISION NEEDED, 12 findings, all dispositioned in rev 2.
+- Round 2 of that Codex review is in progress; result will be patched into the plan's own review lineage section.
+- **Slice A (behavior-preserving seams, no migration) landed on `dev`, unpushed**: ce6354c..ef9636c.
+- Slice A adds category registry, injectable ladder veto, `ParsedListing.category_hint`, resolver dispatch.
+- Slice A also adds provider run-evidence contract, `CollectionProvider` seam, and truncated/partial runs cannot delist.
+- Integrated battery at `5f37351` green: 645 passed / 1 expected skip, 95% coverage, fmt/lint/type/pip-audit clean.
+- **Next session starts Slice B**: GPU/RAM/CPU typed spec satellites, category rows, alias policy MS2-D-21, refdata importer.
+- Slice B also owns corpus category-hint round trip B6; catalog migrations 0018/0019 assigned to it.
+- Migration head remains 0017; no migrations landed this session. Production unchanged at `f3303b1`.
+- Owner gates open: OQ23 (Apify plan base fee vs $20 ceiling) and OQ24 (Actor-proof source ToS review).
+- Also open: apify-actors repo admission gate, owner Apify usage-limit backstop, MS-1e ratification, category corpus gate.
 
 ## Active incidents
 

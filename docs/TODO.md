@@ -9,24 +9,25 @@ Instructions for AI agents:
 - Do add tasks to the `## Agent tasks
 
 - [ ] Re-baseline the implementation around [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
-  and [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md). Do not execute the old MS-2a
-  scoring-substrate plan as the next milestone.
-- [ ] Establish the category-domain boundary around the existing ADR-0010 identity spine:
-  first-class HDD/SSD, GPU/accelerator, RAM, and CPU typed specs; shared identity/alias primitives;
-  category-owned extraction, contradiction checks, and requirement evaluation returning
-  `match | no_match | unknown`. Preserve the existing drive matcher rather than flattening it
-  into generic strings.
+  and [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md). **Plan cut** (rev 2,
+  `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`); Codex round 1 findings
+  all dispositioned; round 2 in progress.
+- [ ] Establish the category-domain boundary around the existing ADR-0010 identity spine.
+  **Slice A done:** category registry, injectable ladder veto, optional `category_hint`, resolver
+  dispatch (drive slug hard-code removed). **Next (Slice B):** GPU/RAM/CPU typed spec satellites,
+  category rows, authoritative-alias policy MS2-D-21, refdata importer generalization, corpus
+  category-hint round trip (B6).
 - [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
   saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
   Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.
-- [ ] Add an acquisition-provider boundary to hw-radar. Preserve cheap official API / structured
-  local paths; add an Apify-backed provider adapter that starts bounded private Actor runs,
-  records provider run/build/query/completeness metadata, imports output idempotently, and never
-  lets a truncated run prove delisting.
+- [ ] Add an acquisition-provider boundary to hw-radar. **Seam done:** `CollectionProvider`
+  contract, run-evidence completeness gate, truncated/partial/failed runs cannot delist. **Next
+  (Slice D):** Apify-backed provider adapter starting bounded private Actor runs with idempotent
+  import.
 - [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
   initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential
-  proxy / paid third-party Actor escalation.
+  proxy / paid third-party Actor escalation. Design is in the MS-2 plan; implementation is Slice E.
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
   categories and both local + self-owned-Apify provider paths. Measure cost, completeness,
   identifier quality, condition/shipping coverage, freshness, and failure recovery before adding
@@ -54,3 +55,11 @@ Instructions for AI agents:
   multi-category watch-first path is working and real history identifies which category-specific
   scoring work is valuable.
 - [ ] **Deferred with MS-2:** resolve eBay `feedbackScore` semantics before any future MS-2e plan.
+- [ ] **Blocked on owner (OQ23):** decide whether an Apify paid-plan base fee counts against the
+  $20/month Hardware Radar ceiling. Live Apify admission stays disabled until resolved.
+- [ ] **Blocked on owner (OQ24):** rule on the Actor-proof source. Newegg is excluded on ToU
+  evidence (automated access/scraping prohibited "for any purpose", retrieved 2026-09-24); B&H
+  and refurbished server-parts sellers still need ToS/robots review.
+- [ ] **Blocked on owner:** admission decision for a new internal Actor in the separate
+  `L3DigitalNet/apify-actors` repo's opportunity/admission gate.
+- [ ] **Blocked on owner:** configure the Apify account-level monthly usage limit as a spend backstop.

@@ -1,11 +1,13 @@
 # Specs And Plans
 
-Last updated: 2026-09-24
+Last updated: 2026-09-24 (Slice A landed; MS-2 plan rev 2, round-2 review in progress)
 
 ## Active Design Artifacts
 
 | Artifact | Role | Status |
 | --- | --- | --- |
+| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 2. Slice A (behavior-preserving seams, no migration) implemented on `dev`. Review lineage: Codex delegate `42deeff0` round 1 = REVISION NEEDED, 12 findings, all dispositioned in rev 2; round 2 in progress. |
+| `docs/research/2026-09-24-ms2-code-dependency-map.md` | Code dependency map supporting the MS-2 plan | Active; keep alongside the plan |
 | `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` | Advanced HDD/SSD scoring design | Revision 14 owner-accepted; **deferred from immediate milestone sequencing by ADR 0022**; retain for later category-local drive scoring |
 | `docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md` | Deferred HDD/SSD scoring-substrate plan | Revision 4 reviewed; **do not execute now**. Rebase schema/migration assumptions before any future owner-authorized activation. |
 | `docs/superpowers/specs/2026-07-06-ms1e-validation-corpus-ratification-design.md` | MS-1e validation-corpus + ADR-0019 ratification design | Implemented on dev; §6 owner-gated |

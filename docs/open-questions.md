@@ -17,7 +17,48 @@
 
 ## Open questions
 
-No question is open. All five questions raised by the **2026-07-04 spec gap analysis**
+Two decisions remain open, both raised by the 2026-09-24 MS-2 multi-category watch-core plan.
+
+### OQ23 — Apify paid-plan base fee vs the $20/month Hardware Radar ceiling
+
+**From:** the MS-2 plan (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`,
+MS2-D-26). **Decision needed:** does an Apify Starter-plan base fee ($19/month) count against
+the hard **$20/month** Hardware Radar Apify ceiling set by [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md),
+or is it a separate allocation? Live Apify admission stays disabled until this is decided.
+
+#### Agent notes
+
+- Options: (1) the base fee counts against the $20/month ceiling, leaving very little headroom
+  for actual Actor-run spend; (2) the base fee is excluded from the ceiling, which is a per-run
+  compute/proxy budget only; (3) the owner authorizes a separate allocation for the base fee.
+- Plan recommendation (MS2-D-26): the fee counts against the ceiling unless the owner authorizes
+  a separate allocation.
+
+#### My Comments
+
+_(none yet)_
+
+---
+
+### OQ24 — Actor-proof source selection
+
+**From:** the MS-2 plan. **Decision needed:** which marketplace(s) serve as the self-owned
+private Actor integration proof, given per-source Terms of Use / robots constraints.
+
+#### Agent notes
+
+- Newegg is excluded: its Terms of Use prohibit automated access/scraping "for any purpose"
+  (retrieved 2026-09-24).
+- Other candidates (B&H, refurbished server-parts sellers) still need a ToS/robots review before
+  selection.
+
+#### My Comments
+
+_(none yet)_
+
+---
+
+All five questions raised by the **2026-07-04 spec gap analysis**
 (OQ16–OQ20) were owner-resolved 2026-07-04 and relocated to
 [`resolved-questions.md`](resolved-questions.md) (OQ17 and OQ20 research-backed). OQ21
 (`httpx` dependency, raised by the 2026-07-05 MS-1 brainstorm) was owner-resolved the same
@@ -25,7 +66,6 @@ day and recorded directly in `resolved-questions.md`. OQ22 (retention class for
 resolver-learned `ProductAlias` rows, raised by the migration-0016 follow-up) was
 owner-resolved 2026-09-06 and relocated to
 [`resolved-questions.md`](resolved-questions.md#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows).
-The 2026-09-24 strategy re-baseline did **not** open a question: hybrid acquisition/cost is settled by [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md), and multi-category watch-first v1 scope/sequencing is settled by [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md). The next question opened here takes the number **OQ23**.
 
 ## How to maintain this document
 
