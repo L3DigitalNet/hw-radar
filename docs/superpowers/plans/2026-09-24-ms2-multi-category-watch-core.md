@@ -128,6 +128,29 @@
 >   amounts, re-checks every cycle, class, allocation, and account invariant on
 >   the charge's billing interval, and trips the latch if any is exceeded.
 > - New risk R37; R35 updated. E settings, E1 fields, and E2–E4 tests updated.
+>
+> **Revision 8 (review round 7, 2026-09-24).** Resolves Codex round 7 (delegate
+> `01639c2a`, REVISION NEEDED: R5-03 and R5-04 partial, one root; R7-01 new;
+> all accepted). No new decision ID, table, task, or migration number. See
+> *Review lineage*, Round 7.
+> - **R5-03 + R5-04:** elapsed `correction_monitor_until` no longer closes
+>   monitoring. MS2-D-23 selector 4 keeps an expired, unclosed row eligible
+>   until a **successful closing read** at or after the deadline commits, with
+>   any correction applied under the budget lock in the same transaction
+>   (MS2-D-41, -47); a failed or unavailable closing read keeps the obligation
+>   open and visibly overdue. MS2-D-45's export requires committed closing-read
+>   evidence and no unapplied read; its "no correction after handoff, by
+>   construction" claim is withdrawn, and a later correction is only the R37
+>   residual.
+> - **R7-01:** operator build reservations carry a durable
+>   `provider_build_id` and a null `provider_run` (stated explicitly for all
+>   operator rows); MS2-D-15 adds the build-record read; MS2-D-23 settles and
+>   monitors bound builds; MS2-D-34 derives `last_charge_at` for builds from
+>   the build record and for inspections from their settlement; MS2-D-46's
+>   `--settle` binds the build id.
+> - E1 fields (migration `0022`), E4 and E6 text, the E3/E4 test lists, the D3
+>   client test, F5a steps 2 and 5, the *Slice order* E row, R37, and the ADR
+>   0021 addendum note are updated.
 
 **Goal:** prove the smallest complete multi-category decision path without an
 ADR-0011 score:
@@ -830,7 +853,14 @@ carries `monthlyUsageCycle` and the account limit) and get monthly usage
 usage). If the limits response lacks the plan's base price and prepaid credit,
 D3 adds a tenth read, `GET /v2/users/me` (its plan block). Whether these account
 reads are free of platform usage is verified in E2 together with `GET` run
-polls.
+polls. Revision 8 (review R7-01) adds one more read for MS2-D-46's operator
+builds: get build (`GET /v2/actor-builds/{buildId}`), whose record carries the
+build's status, `finishedAt`, and usage (Apify prices a historical run *or
+build* the same way; research input `apify-billing.md`). The count becomes ten,
+or eleven with the plan-block read. The build record's exact wire names are
+unconfirmed until D3, like the run's; if it carries no dollar usage, a build
+settles at its bound (MS2-D-46). Whether a build read is free of platform usage
+is verified in E2 with the other `GET` reads.
 - `httpx` is already a dependency, and tests use `httpx.MockTransport` / vcrpy
   cassettes.
 - *Rejected:* `apify-client` 3.2.0 (released 2026-09-03). Since 3.0.0 it uses
@@ -1145,19 +1175,46 @@ Replaces revision 1's "persist and mark `imported` in one transaction".
   - `import_state ∉ {finalized, rejected}`;
   - `storage_state ≠ deleted` and the import is terminal;
   - (E) the reservation is not yet `reconciled` (MS2-D-32).
+
+  (E, revision 8, review R7-01) It also selects operator build reservations
+  (`operator_kind = build`) with a bound `provider_build_id` that are not yet
+  `reconciled`. Their unit reads the build record (MS2-D-15) and settles the
+  row by MS2-D-41 and MS2-D-46; such a row has no `provider_run`.
 - **Selector 3, overdue storage (revision 3, MS2-D-33).** Rows where
   `storage_state ≠ deleted` and `storage_cleanup_due_at ≤ now`, whatever the
   remote status: null (start response never recorded), non-terminal, or
   terminal. It does not depend on selector 1 ever having observed termination.
-- **Selector 4, correction monitoring (revision 7, review R5-03).** Reservation
-  rows with `status = reconciled`, a provider figure to re-read (a run or a
-  build), `correction_monitor_until > now`, and `next_usage_read_at ≤ now`,
-  whatever the import and storage state. So a run that is reconciled and fully
-  cleaned up is still polled. `correction_monitor_until` is persisted at
-  reconciliation as `last_charge_at + HW_RADAR_APIFY_CORRECTION_WINDOW_S`
-  (MS2-D-41). Each tick appends an `ApifyUsageRead` and applies any upward
-  correction under the budget lock (MS2-D-47). When the window passes, the row
-  is marked `correction_monitor_closed_at` and never selected again.
+- **Selector 4, correction monitoring (revision 7, review R5-03; closure
+  revised in revision 8, reviews R5-03 and R5-04).** Reservation rows with
+  `status = reconciled`, a provider figure to re-read (the `provider_run`'s
+  run id, or an operator build's `provider_build_id`), a set
+  `correction_monitor_until`, a null `correction_monitor_closed_at`, and
+  `next_usage_read_at ≤ now`, whatever the import and storage state. So a run
+  that is reconciled and fully cleaned up is still polled. There is no
+  `correction_monitor_until > now` condition: a row whose deadline has passed
+  stays selected until it is closed. `correction_monitor_until` is persisted
+  at reconciliation as `last_charge_at + HW_RADAR_APIFY_CORRECTION_WINDOW_S`
+  (MS2-D-41). `next_usage_read_at` is never scheduled past the deadline while
+  the deadline is in the future, so a closing read is due at the deadline.
+  - *Every read.* A successful read (the record is returned with a non-null
+    usage total) appends an `ApifyUsageRead` and applies any upward correction
+    in **one** transaction under the budget lock (MS2-D-47). A read is never
+    committed without its correction.
+  - *Closing read.* The first successful read with `read_at ≥
+    correction_monitor_until` is the closing read. The same transaction that
+    appends it and applies its correction sets `correction_monitor_closed_at`
+    and `correction_closing_read` (the read's id). Monitoring is closed only
+    when that transaction commits; a rollback leaves the row open.
+  - *Failed closing read.* A transport error, a missing record, or a null
+    usage total closes nothing. The row keeps its obligation, backs off through
+    `next_usage_read_at`, and appears in the spend report as
+    `correction_close_overdue` (visible stale state, MS2-D-46 *Reporting*,
+    E6). So a poller outage that spans the deadline delays closure; the
+    restart's closing read still applies a correction that arose during the
+    outage.
+  - Rows with nothing to re-read (inspection envelopes, which settle at their
+    full bound, MS2-D-46) carry no obligation: `correction_monitor_until` stays
+    null, and selector 4 never selects them.
 - **Isolation and restart.** Each unit of work is claimed and committed
   separately, with per-row backoff via `next_attempt_at`, so one failing row
   never starts the others. Every selector reads only persisted state, so a poller
@@ -1655,6 +1712,15 @@ replaced.
   `final_charge_op_at` is stamped after the last read or delete, and
   reconciliation requires verified deletion (MS2-D-32), so it also ends the
   run's timed storage. Compute ends at `finished_at`.
+- **Operator rows** (revision 8, review R7-01). An operator reservation has
+  no `provider_run` (MS2-D-46), so the run formula does not apply:
+  - a build row sets `last_charge_at :=` the build record's `finishedAt`,
+    taken from the read that settles it. A build charges only compute while it
+    runs, so its charges end there. A build with no terminal status or no
+    `finishedAt` cannot settle; it stays counted at its bound and is retried;
+  - an inspection row sets `last_charge_at :=` its `--settle` time. The
+    operator performs the inspection between reserving and settling, so every
+    inspection charge falls inside `[reserved_at, settle time]`.
 - **Cycle predicate** (revision 5; replaces revision 4's
   `last_charge_at ≥ now − 31 days`). For billing cycle `Y = [start, end]`,
   `consumed(Y)` sums `actual_usd` over `reconciled` rows whose charge interval
@@ -2133,15 +2199,21 @@ This decision refines MS2-D-17, MS2-D-26, and MS2-D-32.
     carried at its full estimate. A null value never settles below the bound.
   - *Upward correction* (revision 7 replaces revision 6's text; reviews R5-03
     and R6-02). After reconciliation, selector 4 (MS2-D-23) keeps re-reading the
-    run's usage, at most every stable interval, until
+    run's (or build's) usage, at most every stable interval, until
     `correction_monitor_until = last_charge_at +
     HW_RADAR_APIFY_CORRECTION_WINDOW_S` (default 604800 s, seven days, an
-    assumption). A later read above the settled run usage is an upward
-    correction, applied by MS2-D-47. A later lower read never returns capacity,
-    because historical re-reads may be repriced. `GET` run polls must be
-    verified free in E2; if they are billable, selector 4's reads are capped
-    with the other poll costs.
-  - *Window residual.* A correction later than the window is not observed.
+    assumption) **and then until a successful closing read at or after that
+    deadline commits** (revision 8, reviews R5-03 and R5-04). Elapsed time
+    alone never closes monitoring, just as it never finalizes usage. A later
+    read above the settled run usage is an upward correction, applied by
+    MS2-D-47 in the same transaction as the read. A later lower read never
+    returns capacity, because historical re-reads may be repriced. `GET` run
+    and build reads must be verified free in E2; if they are billable,
+    selector 4's reads are capped with the other poll costs.
+  - *Window residual.* A correction that arises after the committed closing
+    read is not observed (R37). Revision 8: a correction that arises inside
+    the window but is not read until after the deadline, for example during a
+    poller outage, is still observed, because the closing read applies it.
     Under the default `bound` settlement this is low-risk: the settled run usage
     already equals the enforced execution bound, so a larger figure would itself
     be an anomaly. The owner may choose `stable_reads` only when F5a's read
@@ -2332,17 +2404,31 @@ environments (Slice E, migration 0022; revision 6, review R5-04).**
   provisional or unfinalized usage, no retained storage, no open operator
   reservation), **and** (revision 7, reviews R5-04 and R6-01) no reconciled row
   whose correction monitoring is still open (MS2-D-41, selector 4).
+  Revision 8 (reviews R5-03 and R5-04) makes "closed" mean *evidenced*, not
+  elapsed. Every reconciled row that carries a correction obligation (a set
+  `correction_monitor_until`) must have a committed
+  `correction_monitor_closed_at` and a `correction_closing_read` whose
+  `read_at ≥ correction_monitor_until`. No reservation may have an
+  `ApifyUsageRead`, taken after its `reconciled_at`, whose usage total exceeds
+  its `settled_run_usage_usd`; that would be a correction not yet applied
+  (pre-settlement reads are governed by the MS2-D-41 settlement predicate,
+  not by this check). A row past its deadline without
+  a committed closing read, including one whose closing read keeps failing,
+  blocks the export exactly as an open window does.
   - *Exclusive destination.* The export, under the budget advisory lock, marks
     its own authority `handed_off`, persists `handed_off_to` and the record's
     digest, and writes a handoff record: source ledger id, **destination
     ledger id**, cycle start, the settled consumption of every class that
-    touches the cycle, and the drain attestation. The source can never admit
+    touches the cycle (including every correction applied by a closing read),
+    and the drain attestation, which lists each obligation-bearing row's
+    closing read (`read_at` and amount; revision 8). The source can never admit
     again that cycle. The binding is irrevocable: a repeated export to the same
     destination returns the same record (idempotent retry), and an export to
     any other destination is refused.
   - *Import.* `--import` refuses a record whose destination is not this
     environment's `HW_RADAR_APIFY_LEDGER_ID`, whose cycle is not the current
-    one, or that shows any open liability or open correction monitoring. It
+    one, or that shows any open liability, open correction monitoring, or an
+    obligation-bearing row without closing-read evidence (revision 8). It
     creates the `handoff` authority with `carried_consumption_usd`, keyed by the
     record digest, so re-importing the same record is a no-op. Carried
     consumption counts in `HR_cycle` and against the class caps (MS2-D-40).
@@ -2351,18 +2437,24 @@ environments (Slice E, migration 0022; revision 6, review R5-04).**
     the export takes that lock. So an admission either commits first (and the
     export then sees an open reservation and refuses) or sees `handed_off` and is
     denied. Upward corrections (MS2-D-47) take the same lock.
-  - *No correction after handoff, by construction.* Because the export requires
-    every correction window to be closed, the source has nothing left to
-    monitor, and no correction can arise that the destination would have to
-    absorb.
+  - *Corrections after handoff* (revision 8 withdraws revision 7's "no
+    correction after handoff, by construction"; review R5-04). Closure proves
+    only that a successful read at or after the deadline saw no uncounted
+    usage and that any correction it saw is in the exported totals. It does not
+    prove provider finality. A correction that arises after the closing read is
+    not observed by either environment; that is the separate, acknowledged R37
+    residual, not a property the handoff guarantees away.
   - *Feasibility.* Handoff inside a cycle stays possible: the source must stop
     admitting at least one correction window (default seven days) before the
-    handoff. Revision 7 therefore keeps the simpler prohibition and does not
-    transfer monitoring obligations.
+    handoff, and every closing read must then succeed. Revision 7 therefore
+    keeps the simpler prohibition and does not transfer monitoring
+    obligations.
 - **Unsettled handoff is not supported.** If the old environment cannot drain
-  (for example a permanently unfinalized run, or a correction window still
-  open), the new environment waits for the next cycle, or for the old run to
-  settle at its bound (`bound_unfinalized`, MS2-D-41) and its window to close.
+  (for example a permanently unfinalized run, a correction window still
+  open, or a closing read that has not yet succeeded), the new environment
+  waits for the next cycle, or for the old run to settle at its bound
+  (`bound_unfinalized`, MS2-D-41) and its closing read to commit
+  (revision 8).
   Revision 7: at a cycle rollover, the `continued` authority stays with the old
   holder; a new environment still needs an exported, destination-bound record. Transferring open liabilities between
   databases was rejected because it needs cross-database reconciliation
@@ -2412,6 +2504,25 @@ F5a; revision 6, review R5-05).**
   separable. Unsettled operator reservations count at
   their bound, block a handoff export (MS2-D-45), and appear in the spend
   report.
+- **Build identity and settlement** (revision 8, review R7-01; refines *After
+  execution*). An operator reservation never has a `provider_run`: it is null
+  for every `operator` row (both kinds), as for denials. A build does not exist
+  when it is reserved, so for a build `--settle <id> --build-id <build id>`
+  first **binds** the provider build id to the reservation in its own
+  budget-locked, committed transaction (`provider_build_id`, unique when set,
+  written once; a different id for a bound row is refused). The command does
+  not wait for the build. From then on the poller owns the row from persisted
+  state alone: selector 2 (MS2-D-23) reads the build record (MS2-D-15) until
+  the build is terminal and its usage meets the MS2-D-41 predicate, or
+  settles it at `max(build bound, every observed read)` (`bound` mode, a
+  record without dollar usage, or the finalize deadline). Reconciliation sets
+  `last_charge_at` from the build's `finishedAt` (MS2-D-34) and
+  `correction_monitor_until`, and selector 4 then monitors the build and
+  closes it by a closing read, like a run. A build row with no bound id stays
+  counted at its bound. Every build read is an `ApifyUsageRead` that cites the
+  reservation with a null `provider_run`. An inspection has no provider figure
+  to re-read, so its `--settle` reconciles it at once at the envelope's bound,
+  with `last_charge_at` equal to the settle time and no correction obligation.
 - **Reporting.** The cycle report and the handoff record include operator
   consumption, so Hardware Radar's reported consumption covers every
   attributable operation that went through this procedure.
@@ -2435,7 +2546,14 @@ revision 7, review R6-02).** This decision refines MS2-D-26 and MS2-D-41.
      MS2-D-40 (snapshot and external liability) against the latest snapshot;
   4. trips the overrun latch with `post_admission_invariant_breach` if **any**
      of them is exceeded, or with the existing overrun reason if the row's
-     settled amount exceeds its own reservation.
+     settled amount exceeds its own reservation;
+  5. (revision 8, reviews R5-03 and R5-04) if the read is the row's closing
+     read (MS2-D-23 selector 4), sets `correction_monitor_closed_at` and
+     `correction_closing_read`. Closure therefore commits with the correction
+     or not at all.
+
+  The same transaction runs for every selector-4 read, including one that
+  finds no correction, so no read is ever committed without its correction.
 - **Effect.** Paid work pauses at once through the latch (MS2-D-26); no future
   admission has to fail first. The breach and the correction appear in the spend
   report.
@@ -2513,6 +2631,7 @@ Task IDs refer to the slices below.
 | AC-7 — one HR ledger authority per cycle; drained handoff (MS2-D-45, rev 6 R5-04) | spec :943 | E1, E3, F5a | `test_apify_ledger_authority.py::test_handoff_export_refused_while_proof_run_is_running`, `::test_handoff_export_refused_while_usage_is_provisional_or_unfinalized`, `::test_second_environment_denied_until_handoff_imported` |
 | AC-7 — operator operations reserved in the ledger (MS2-D-46, rev 6 R5-05) | spec :943 | E2, E4, F5a | `test_apify_budget.py::test_operator_allowance_exhausted_refuses_reservation`; `test_apify_ledger.py::test_unsettled_operator_reservation_counts_at_bound` |
 | AC-7 — corrections monitored after reconciliation and re-checked against every invariant; exclusive handoff (MS2-D-41, -45, -47, rev 7) | spec :943 | E3, E4 | `test_apify_ledger.py::test_poll_tick_selects_reconciled_cleaned_up_run_for_correction_monitoring`, `::test_below_estimate_upward_correction_after_capacity_reuse_trips_latch`; `test_apify_ledger_authority.py::test_duplicate_export_imported_into_two_ledgers_second_rejected`, `::test_admission_racing_handoff_export_serializes` |
+| AC-7 — monitoring closes only on a committed closing read; handoff needs closing-read evidence; operator builds are bound, settled, and monitored (MS2-D-23, -41, -45, -46, -34, rev 8) | spec :943 | D3, E1, E3, E4 | `test_apify_ledger.py::test_outage_spanning_correction_deadline_closing_read_applies_correction`, `::test_failed_closing_read_keeps_obligation_open_and_overdue`, `::test_restart_rereads_reconciled_build_and_applies_upward_correction`; `test_apify_ledger_authority.py::test_handoff_export_refused_after_deadline_until_closing_read_commits` |
 | IR-008 / DR-011 — three clocks (MS2-D-39) | spec :285, :301 | D10, E3 | ordering tests in `test_apify_import_ordering.py` (observation clock); `test_apify_storage_cleanup.py::test_deadline_is_anchored_at_admission_not_terminal_observation` (processing clock); `test_apify_ledger.py::test_cycle_attribution_uses_charge_interval_not_observation_time` (billing clock) |
 | DR-001/DR-008 — absolute remote retention deadline (MS2-D-33) | spec :290 | D5, D11 | `test_apify_storage_cleanup.py::test_restart_after_source_ttl_rejects_expired_content_before_persistence`, `::test_unobserved_run_past_deadline_is_aborted_and_cleaned` |
 
@@ -2549,9 +2668,9 @@ proofs run in the gate; "live" proofs are F5a evidence recorded in STATUS.
 | **A** | Seams: category registry + hint; provider seam + run evidence + completeness gate | none | — | Every later slice plugs into these seams. Behavior-preserving, so it is safe to land first. |
 | **B** | GPU/RAM/CPU satellites, category rows, rules, reference seeds, cross-category guard | `0018_category_spec_satellites`, `0019_seed_categories` | A | C's product clauses read the satellites. |
 | **C** | Watch + requirement satellites + evaluator + `watch_evaluation` (with `catalog_fingerprint`) + shortlist read model | `0020_watch_requirements` | B | D's provider-switch test must prove watch state survives (AC-4). |
-| **D-prep** | D1 (the `actors/hw-radar-synthetic-collector/` Actor project with its committed contract schemas, fault-injection fixtures, and own tests; hw-radar's conformance-tested contract models, `classify_run` with truncation reasons, fixtures; the Actor gate commands in `scripts/check.py`) and D3 (httpx client, nine or ten calls). Pure code with no DB schema, no pipeline wiring, and no Apify deployment (revision 5, MS2-D-38). | none | A | Has no dependency on B or C, so it may be developed and merged any time after A. |
+| **D-prep** | D1 (the `actors/hw-radar-synthetic-collector/` Actor project with its committed contract schemas, fault-injection fixtures, and own tests; hw-radar's conformance-tested contract models, `classify_run` with truncation reasons, fixtures; the Actor gate commands in `scripts/check.py`) and D3 (httpx client, ten or eleven calls; revision 8 adds get build). Pure code with no DB schema, no pipeline wiring, and no Apify deployment (revision 5, MS2-D-38). | none | A | Has no dependency on B or C, so it may be developed and merged any time after A. |
 | **D** (core) | D2, D4–D12: `provider_run`, staged import, scoped absence, per-scope ordered continuity (`scope_sweep_continuity`, NULL-scope lane watermarks), ordering and absence watermarks (`Listing.last_observed_at`, `Listing.last_absence_at`, per-scope `last_complete_sweep_at`), per-observation snapshot retention, provider selection, poll selectors, probes, retention, cleanup. Production admission = deny-all. Starts only after the *Slice D entry gate* | `0021_provider_runs` | C, D-prep, entry gate | D7 needs `WatchEvaluation` (C), and stage 4 needs the evaluator. Live runs are impossible until E replaces deny-all. D is fail-closed by construction. |
-| **E** | Spend ledger, billing-cycle table, account-headroom admission, provisional/finalized usage, reconcile, `budget_paused`, spend report (revision 5, MS2-D-40, -41) | `0022_apify_spend_ledger` | D | Reservations attach to `provider_run`. |
+| **E** | Spend ledger, billing-cycle table, account-headroom admission, provisional/finalized usage, reconcile, `budget_paused`, spend report (revision 5, MS2-D-40, -41) | `0022_apify_spend_ledger` | D | Runtime reservations attach to `provider_run`; operator rows have none, and build rows carry `provider_build_id` (revision 8). |
 | **F** | Pilot sources (eBay category sweeps, SPD check), measurement, synthetic Actor proof (F5a), owner-gated merchant Actor source (F5b), end-to-end evidence | none planned | B–E | Integration and measurement last (ADR 0022 "measure before breadth"). |
 
 **Merge order = dependency graph:** A → B → C → D (core) → E → F. D-prep merges
@@ -3489,6 +3608,10 @@ the then-current code. D-prep (D1, D3) is not gated.
   - Revision 5 tests: `test_account_limits_parsed_into_cycle_bounds`,
     `test_monthly_usage_parsed_with_date_parameter`, and
     `test_client_never_sends_max_items_or_max_total_charge`.
+  - Revision 8 (review R7-01): the get-build read (MS2-D-15) parses the build's
+    status, `finishedAt`, and nullable usage the same way as a run's; its wire
+    names are verified with the others. Test:
+    `test_build_record_parsed_with_nullable_usage`.
 - **D4 — Import provider.** Add `ApifyImportProvider(provider_run)` as a
   `CollectionProvider` of kind `apify`:
   - `fetch` reads the dataset into a `RawBatch` of dataset rows only, with
@@ -3753,7 +3876,8 @@ the then-current code. D-prep (D1, D3) is not gated.
 ## Slice E — Apify spend ledger and admission
 
 **Scope:** MS2-D-17, -26, -32, -34, the E-side latch wiring of -33,
-(revision 5) -40 and -41, (revision 6) -45 and -46, and (revision 7) -47.
+(revision 5) -40 and -41, (revision 6) -45 and -46, and (revision 7) -47
+(revision 8 revises -23 closure, -34, -45, and -46 without new IDs).
 
 **Files:**
 - new `acquisition/apify/budget.py`;
@@ -3804,7 +3928,8 @@ the then-current code. D-prep (D1, D3) is not gated.
   `apify_operator_reserve` (MS2-D-46).
 
 - **E1 — Schema (0022).** Add `ApifySpendReservation` with:
-  - `provider_run` OneToOne null (null for denials) and `source_site`;
+  - `provider_run` OneToOne null (null for denials and, revision 8, for every
+    `operator` row, MS2-D-46) and `source_site`;
   - `admission_class` (`watch_refresh | discovery | operator`, revision 6) and
     `status`
     (`reserved | usage_provisional | usage_finalized | reconciled | released |
@@ -3817,7 +3942,14 @@ the then-current code. D-prep (D1, D3) is not gated.
     `operator_kind` (`build | inspect`, operator rows only); revision 7 adds
     `correction_monitor_until`, `next_usage_read_at`,
     `correction_monitor_closed_at`, and, for inspection rows, the envelope
-    limits (MS2-D-41, -46, -47). Revision 5's
+    limits (MS2-D-41, -46, -47). Revision 8 (reviews R5-03, R5-04, R7-01)
+    adds `correction_closing_read` (FK to `ApifyUsageRead`, null until the
+    closing read commits; set in the same transaction as
+    `correction_monitor_closed_at`) and `provider_build_id` (nullable, unique
+    when set, written once; a CHECK allows it only on `operator_kind = build`
+    rows, and a build row cannot become `reconciled` without it). On a build
+    row, `settled_run_usage_usd` holds the settled build usage. No new table.
+    Revision 5's
     "written once" `usage_finalized_usd` is kept as the first finalized figure;
     the immutable history lives in `ApifyUsageRead`;
   - `estimate_usd` and `actual_usd` (Decimal 10,4); `execution_bound_usd` and
@@ -3837,7 +3969,9 @@ the then-current code. D-prep (D1, D3) is not gated.
   - Revision 6: `ApifyUsageRead` (append-only evidence, MS2-D-41):
     `provider_run` null, `reservation`, `read_at`, `usage_total_usd`,
     `usage_usd` JSON, `finished_at_reported`, and `price_settings_version`; no
-    update or delete path. `ApifyLedgerAuthority` (MS2-D-45) with the fields
+    update or delete path. Revision 8: a build read has a null `provider_run`
+    and identifies its build through `reservation.provider_build_id`.
+    `ApifyLedgerAuthority` (MS2-D-45) with the fields
     listed there (revision 7 adds `handed_off_to` and
     `handoff_record_digest`), unique on `cycle_start`; the imported record's
     digest is unique.
@@ -3932,13 +4066,25 @@ the then-current code. D-prep (D1, D3) is not gated.
       `test_authority_continues_at_cycle_rollover`;
     - revision 7 (R5-04, R6-01):
       `test_handoff_export_refused_while_correction_monitoring_open`
-      (correction after handoff is impossible by construction);
+      (an obligation still before its deadline; revision 8 withdraws the
+      "impossible by construction" gloss);
       `test_duplicate_export_imported_into_two_ledgers_second_rejected`;
       `test_export_to_second_destination_refused_and_same_destination_retry_idempotent`;
       `test_reimport_of_same_record_is_noop`;
       `test_admission_racing_handoff_export_serializes` (two threads: exactly
       one of "reservation committed, export refused" or "export committed,
       admission denied");
+    - revision 8 (R5-04):
+      `test_handoff_export_refused_after_deadline_until_closing_read_commits`
+      (the outage scenario of E4: on day 8, after the deadline and before the
+      restarted poller's closing read, the export is refused; once the closing
+      read commits the $1 correction, the export succeeds, its record carries
+      $1 and the closing read, and the destination's import counts $1);
+      `test_handoff_export_refused_with_read_above_settled_usage` (a seeded
+      post-reconciliation `ApifyUsageRead` above the row's settled usage is an
+      unapplied correction and blocks the export; a pre-settlement read is not
+      counted by this check);
+      `test_import_refuses_record_without_closing_read_evidence`;
     - `test_cycle_attribution_uses_charge_interval_not_observation_time`
       (MS2-D-39);
     - `test_unreconciled_reservation_never_ages_out`;
@@ -3954,6 +4100,11 @@ the then-current code. D-prep (D1, D3) is not gated.
   `correction_monitor_until` in the same locked transaction (MS2-D-34,
   MS2-D-41). The reconcile unit joins the MS2-D-23 outstanding selector (2);
   after reconciliation the row moves to the correction-monitoring selector (4).
+  Revision 8: the row leaves selector 4 only when a successful closing read at
+  or after `correction_monitor_until` commits together with any correction it
+  finds (MS2-D-23, MS2-D-47); an elapsed deadline alone never closes it.
+  Operator build rows reconcile through the same unit from their bound
+  `provider_build_id` (MS2-D-46).
   A null or unsettled value keeps the estimate and is retried. A row unsettled
   at its admission cycle's end is flagged `unreconciled_stale`.
   - Latch trips: an actual above the reservation, non-zero proxy usage, a dataset
@@ -4015,7 +4166,29 @@ the then-current code. D-prep (D1, D3) is not gated.
         `test_poll_tick_selects_reconciled_cleaned_up_run_for_correction_monitoring`
         (a reconciled run with storage deleted is selected by selector 4, and a
         rising read raises its settled amount);
-        `test_correction_monitoring_stops_at_window_end`;
+        ~~`test_correction_monitoring_stops_at_window_end`~~ (withdrawn in
+        revision 8: elapsed time no longer closes monitoring);
+      - revision 8 (R5-03), through the scheduler:
+        `test_outage_spanning_correction_deadline_closing_read_applies_correction`
+        (`stable_reads`; run A reserves $2, settles at $0.50 on day 0, and run
+        B reserves into the released capacity; the provider raises A to $1 on
+        day 6 while the poller is down from day 5 to day 8; the deadline is day
+        7. The restarted poller selects the expired, unclosed row, and its
+        closing read, in one locked transaction, appends the read, raises A's
+        settled amount to $1 in every cycle A's charge interval touches, trips
+        the latch with `post_admission_invariant_breach` when B's reuse makes
+        an aggregate exceed its limit, and only then closes monitoring);
+        `test_failed_closing_read_keeps_obligation_open_and_overdue` (a
+        transport error, a missing record, and a null usage total each leave
+        `correction_monitor_closed_at` null, back off, and show
+        `correction_close_overdue` in the spend report; a later successful read
+        closes the row);
+        `test_closing_read_rollback_leaves_monitoring_open` (a failure injected
+        after the read is appended rolls back the read, the correction, and the
+        closure together);
+        `test_correction_monitoring_closes_only_after_successful_closing_read`
+        (replaces the withdrawn test: before the deadline reads never close;
+        the first successful read at or after it does);
       - revision 7 (R6-02):
         `test_below_estimate_upward_correction_after_capacity_reuse_trips_latch`
         (A reserves $2 and settles to $0.50; B reserves into the released
@@ -4025,7 +4198,19 @@ the then-current code. D-prep (D1, D3) is not gated.
         `test_correction_attributed_to_charge_interval_cycles_not_read_time`;
       - `test_usage_reads_are_append_only_evidence`.
     - revision 6 (R5-05): `test_operator_build_settles_from_build_cost` and
-      `test_unsettled_operator_reservation_counts_at_bound`.
+      `test_unsettled_operator_reservation_counts_at_bound`. Revision 8
+      (R7-01) sharpens the first: the settle command only binds the build id;
+      the poller reads the build record, settles the row, and sets
+      `last_charge_at` to the build's `finishedAt`.
+    - revision 8 (R7-01): `test_restart_rereads_reconciled_build_and_applies_upward_correction`
+      (a build reservation is bound, settled, and reconciled; a new poller
+      process, starting from persisted state only, selects it by
+      `provider_build_id`, reads a higher build usage, applies the correction
+      under the lock, and re-checks the operator allowance and the other
+      MS2-D-47 invariants); `test_operator_reservation_has_no_provider_run`;
+      `test_rebinding_a_different_build_id_is_refused`;
+      `test_build_row_without_build_id_stays_at_bound_and_never_reconciles`;
+      `test_inspection_settle_sets_last_charge_at_and_no_correction_obligation`.
 - **E5 — Wire admission.** Replace `DenyAllAdmission` with the ledger in the
   start job, and derive `budget_paused` into C's freshness.
   - Tests: `test_denied_start_records_denial_and_starts_nothing`;
@@ -4039,7 +4224,8 @@ the then-current code. D-prep (D1, D3) is not gated.
   inclusion-watermark status, the ledger authority and any carried handoff
   consumption, and operator consumption by kind; then per-source and
   per-provider totals from the ledger and
-  `provider_run`; unsettled and overrun rows with their reasons; and a
+  `provider_run`; unsettled and overrun rows with their reasons (revision 8:
+  including `correction_close_overdue` rows, MS2-D-23); and a
   trailing-31-day trend line labeled secondary (MS2-D-17). The calendar-month
   view of revision 4 is withdrawn.
   - Test: output for a seeded ledger spanning two cycles.
@@ -4064,7 +4250,9 @@ missing settings. Reconciliation and admission are serialized. No reservation
 ages out unreconciled, and none is released while charge-producing work remains
 or before its usage meets the settlement predicate (or settles at its bound)
 and its post-run cost is accounted; a later upward correction still trips the
-latch. Operator operations are reserved in the same ledger. Settled spend
+latch, and correction monitoring closes only on a committed, successful
+closing read (revision 8). Operator operations are reserved in the same ledger,
+and a bound build is settled and monitored from persisted state. Settled spend
 counts in every billing cycle its charge interval touches, however late cleanup
 succeeded (revision 5).
 
@@ -4152,8 +4340,9 @@ succeeded (revision 5).
      authority there (`apify_ledger_claim --origin`, MS2-D-45).
   2. Reserve the build (`apify_operator_reserve --kind build`, MS2-D-46), deploy
      `hw-radar-synthetic-collector` by the MS2-D-43 procedure, verify the push
-     uploaded only the Actor directory, settle the build reservation, and
-     record the deployment.
+     uploaded only the Actor directory, bind the build to its reservation
+     (`--settle <id> --build-id <build id>`, revision 8) so the poller settles
+     and monitors it, and record the deployment.
   3. Run through hw-radar's own path:
      `APScheduler/provider admission → budget reservation → Actor start →
      remote execution → bounded output → completion polling → completeness
@@ -4175,7 +4364,8 @@ succeeded (revision 5).
   5. Before any production environment admits paid work in the same cycle,
      disable this environment, drain every liability, and hand off
      (`apify_ledger_handoff`, MS2-D-45). A still-running or late-finalizing
-     proof run blocks the handoff.
+     proof run blocks the handoff, and so does any correction obligation
+     without a committed closing read (revision 8).
   6. Record every §21 item's live evidence (see *Synthetic Actor proof
      acceptance*) in STATUS.
 - **F5b — Production Actor-backed merchant source (owner-gated: OQ24, R1).**
@@ -4238,7 +4428,7 @@ F5b lands is an owner decision (R31).
 | R34 | Revision 6 admission is deliberately conservative and may leave Hardware Radar well under its $12 target: reconciled spend is debited on top of the snapshot while no inclusion watermark exists (R5-01); run usage settles at its execution bound until F5a supports `stable_reads` (R5-03); and the external-liability bound is reserved in full. With the verified figures ($19 prepaid, $1.90 margin) and no watermark, late-cycle headroom falls roughly by Hardware Radar's own settled spend. | Set `…_USAGE_INCLUSION_LAG_S` and `stable_reads` only from F5a evidence | E live capacity |
 | R35 | The first ledger authority in a cycle (`apify_ledger_claim --origin`, MS2-D-45) rests on an owner attestation that no other environment admitted paid work that cycle; every later authority is machine-checked (continuation, or a drained handoff bound to one destination ledger, revision 7). Residual: a handoff record is a digest-keyed file, not a cryptographically signed one, so the checks protect against mistakes, not against deliberate hand-editing. | Attest only when true | E live admission |
 | R36 | Operator reservations (MS2-D-46) are a procedural control: the Console, CLI, and MCP cannot be intercepted, so an operation run without a reservation is unaccounted. The build bound ($0.41) nearly fills the $0.50 allowance, and under the default `bound` settlement a settled build returns little capacity, so about one build per cycle fits until F5a evidence allows `stable_reads` or the owner raises the allowance. | Reserve before every build or inspection; revisit the allowance after F5a | F5a deployment cadence |
-| R37 | (Revision 7.) Correction monitoring (MS2-D-41, selector 4) runs for a fixed window after a row's last charge (default seven days, an assumption); a provider correction later than that is not observed. Under the default `bound` settlement the settled amount already equals the enforced execution bound, so the exposure matters mainly under `stable_reads`. The window also delays a drained handoff by up to one window (MS2-D-45). | Choose `stable_reads` only if F5a's read trail shows no correction after half the window | E accuracy under `stable_reads`; handoff timing |
+| R37 | (Revision 7; revised in revision 8.) Correction monitoring (MS2-D-41, selector 4) runs for a fixed window after a row's last charge (default seven days, an assumption) and closes only when a successful closing read at or after the deadline commits. A provider correction that arises after that closing read is not observed by any environment; window closure is not provider finality. Under the default `bound` settlement the settled amount already equals the enforced execution bound, so the exposure matters mainly under `stable_reads`. The window delays a drained handoff by at least one window (MS2-D-45). Revision 8 residual: a closing read that can never succeed (for example, a run or build record no longer returned) keeps its obligation open, visible as `correction_close_overdue`, and blocks handoff indefinitely; that fails closed, and any release of such an obligation would need a plan revision. | Choose `stable_reads` only if F5a's read trail shows no correction after half the window | E accuracy under `stable_reads`; handoff timing |
 
 No new ADR or OQ file is created by this plan. Revision 5: OQ23 is resolved and
 OQ24 split by the owner's 2026-09-24 decisions, recorded in
@@ -4426,6 +4616,32 @@ read-only review of revision 6 at `badad4e`).
 unmerged `0022`.
 
 **Revision 7 review status:** a Codex review of revision 7 is pending (round 7).
+(Done: see *Round 7* below.)
+
+**Round 7 — delegate `01639c2a` (codex), REVISION NEEDED: R5-03/R5-04 partial
+(closure without closing read), R7-01 new (medium); R5-01/02/05, R6-01/02
+resolved; all accepted → revision 8.** Static read-only review of revision 7 at
+`df595f6`.
+- The review's "verified correct" items stand: fail-closed external-liability,
+  pricing, enablement, and ledger-authority defaults; `budget_paused` reasons
+  while the latch is tripped; the shared budget lock for reserve,
+  reconciliation, operator reservations, handoff export, and correction
+  application; the three-clock table and R23; the `0022` assignment of the
+  revision-6/7 schema; and no over-engineering.
+- Revision 8 changes only the closure rule, the handoff evidence check, and the
+  operator build identity with the operator charge horizons; it adds no table,
+  task, decision ID, or migration number.
+
+| Finding | Sev. | Status | Decision / plan location (changed text) | Named tests |
+| --- | --- | --- | --- | --- |
+| R5-03 residual: expired `correction_monitor_until` closes monitoring without a closing read, so a correction during a poller outage spanning the deadline is never applied | high | Accepted; resolved | MS2-D-23 selector 4 (no `> now` condition; *Every read*, *Closing read*, *Failed closing read*); MS2-D-41 *Upward correction*, *Window residual*; MS2-D-47 step 5; E1 `correction_closing_read`; E4 text; E6 `correction_close_overdue`; R37 | `test_apify_ledger.py::test_outage_spanning_correction_deadline_closing_read_applies_correction`, `::test_failed_closing_read_keeps_obligation_open_and_overdue`, `::test_closing_read_rollback_leaves_monitoring_open`, `::test_correction_monitoring_closes_only_after_successful_closing_read` (replaces `::test_correction_monitoring_stops_at_window_end`) |
+| R5-04 residual: handoff export trusts elapsed closure and claims no correction after handoff by construction | high | Accepted; resolved | MS2-D-45 *Handoff, fully drained* (closing-read evidence, no unapplied read), *Exclusive destination* (record lists closing reads), *Import*, *Corrections after handoff* (replaces *No correction after handoff, by construction*), *Feasibility*, *Unsettled handoff*; R37 | `test_apify_ledger_authority.py::test_handoff_export_refused_after_deadline_until_closing_read_commits`, `::test_handoff_export_refused_with_read_above_settled_usage`, `::test_import_refuses_record_without_closing_read_evidence` |
+| R7-01 operator build reservation has no durable build id, build-record read, or build charge horizon | medium | Accepted; resolved | MS2-D-15 (get build, ten or eleven calls); D3; MS2-D-23 selector 2 (bound builds) and 4; MS2-D-34 *Operator rows*; MS2-D-46 *Build identity and settlement* (null `provider_run` for every operator row; `--settle --build-id` binds); E1 `provider_build_id`; *Slice order* E row | `test_apify_ledger.py::test_restart_rereads_reconciled_build_and_applies_upward_correction`, `::test_operator_reservation_has_no_provider_run`, `::test_rebinding_a_different_build_id_is_refused`, `::test_build_row_without_build_id_stays_at_bound_and_never_reconciles`, `::test_inspection_settle_sets_last_charge_at_and_no_correction_obligation`; D3 `test_build_record_parsed_with_nullable_usage` |
+
+**Migrations (round 7):** no number changes. `correction_closing_read` and
+`provider_build_id` land in Slice E's unmerged `0022`.
+
+**Revision 8 review status:** a Codex review of revision 8 is pending (round 8).
 
 ## Next slice after A
 

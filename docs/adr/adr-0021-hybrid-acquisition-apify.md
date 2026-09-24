@@ -272,6 +272,14 @@ without changing the owner's rule:
   and pauses paid work if one is exceeded. A handoff between environments waits
   until those windows close and is bound to exactly one destination.
   Inspections are reserved as finite, priced envelopes.
+- (Plan revision 8, review round 7.) A correction window closes only when a
+  successful usage read at or after its end has been recorded, with any
+  correction it finds already counted; an elapsed window or a failed read
+  closes nothing, and a handoff needs that closing evidence. Closure is not
+  proof that the provider will never correct the figure later; that remains an
+  acknowledged residual. Operator builds are recorded by their provider build
+  identifier, so a build's cost stays attributable and monitored after it
+  settles.
 
 **Verified account state, 2026-09-24** (read-only API; a record of fact, not
 part of the rule): plan Starter, $19 base price, $19 prepaid usage credit,
