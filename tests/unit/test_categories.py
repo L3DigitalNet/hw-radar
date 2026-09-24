@@ -16,8 +16,10 @@ def test_drive_rules_bind_existing_functions_by_identity() -> None:
     assert rules.veto is ladder.contradictions
 
 
-def test_registered_categories_is_drive_only_in_slice_a() -> None:
-    assert categories.registered_categories() == frozenset({"drive"})
+def test_registered_categories_matches_ms2_registry() -> None:
+    assert categories.registered_categories() == frozenset(
+        {"drive", "gpu", "ram", "cpu", "nic", "hba", "motherboard", "server"}
+    )
 
 
 def test_dispatch_category_none_is_legacy_drive() -> None:
@@ -33,7 +35,7 @@ def test_dispatch_category_passes_hint_through() -> None:
 
 
 def test_rules_for_unregistered_is_none() -> None:
-    assert categories.rules_for("gpu") is None
+    assert categories.rules_for("zz-unregistered") is None
 
 
 @pytest.mark.parametrize("hint", ["GPU!", "GPU", "gpu card", "", "-gpu", "gpu-", "a" * 51])

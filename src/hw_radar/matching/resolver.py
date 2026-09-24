@@ -25,13 +25,19 @@ Invariants:
   the matching.categories rules and the _SPEC_READERS entry; no hint is the
   legacy drive default. A category without registered rules gets an
   `unsupported_category` none-edge and never runs drive rules. Every edge the
-  ladder path writes records `category` and `category_source`."""
+  ladder path writes records `category` and `category_source`.
+- Category gates (MS2-D-05/-21), applied to the ladder's verdict in this order:
+  cross-category guard (an accept whose target family belongs to another
+  category), the category's AcceptancePolicy, then its auto_accept flag. Each
+  failure turns the accept into `review` — never `none` — so the collision stays
+  visible in the review queue. Drive has no policy and auto_accept on, so for
+  drive only the guard can fire, and only on a non-drive target."""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from decimal import Decimal
 from typing import Final, Literal, cast
 
@@ -44,7 +50,9 @@ from hw_radar.catalog.models import (
     AliasSourceKind,
     AliasType,
     Category,
+    CpuSpec,
     DriveSpec,
+    GpuSpec,
     Listing,
     ListingResolution,
     Manufacturer,
@@ -53,13 +61,16 @@ from hw_radar.catalog.models import (
     ProductFamily,
     ProductModel,
     ProductVariant,
+    RamSpec,
     RecertChannel,
     ResolutionGrain,
+    ResolutionMethod,
     RetentionClass,
     WarrantyChannel,
 )
 from hw_radar.matching import MATCHER_VERSION, categories, ladder
 from hw_radar.matching.normalize import canonicalize_title
+from hw_radar.matching.rules import basic, cpu, gpu, ram
 from hw_radar.matching.types import (
     DecodeResult,
     ExtractedAttributes,
@@ -140,6 +151,85 @@ class _SpecReader:
     family_attrs: Callable[[int | None], ladder.HardAttrs]
 
 
+def _known(value: str) -> str | None:
+    """A satellite choice column as a veto value: "unknown" and blank mean the
+    source did not state it, which must read as None (cannot veto)."""
+    return value if value and value != "unknown" else None
+
+
+def _gpu_hard(spec: GpuSpec) -> gpu.GpuHard:
+    return gpu.GpuHard(
+        chip_vendor=_known(spec.chip_vendor),
+        vram_gb=spec.vram_gb,
+        interface=_known(spec.interface),
+        cooling=_known(spec.cooling),
+    )
+
+
+def _ram_hard(spec: RamSpec) -> ram.RamHard:
+    return ram.RamHard(
+        generation=_known(spec.generation),
+        module_type=_known(spec.module_type),
+        ecc=spec.ecc,
+        module_capacity_gb=spec.module_capacity_gb,
+        speed_mts=spec.speed_mts,
+        ranks=spec.ranks,
+    )
+
+
+def _cpu_hard(spec: CpuSpec) -> cpu.CpuHard:
+    # Compared in socket_key form on both sides; see matching.rules.cpu.
+    return cpu.CpuHard(socket=cpu.socket_key(spec.socket) or None, cores=spec.cores)
+
+
+def _agreed[P: ladder.CategoryHardAttrs](payloads: list[P]) -> P | None:
+    """The C.3.2 agreement set for a category payload: each field keeps its value
+    only where every spec in the family agrees; disagreeing fields become None."""
+    if not payloads:
+        return None
+    first = payloads[0]
+    return replace(
+        first,
+        **{
+            f.name: getattr(first, f.name)
+            if all(getattr(p, f.name) == getattr(first, f.name) for p in payloads)
+            else None
+            for f in fields(first)
+        },
+    )
+
+
+def _satellite_reader[S: (GpuSpec, RamSpec, CpuSpec)](
+    satellite: type[S], accessor: str, to_hard: Callable[[S], ladder.CategoryHardAttrs]
+) -> _SpecReader:
+    """Spec reader for a first-class satellite: the typed payload rides on
+    `HardAttrs.category`, and the drive fields stay None so drive's
+    `contradictions` could never read them even if misrouted."""
+
+    def model_attrs(model: ProductModel | None) -> ladder.HardAttrs:
+        if model is None:
+            return ladder.HardAttrs()
+        try:
+            spec = cast("S", getattr(model, accessor))
+        except satellite.DoesNotExist:  # pyright: ignore[reportAttributeAccessIssue] - django-types has no per-model DoesNotExist on a TypeVar-bound class
+            return ladder.HardAttrs()
+        return ladder.HardAttrs(category=to_hard(spec))
+
+    def family_attrs(family_id: int | None) -> ladder.HardAttrs:
+        if family_id is None:
+            return ladder.HardAttrs()
+        specs = satellite.objects.filter(product_model__product_family_id=family_id)
+        return ladder.HardAttrs(category=_agreed([to_hard(spec) for spec in specs]))
+
+    return _SpecReader(model_attrs=model_attrs, family_attrs=family_attrs)
+
+
+# Basic-watch categories have no satellite: nothing on the catalog side can veto.
+_NO_SPEC = _SpecReader(
+    model_attrs=lambda _model: ladder.HardAttrs(),
+    family_attrs=lambda _family_id: ladder.HardAttrs(),
+)
+
 # Keys must equal categories.registered_categories() (pinned by
 # test_resolver_dispatch): a registered category without a reader would crash
 # every resolution in it, and a reader without rules is dead code.
@@ -148,6 +238,10 @@ _SPEC_READERS: Final[dict[str, _SpecReader]] = {
         model_attrs=lambda model: _hard_attrs_from_spec(_spec_of(model)),
         family_attrs=_family_agreement_attrs,
     ),
+    gpu.SLUG: _satellite_reader(GpuSpec, "gpu_spec", _gpu_hard),
+    ram.SLUG: _satellite_reader(RamSpec, "ram_spec", _ram_hard),
+    cpu.SLUG: _satellite_reader(CpuSpec, "cpu_spec", _cpu_hard),
+    **dict.fromkeys(basic.BASIC_CATEGORIES, _NO_SPEC),
 }
 
 
@@ -325,6 +419,121 @@ def _first_decode(
     return None
 
 
+def _review(verdict: ladder.Verdict, **reason: object) -> ladder.Verdict:
+    """Demote a gated ACCEPT to REVIEW, keeping the ladder's evidence and rung so
+    the review queue shows what matched and which gate stopped it."""
+    return ladder.Verdict(
+        ladder.Outcome.REVIEW,
+        Grain.NONE,
+        rung=verdict.rung,
+        evidence={**verdict.evidence, **reason},
+    )
+
+
+def _target_category(target: ladder.TargetRef) -> str:
+    """The category a catalog target belongs to: its family's category. A
+    family-less model predates categories — every MS-1 catalog row is a drive —
+    so it reads as the legacy default, which keeps drive hits on those models
+    untouched while a gpu/ram/cpu listing hitting one is still cross-category."""
+    if target.family_id is None:
+        return categories.LEGACY_DEFAULT_CATEGORY
+    return ProductFamily.objects.values_list("category__slug", flat=True).get(pk=target.family_id)
+
+
+@dataclass(frozen=True)
+class _AcceptanceBasis:
+    method: str
+    source_kind: str | None
+
+
+def _prior_basis(listing: Listing) -> _AcceptanceBasis | None:
+    """What the listing's accepted state (the rung-0 prior) rests on: the latest
+    non-error accept edge. A rung-0 edge carries its own basis forward in
+    evidence, because its method is `source_alias` whatever it inherited."""
+    edge = cast(
+        "ListingResolution | None",
+        listing.resolutions.filter(evidence__outcome=ladder.Outcome.ACCEPT.value)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no reverse-FK manager stub
+        .exclude(evidence__has_key="error")
+        .order_by("-resolved_at", "-pk")
+        .first(),
+    )
+    if edge is None:
+        return None
+    source_kind = edge.evidence.get("alias_source_kind")
+    method = edge.method
+    if method == ResolutionMethod.SOURCE_ALIAS.value:
+        method = edge.evidence.get("acceptance_basis", method)
+    return _AcceptanceBasis(
+        method=str(method), source_kind=source_kind if isinstance(source_kind, str) else None
+    )
+
+
+def _apply_category_gates(
+    listing: Listing, slug: str, rules: categories.CategoryRules, verdict: ladder.Verdict
+) -> ladder.Verdict:
+    """Cross-category guard, then AcceptancePolicy, then auto_accept (the module
+    docstring's order). Only an ACCEPT is ever changed, and only toward REVIEW.
+
+    Order matters: the guard runs first so a foreign target is reported as
+    `cross_category` rather than as a policy miss, and the policy runs before
+    auto_accept so a non-authoritative hit reads `acceptance_policy` even while
+    auto-accept is off (MS2-D-21)."""
+    target = verdict.target
+    if verdict.outcome is not ladder.Outcome.ACCEPT or target is None:
+        return verdict
+    # A rung-2 provisional family is created under the dispatch category, so it
+    # cannot be foreign; everything else points at an existing catalog row.
+    if target.family_key is None:
+        target_category = _target_category(target)
+        if target_category != slug:
+            return _review(verdict, cross_category={"target_category": target_category})
+    policy = rules.acceptance
+    if policy is None:
+        return verdict
+    if verdict.rung == 0:
+        # Inherit only what the policy could have accepted itself, or an owner's
+        # manual decision; any other prior (a pre-policy accept, a learned-alias
+        # accept) is re-reviewed rather than trusted forever.
+        basis = _prior_basis(listing)
+        trusted = basis is not None and (
+            basis.method == ResolutionMethod.MANUAL.value
+            or (
+                basis.method == ResolutionMethod.EXACT_ALIAS.value
+                and basis.source_kind in policy.authoritative_source_kinds
+            )
+        )
+        if basis is None or not trusted:
+            return _review(
+                verdict,
+                acceptance_policy={
+                    "source_kind": basis.source_kind if basis else None,
+                    "grain": target.grain.value,
+                    "prior_method": basis.method if basis else None,
+                },
+            )
+        return replace(
+            verdict,
+            evidence={
+                **verdict.evidence,
+                "alias_source_kind": basis.source_kind,
+                "acceptance_basis": basis.method,
+            },
+        )
+    if verdict.rung != 1:
+        # No other rung may accept under a policy (the new categories have no
+        # grammar decode); fail closed rather than let a future rung slip past.
+        return _review(verdict, acceptance_policy={"rung": verdict.rung})
+    source_kind = verdict.winning_hit.source_kind if verdict.winning_hit else None
+    if source_kind not in policy.authoritative_source_kinds or target.grain not in policy.grains:
+        return _review(
+            verdict,
+            acceptance_policy={"source_kind": source_kind, "grain": target.grain.value},
+        )
+    if not rules.auto_accept:
+        return _review(verdict, auto_accept_disabled=True, alias_source_kind=source_kind)
+    return replace(verdict, evidence={**verdict.evidence, "alias_source_kind": source_kind})
+
+
 def _run_ladder(
     listing: Listing, *, reconsider: bool = False
 ) -> tuple[str, ExtractedAttributes, list[MpnCandidate], ladder.Verdict]:
@@ -376,10 +585,12 @@ def _run_ladder(
         _first_decode(candidates, rules.decode),
         veto=rules.veto,
     )
+    verdict = _apply_category_gates(listing, slug, rules, verdict)
     target = verdict.target
-    if target is not None and target.family_key is not None:
-        # The ladder names a provisional family but not its category; stamp the
-        # dispatch category so _materialize creates it where it was matched.
+    if target is not None:
+        # The ladder never names a category; stamp the dispatch category so
+        # _materialize creates a provisional family where it was matched and
+        # applies this category's variant_on_demand setting.
         verdict = replace(verdict, target=replace(target, category_slug=slug))
     verdict = replace(verdict, evidence={**verdict.evidence, **provenance})
     if reconsider:
@@ -430,7 +641,16 @@ def _materialize(
         variant = ProductVariant.objects.get(pk=target.variant_id)
     grain: str = ResolutionGrain(target.grain.value)
     on_demand = False
-    if grain == ResolutionGrain.MODEL and model is not None and extracted.condition is not None:
+    rules = categories.rules_for(target.category_slug) if target.category_slug else None
+    # A target without a stamped category (only direct callers, never
+    # _run_ladder) keeps the historical drive behavior of creating variants.
+    variant_on_demand = rules.variant_on_demand if rules is not None else True
+    if (
+        variant_on_demand
+        and grain == ResolutionGrain.MODEL
+        and model is not None
+        and extracted.condition is not None
+    ):
         # C.3.3: variant rows are created on demand once model grain + normalized
         # condition are both known — the sellable identity materializes here.
         variant, _created = ProductVariant.objects.get_or_create(

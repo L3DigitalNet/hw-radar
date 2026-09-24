@@ -159,13 +159,13 @@ def test_unregistered_hint_writes_none_edge_and_never_runs_drive_rules(
     site: SourceSite, exos_16tb: ProductModel
 ) -> None:
     listing = _listing(site, "g1", _EXOS_TITLE)
-    _snapshot(listing, category_hint="gpu")
+    _snapshot(listing, category_hint="zz-unregistered")
     CatalogResolver().resolve_listing(listing.pk)
     listing.refresh_from_db()
     edge = _current(listing)
     assert edge.grain == ResolutionGrain.NONE
     assert edge.evidence["unsupported_category"] is True
-    assert edge.evidence["category"] == "gpu"
+    assert edge.evidence["category"] == "zz-unregistered"
     assert edge.evidence["category_source"] == "hint"
     assert "error" not in edge.evidence
     # ladder.decide() always writes mpn_hypothesis, so its absence proves the
