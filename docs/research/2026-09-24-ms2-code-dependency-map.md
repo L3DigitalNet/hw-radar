@@ -273,6 +273,15 @@ construction. ADR 0016 supplies the reserve-then-reconcile *pattern* only.
 
 ## External facts consumed (dated 2026-09-24)
 
+> **Amendment note (2026-09-24, owner decisions, session 2).** This report is kept as
+> written. Later the same day the owner ruled that Hardware Radar's Actors are built and
+> deployed from the `hw-radar` repository, that the Apify billing cycle (not a rolling
+> window or calendar month) is the budget period, and that the first figure at run
+> completion is preliminary while post-run dataset reads bill to the account. Where the
+> bullets below bear on budget periods or Actor placement, the MS-2 plan revision 5
+> (MS2-D-38..-44) and the 2026-09-24 amendment to
+> [ADR 0021](../adr/adr-0021-hybrid-acquisition-apify.md) govern.
+
 - Apify: `maxTotalChargeUsd` applies only to pay-per-event Actors. A
   self-owned Actor's cost bound is `memory × timeout × $/CU` (1 CU = 1 GB-hour;
   $0.20/CU on Free/Starter per the official pricing page). Runs expose

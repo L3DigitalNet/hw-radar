@@ -43,7 +43,7 @@ MADR status: **accepted**.
 
 ## Context and Problem Statement
 
-Hardware Radar originally committed to a predominantly local acquisition stack: direct APIs or structured HTTP where available, then Scrapy/curl_cffi/Playwright escalation inside the hw-radar deployment. That architecture is implemented far enough to prove the common ingestion boundary, but the owner subsequently adopted Apify and already operates a separate `L3DigitalNet/apify-actors` monorepo.
+Hardware Radar originally committed to a predominantly local acquisition stack: direct APIs or structured HTTP where available, then Scrapy/curl_cffi/Playwright escalation inside the hw-radar deployment. That architecture is implemented far enough to prove the common ingestion boundary, but the owner subsequently adopted Apify and already operates a separate `L3DigitalNet/apify-actors` monorepo. _(History as of 2026-09-24. That repository is an unrelated venture; Hardware Radar's Actors live in this repository — see the [2026-09-24 amendment](#amendment--2026-09-24-actor-ownership-billing-cycle-budget-and-actor-proof-owner-clarification).)_
 
 The new question is not whether Apify can replace scraping in the abstract. It is whether Hardware Radar should move collection work to Apify, keep it local, or use both while preserving the product's existing normalization, identity, retention, scheduling, and evidence contracts.
 
@@ -74,7 +74,7 @@ Existing cheap paths stay local unless measurement shows a concrete benefit from
 
 ### Self-owned Actors
 
-Hardware Radar-specific Actors live in the existing private `L3DigitalNet/apify-actors` monorepo and are treated as **internal infrastructure first**, not as Store products. Publication/monetization is a separate decision.
+Hardware Radar-specific Actors live in the existing private `L3DigitalNet/apify-actors` monorepo and are treated as **internal infrastructure first**, not as Store products. Publication/monetization is a separate decision. _(Location superseded 2026-09-24 by the [amendment](#amendment--2026-09-24-actor-ownership-billing-cycle-budget-and-actor-proof-owner-clarification) below: Hardware Radar's Actors are built, versioned, tested, deployed, and managed in the `hw-radar` repository. The internal-infrastructure framing stands.)_
 
 Actors own source-specific acquisition concerns:
 
@@ -153,3 +153,103 @@ This decision is confirmed when:
 - **Amends, does not supersede:** [ADR 0012](adr-0012-orchestration-apscheduler.md) — APScheduler remains the scheduling/admission owner; some jobs may execute remotely.
 - **Amends, does not supersede:** [ADR 0014](adr-0014-scraping-runtime-escalation-stack.md) — HTTP-first / structured-data-first / browser-last remains the per-source technique rule; execution may now be local or in a self-owned Actor.
 - [ADR 0017](adr-0017-resilient-acquisition.md) continues to govern per-source isolation, breaker state, and graceful degradation.
+
+## Amendment — 2026-09-24: Actor ownership, billing-cycle budget, and Actor proof (owner clarification)
+
+Owner decisions of 2026-09-24 (session 2). This amendment clarifies and, where
+marked, overrides the decision above; the original text stays as the record of
+what was first decided. The implementing contract is the MS-2 plan, revision 5
+([`2026-09-24-ms2-multi-category-watch-core.md`](../superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md),
+MS2-D-38..-44).
+
+**1. Actor ownership (overrides *Self-owned Actors*, first sentence).** "All
+Apify Actors used specifically by Hardware Radar must be built, versioned,
+tested, deployed, and managed from the `hw-radar` project/repository." Actor
+source, input and output schemas, tests, build and deploy definitions,
+versioning, cost and usage integration, and operator procedures live in this
+repository under `actors/hw-radar-<purpose>/`. A change to the Actor↔hw-radar
+contract lands atomically in one hw-radar pull request. Hardware Radar does not
+depend on the `L3DigitalNet/apify-actors` repository's code, lifecycle state,
+product records, admission process, implementation work, or credentials. The
+Actor boundaries above stand: no DB credentials, no hw-radar model or Django
+imports, observation output only.
+
+**2. Cost contract: cash ceiling plus attributable consumption (clarifies *Cost
+contract*; resolves [OQ23](../resolved-questions.md#oq23--apify-paid-plan-base-fee-vs-the-20month-hardware-radar-ceiling)).**
+- The hard owner ceiling is the account's total Apify **cash outlay**, about
+  $20 per billing cycle. A plan's subscription fee counts, because it is actual
+  money; the prepaid platform usage it buys is not charged a second time.
+- Hardware Radar's **attributable platform consumption** has an operating target
+  of at most $12 per cycle, and it may use only the lesser of that target and
+  the prepaid allowance actually remaining after the account's other workloads.
+  It must not assume the whole prepaid allowance is available.
+- No pay-as-you-go overage is relied on for normal operation.
+- The rule is stated in these terms, not as a plan name. It never means "$12 plus
+  $19", or "$20 of run charges on top of the subscription".
+
+**3. Account backstop.** The account-level usage limit is a secondary defense
+only. The owner's recommendation is to keep it at or below the prepaid credit
+and never raise it for Hardware Radar. Agents make no billing or account setting
+change without explicit owner authority. The project-level controls are
+mandatory regardless of the account limit, because the limit is shared and the
+platform documents enforcement deviation of up to about 10%.
+
+**4. Budget period.** The authoritative period is the account's actual Apify
+billing cycle, discovered from the API (for example `monthlyUsageCycle` in the
+account limits), never a hard-coded calendar month. Hardware Radar stores the
+cycle start and end, its allocation for the cycle, consumed finalized usage,
+outstanding reservations, remaining project budget, and the remaining account
+prepaid allowance where observable. A rolling window may remain only as a
+secondary trend or safety metric. Charges count toward every cycle their
+billing time can touch, and admission is conservative for a run whose worst-case
+cost could straddle a cycle boundary.
+
+**5. Three clocks.** Observation (event) time, processing (import) time, and
+billing (finalization) time are distinct and never derived from one another.
+Listing lifecycle, continuity, delist/relist, and content retention follow
+observation time; import progress and the remote-storage deadline follow
+processing time; usage finalization, reconciliation, and cycle attribution
+follow billing time.
+
+**6. Reservation and reconciliation.** Paid work follows `eligibility →
+estimate maximum cost → reserve → start run → poll completion → import bounded
+output → obtain finalized usage → account post-run retrieval, transfer, and
+storage cost → reconcile → release the unused reservation`. Reservations are
+concurrency-safe and never oversubscribe; a lower actual returns capacity; a
+higher actual enters an overrun state that pauses further paid work and never
+triggers another paid call to repair itself. Budget errors are visible
+operational state. The first cost figure at completion is provisional until
+finalized, and post-run consumption is accounted conservatively until measured:
+the budget is not reconciled merely because the Actor process stopped.
+`maxTotalChargeUsd` and the `maxItems` run option apply only to pay-per-event
+and pay-per-result Actors and are not relied on for Hardware Radar's own
+Actors; cost is bounded structurally (timeout, memory, request, page, item, and
+byte limits, concurrency, no proxy, and admission).
+
+**7. Proxies and escalation (sharpens *Cost contract*, last bullets).** No
+residential proxy, no automatic proxy rotation, no CAPTCHA solving, no paid
+unblocker, and no paid third-party Actor, ever, including as a fallback. A
+source that needs any of them fails admission unless the owner revisits it.
+
+**8. Actor proof (clarifies *Confirmation* 1–3).** The first Actor proof uses a
+controlled synthetic source through a real private Apify Actor, so it proves
+compute, lifecycle, dataset retrieval, delayed completion, cost accounting, and
+API behavior without a merchant legal decision. A production Actor-backed
+merchant source is a separate source-admission decision per candidate
+(`docs/research/source-admission/`); it stays open as
+[OQ24](../open-questions.md#oq24--production-actor-backed-merchant-source-admission).
+Existing local connectors are not grandfathered into an Actor path.
+
+**9. Operations.** Deployment is an explicit, reviewed operator or agent action
+(the Apify CLI or REST API; the Apify MCP server cannot deploy), never automatic
+from pull-request code. Hardware Radar-side kill switches, not a platform
+toggle, disable execution. Runtime credentials come only from a Hardware
+Radar-scoped OpenBao reference, never the venture's token. The operator
+workflow is MS2-D-43 in the MS-2 plan.
+
+**Verified account state, 2026-09-24** (read-only API; a record of fact, not
+part of the rule): plan Starter, $19 base price, $19 prepaid usage credit,
+account usage limit $19; billing cycle 2026-09-05T00:00:00Z →
+2026-10-04T23:59:59.999Z; current cycle usage about $0.09 from other workloads
+sharing the account; 31-day data retention; residential proxy available on the
+account (so policy, not the account, prevents its use).

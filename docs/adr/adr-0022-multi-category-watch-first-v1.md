@@ -161,3 +161,19 @@ This decision is confirmed when:
 - **Amends scope assumption in** [ADR 0010](adr-0010-canonical-data-model.md): v1 is no longer drives-only; the generic-spine decision remains unchanged.
 - **Narrows launch-critical scope of** [ADR 0011](adr-0011-composite-deal-score.md): it remains the accepted drive-score design, but no longer gates the multi-category first release.
 - [ADR 0021](adr-0021-hybrid-acquisition-apify.md) supplies the acquisition-provider strategy and cost ceiling for the broader source/category plan.
+
+## Amendment — 2026-09-24: Actor proof and Actor-backed pilot sources (owner clarification)
+
+Owner decisions of 2026-09-24 (session 2); the decision above is unchanged.
+
+- The first proof of the hybrid acquisition model's Actor path uses a controlled
+  synthetic source through a real private Apify Actor built in this repository
+  ([ADR 0021 amendment](adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-24-actor-ownership-billing-cycle-budget-and-actor-proof-owner-clarification)).
+  That synthetic source is a test instrument, not one of the "roughly 3–5
+  high-value sources" of *Source breadth*.
+- An Actor-backed production merchant source joins the pilot set only after a
+  per-source admission decision (`docs/research/source-admission/`;
+  [OQ24](../open-questions.md#oq24--production-actor-backed-merchant-source-admission)).
+  Existing local connectors are not grandfathered into an Actor path.
+- Whether MS-2 may exit on the synthetic proof while the Actor-backed pilot source
+  waits on OQ24 is an open owner decision, recorded as risk R31 in the MS-2 plan.
