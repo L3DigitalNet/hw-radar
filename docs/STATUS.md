@@ -17,13 +17,11 @@
   scoring-substrate plan reached revision 4 (`05f130f`) across three Codex `delegate` passes
   (`a626c2f0`/`8755be2a`/`b92dd220`); design and plan are the accepted advanced drive-scoring
   artifacts, but **execution is deferred by ADR 0022** and MS-2a is not the next implementation step.
-- Master-spec hygiene pass landed (`c3af4d7`); scrapy/anyio dependency-audit CVEs cleared
-  (`8cc3f10`, `81876da`).
 - MS-1e's validation-corpus harness/harvest tooling is merged and DEPLOYED (PR #20, `1099f766`,
   2026-08-16): Approach-A evaluator, `EvalReport`, `ms1_ratification_gate`, `harvest_corpus`. The
   live harvest/label-draft/audit/ratification/ADR-0019 flip remain the deferred owner-in-the-loop
   step; `tests/db/test_ratification_corpus.py` skips until it lands.
-- The full Python verification gate passes on `dev`; DB-backed tests require TimescaleDB.
+- Full Python gate passes on `dev` (DB tests need TimescaleDB); spec hygiene `c3af4d7`; audit CVEs cleared `8cc3f10`/`81876da`.
 - **MS-2 multi-category watch-core plan converged at revision 8**
   (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`). Eight-round Codex
   delegate review lineage: r1-r4 converged rev 4 (session 1); r5 `0469e098` REVISION NEEDED (5) ->
@@ -48,7 +46,7 @@
 - Battery @62e670b green: 1226 passed/1 expected skip, 96% coverage, pip-audit clean; Actor
   project 64 passed, 99% coverage. Migrations empty->head and head->0017->head both OK; A0 oracle
   unchanged. Verifiers: Slice B C1-C9, Slice C/D-prep V1-V10 all CONFIRMED. Post-battery hardening
-  leg (classify_run count-mismatch, Actor wall-clock budget) in flight, targeted gates, not above.
+  (complete-report count checks, Actor wall-clock deadline) landed after it; targeted gates green.
 - **Owner gates open (session 2):** OQ25 (Apify credential + MCP tool scope), OQ26 (external-
   liability bound; blocks all live paid admission incl. the synthetic proof), OQ27 (retention
   class for non-first-party reference data), OQ28 (can MS-2 exit on the synthetic proof alone),
