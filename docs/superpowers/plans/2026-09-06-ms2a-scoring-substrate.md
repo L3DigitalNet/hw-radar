@@ -1,5 +1,15 @@
 # MS-2a — Scoring substrate: Implementation Plan
 
+
+> **DEFERRED BY STRATEGY RE-BASELINE (2026-09-24).** This plan is internally reviewed and remains
+> the implementation plan for the accepted HDD/SSD scorer, but it is **not the next executable
+> project plan**. [ADR 0022](../../adr/adr-0022-multi-category-watch-first-v1.md) moves the
+> immediate critical path to the master-spec §19 MS-2 multi-category watch core. Do not apply
+> migrations 0018–0026 or begin these phases until the watch-first re-alignment is implemented
+> and the owner deliberately reactivates drive scoring. Any future execution must first rebase
+> this plan against the then-current schema and migration numbers.
+
+
 > For the executing agent: work top to bottom within a phase; every task is TDD
 > (failing test → implement → green → signed commit). Design source of truth:
 > `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` (**revision 14**,
