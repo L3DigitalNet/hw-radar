@@ -137,11 +137,19 @@ class FakeRemoteProvider:
     expects_json = True
 
     def __init__(
-        self, *, provider_kind: ProviderKind, site_key: str, completeness: RunCompleteness
+        self,
+        *,
+        provider_kind: ProviderKind,
+        site_key: str,
+        completeness: RunCompleteness,
+        scope_complete: bool = True,
+        absence_grace: timedelta = ABSENCE_GRACE,
     ) -> None:
         self.provider_kind = provider_kind
         self.site_key = site_key
         self._completeness = completeness
+        self._scope_complete = scope_complete
+        self._absence_grace = absence_grace
 
     async def fetch(self) -> RawBatch:
         return _batch(self.provider_key)
@@ -153,8 +161,8 @@ class FakeRemoteProvider:
         return DelistScope(
             seen_keys=frozenset(p.source_listing_key for p in parsed),
             observed_at=batch.fetched_at,
-            complete=True,
-            absence_grace=ABSENCE_GRACE,
+            complete=self._scope_complete,
+            absence_grace=self._absence_grace,
         )
 
     def run_evidence(
@@ -280,6 +288,25 @@ def test_complete_remote_run_delists_absent_listing() -> None:
     assert k_old.delisted_at is not None
     assert k_old.delist_reason == DelistReason.ABSENT_FROM_SWEEP
     assert _full_lane().continuous_since is not None
+
+
+def test_complete_remote_evidence_with_incomplete_scope_cannot_stale_delist() -> None:
+    # ADR 0021 gap (ledger 7): a remote provider can report COMPLETE evidence
+    # while its own DelistScope still says complete=False — e.g. a partial
+    # page mislabeled by the provider. A short grace makes `k-old` a stale-
+    # absence candidate immediately, so if the gate let COMPLETE evidence
+    # override an incomplete scope, this run would delist `k-old` on the spot.
+    _seed_stale_k_old(continuous_since=timezone.now() - OLD_CONTINUITY)
+    provider = FakeRemoteProvider(
+        provider_kind=ProviderKind.APIFY,
+        site_key="demo",
+        completeness=RunCompleteness.COMPLETE,
+        scope_complete=False,
+        absence_grace=timedelta(seconds=1),
+    )
+    run, _ = asyncio.run(run_collection(provider, NullResolver()))
+    assert run.status == RunStatus.SUCCESS
+    _assert_k_old_survived(run)
 
 
 def test_local_incomplete_scope_keeps_stale_absence_path() -> None:

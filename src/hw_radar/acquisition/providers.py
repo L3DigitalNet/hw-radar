@@ -52,7 +52,13 @@ def gate_delist_scope(
     Invariant (ADR 0021 / D5): only a `complete` run may keep `complete=True`;
     remote runs never reach stale absence. Concretely:
 
-    - complete: the scope, unchanged;
+    - complete: the scope, unchanged — but only when the scope itself claims
+      completeness (`scope.complete`) or the evidence is stale-absence
+      eligible (local-only). COMPLETE evidence paired with `scope.complete=False`
+      from an ineligible (remote) provider is not a legitimate stale-absence
+      claim — a remote provider's own scope already says it did not enumerate
+      everything, so trusting the run's COMPLETE label anyway would let a
+      remote provider reach the stale-absence path by mislabeling itself;
     - truncated: the scope downgraded to `complete=False` (stale-absence path,
       which still needs the adapter's grace and lane continuity) when the
       evidence is stale-absence eligible — which only a local provider can be —
@@ -68,7 +74,9 @@ def gate_delist_scope(
     if scope is None:
         return None
     if evidence.completeness is RunCompleteness.COMPLETE:
-        return scope
+        if scope.complete or evidence.stale_absence_eligible:
+            return scope
+        return None
     if evidence.completeness is RunCompleteness.TRUNCATED and evidence.stale_absence_eligible:
         return replace(scope, complete=False)
     # Fail closed: partial_failure, failed, an ineligible truncation, and any

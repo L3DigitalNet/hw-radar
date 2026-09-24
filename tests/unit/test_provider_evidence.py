@@ -119,11 +119,30 @@ def test_gate_delist_scope(
     scope = _scope(complete=scope_complete)
     gated = gate_delist_scope(scope, _evidence(completeness, eligible=eligible))
     if completeness is RunCompleteness.COMPLETE:
-        assert gated is scope
+        # A complete run may only keep the scope unchanged when the scope
+        # itself claims completeness, or the evidence is stale-absence
+        # eligible (local-only, per test_remote_provider_cannot_be_stale_absence_eligible).
+        # complete=False with an ineligible (i.e. remote) evidence is exactly
+        # the gap this test pins: it must fall through to None, not the
+        # unchanged scope.
+        if scope_complete or eligible:
+            assert gated is scope
+        else:
+            assert gated is None
     elif completeness is RunCompleteness.TRUNCATED and eligible:
         assert gated == replace(scope, complete=False)
     else:
         assert gated is None
+
+
+def test_gate_remote_complete_evidence_with_incomplete_scope_is_none() -> None:
+    # ADR 0021: a remote run must never prove absence except by a complete
+    # enumeration. COMPLETE evidence from a remote provider whose own scope
+    # says complete=False is a provider lying about (or misreporting) its
+    # sweep, not a legitimate stale-absence claim — the gate must fail closed.
+    scope = _scope(complete=False)
+    evidence = _evidence(RunCompleteness.COMPLETE, eligible=False, kind=ProviderKind.APIFY)
+    assert gate_delist_scope(scope, evidence) is None
 
 
 @pytest.mark.parametrize("completeness", list(RunCompleteness))
