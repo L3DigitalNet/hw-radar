@@ -6,7 +6,7 @@ description: 'Run the recurring fetch→…→alert pipeline under APScheduler 3
 doc_type: 'adr'
 status: 'active'
 created: '2026-07-04'
-updated: '2026-07-04'
+updated: '2026-09-24'
 reviewed: null
 owner: ''
 consumer: 'mix'
@@ -80,6 +80,21 @@ Option 2 was rejected: independent timer units make *shared* back-off/circuit-br
 ### Confirmation
 
 Implementation confirmation (MS-1/MS-5): the poller runs as one `Active` systemd service; per-source cadence, jitter, and the adaptive 429/503 cooldown are observable in `scraper_runs`; a source that trips the breaker moves to `paused_pending_fix` without halting the others.
+
+
+## 2026-09-24 Amendment — external execution under one scheduling owner
+
+[ADR 0021](adr-0021-hybrid-acquisition-apify.md) adds self-owned Apify Actors as an optional execution provider. APScheduler remains the **production scheduling/admission owner**.
+
+For an Apify-backed source, the supervised poller may start a bounded Actor run, persist provider run/build identifiers and cost/completeness metadata, and import completed output asynchronously. This does not create a second scheduler.
+
+- Do not configure an independent Apify schedule for a production job already owned by APScheduler.
+- The poller continues to own source eligibility, cadence, back-off/circuit-breaker state, and project-level budget admission.
+- Remote execution must degrade like any other source failure: one Actor/source failing cannot halt the others.
+- Completion delivery may be polled or webhook-assisted, but imports are idempotent and duplicate notifications cannot duplicate observations.
+
+The original "one supervised poller" decision therefore still holds; only the physical location of some fetch/parse work may be remote.
+
 
 ## More Information
 
