@@ -20,18 +20,26 @@ Invariants:
   the same row.
 - Single normalizer: all alias joins ride matching.normalize (ADR-0019 rule 1).
 - Lazy alias learning (rule 7): dual-labeled listings emit listing_derived OEM
-  aliases at MODEL grain max; house SKUs become source-local aliases."""
+  aliases at MODEL grain max; house SKUs become source-local aliases.
+- Category dispatch (MS2-D-02/-03): the latest snapshot's category hint picks
+  the matching.categories rules and the _SPEC_READERS entry; no hint is the
+  legacy drive default. A category without registered rules gets an
+  `unsupported_category` none-edge and never runs drive rules. Every edge the
+  ladder path writes records `category` and `category_source`."""
 
 from __future__ import annotations
 
 import logging
-from dataclasses import replace
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from decimal import Decimal
+from typing import Final, Literal, cast
 
 from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 
+from hw_radar.acquisition.contracts import CATEGORY_HINT_ATTR
 from hw_radar.catalog.models import (
     AliasSourceKind,
     AliasType,
@@ -50,8 +58,7 @@ from hw_radar.catalog.models import (
     RetentionClass,
     WarrantyChannel,
 )
-from hw_radar.matching import MATCHER_VERSION, ladder, mpn, vocab
-from hw_radar.matching.grammars import decode
+from hw_radar.matching import MATCHER_VERSION, categories, ladder
 from hw_radar.matching.normalize import canonicalize_title
 from hw_radar.matching.types import (
     DecodeResult,
@@ -124,17 +131,54 @@ def _family_agreement_attrs(family_id: int | None) -> ladder.HardAttrs:
     )
 
 
-def _structured_mpn(listing: Listing) -> str | None:
+@dataclass(frozen=True)
+class _SpecReader:
+    """The ORM-bound half of a category's rules: catalog spec rows → the
+    ladder's HardAttrs, for a model-grain target and a family agreement set."""
+
+    model_attrs: Callable[[ProductModel | None], ladder.HardAttrs]
+    family_attrs: Callable[[int | None], ladder.HardAttrs]
+
+
+# Keys must equal categories.registered_categories() (pinned by
+# test_resolver_dispatch): a registered category without a reader would crash
+# every resolution in it, and a reader without rules is dead code.
+_SPEC_READERS: Final[dict[str, _SpecReader]] = {
+    categories.DRIVE: _SpecReader(
+        model_attrs=lambda model: _hard_attrs_from_spec(_spec_of(model)),
+        family_attrs=_family_agreement_attrs,
+    ),
+}
+
+
+def _latest_snapshot_attrs(listing: Listing) -> Mapping[str, object]:
     attrs = (  # pyright: ignore[reportUnknownVariableType] - django-types has no reverse-FK manager stub, propagated from the chained call below
         listing.snapshots.order_by("-observed_at")  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no reverse-FK manager stub
         .values_list("attrs_json", flat=True)
         .first()
     )
     if isinstance(attrs, dict):
-        value = attrs.get("mpn")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType] - attrs_json is dict[str, object], but attrs' own type is Unknown from the line above
-        if isinstance(value, str) and value.strip():
-            return value
+        return cast("dict[str, object]", attrs)  # attrs_json is always a JSON object
+    return {}
+
+
+def _structured_mpn(attrs: Mapping[str, object]) -> str | None:
+    value = attrs.get("mpn")
+    if isinstance(value, str) and value.strip():
+        return value
     return None
+
+
+def _category_hint(attrs: Mapping[str, object]) -> str | None:
+    """The collector-asserted category persisted by persist.append_snapshot.
+
+    Raises ValueError for a present but non-string value: a corrupted hint must
+    surface as an error edge, not quietly dispatch to the legacy drive default."""
+
+    value = attrs.get(CATEGORY_HINT_ATTR)
+    if value is None or isinstance(value, str):
+        return value
+    raise ValueError(f"non-string category hint: {value!r}")
 
 
 def _current_edge(listing: Listing, *, for_update: bool = False) -> ListingResolution | None:
@@ -146,7 +190,7 @@ def _current_edge(listing: Listing, *, for_update: bool = False) -> ListingResol
     return queryset.first()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType] - queryset type is Unknown from the line above
 
 
-def _prior_from_listing(listing: Listing) -> ladder.PriorResolution | None:
+def _prior_from_listing(listing: Listing, spec: _SpecReader) -> ladder.PriorResolution | None:
     """Rung-0 prior = the listing's DENORM fields — the last *accepted* state.
 
     Deliberately not the current edge: after a review/none/error edge the denorm
@@ -164,20 +208,20 @@ def _prior_from_listing(listing: Listing) -> ladder.PriorResolution | None:
             model_id=model.pk,
             variant_id=listing.product_variant_id,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
         )
-        hard = _hard_attrs_from_spec(_spec_of(model))
+        hard = spec.model_attrs(model)
     elif listing.product_model_id is not None:  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
         target = ladder.TargetRef(
             grain=Grain.MODEL,
             family_id=listing.product_model.product_family_id,  # pyright: ignore[reportOptionalMemberAccess, reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - narrowed non-None by product_model_id above; product_family_id has no stub
             model_id=listing.product_model_id,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
         )
-        hard = _hard_attrs_from_spec(_spec_of(listing.product_model))
+        hard = spec.model_attrs(listing.product_model)
     elif listing.product_family_id is not None:  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
         target = ladder.TargetRef(
             grain=Grain.FAMILY,
             family_id=listing.product_family_id,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
         )
-        hard = _family_agreement_attrs(
+        hard = spec.family_attrs(
             listing.product_family_id  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
         )
     else:
@@ -201,7 +245,9 @@ _COMPATIBLE_ALIAS_TYPES: dict[TokenKind, frozenset[str]] = {
 }
 
 
-def _alias_hits(candidates: list[MpnCandidate], source_site_id: int) -> list[ladder.AliasHit]:
+def _alias_hits(
+    candidates: list[MpnCandidate], source_site_id: int, spec: _SpecReader
+) -> list[ladder.AliasHit]:
     by_key = {c.normalized: c for c in candidates if c.kind in _ALIAS_KINDS}
     if not by_key:
         return []
@@ -230,7 +276,7 @@ def _alias_hits(candidates: list[MpnCandidate], source_site_id: int) -> list[lad
                 variant_id=row.product_variant.pk,
             )
             brand: str | None = model.manufacturer.normalized_name
-            hard = _hard_attrs_from_spec(_spec_of(model))
+            hard = spec.model_attrs(model)
         elif row.product_model is not None:
             target = ladder.TargetRef(
                 grain=Grain.MODEL,
@@ -238,7 +284,7 @@ def _alias_hits(candidates: list[MpnCandidate], source_site_id: int) -> list[lad
                 model_id=row.product_model.pk,
             )
             brand = row.product_model.manufacturer.normalized_name
-            hard = _hard_attrs_from_spec(_spec_of(row.product_model))
+            hard = spec.model_attrs(row.product_model)
         else:
             target = ladder.TargetRef(
                 grain=Grain.FAMILY,
@@ -249,7 +295,7 @@ def _alias_hits(candidates: list[MpnCandidate], source_site_id: int) -> list[lad
                 if row.product_family is not None
                 else None
             )
-            hard = _family_agreement_attrs(
+            hard = spec.family_attrs(
                 row.product_family_id  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
             )
         hits.append(
@@ -267,7 +313,9 @@ def _alias_hits(candidates: list[MpnCandidate], source_site_id: int) -> list[lad
     return hits
 
 
-def _first_decode(candidates: list[MpnCandidate]) -> DecodeResult | None:
+def _first_decode(
+    candidates: list[MpnCandidate], decode: Callable[[str], DecodeResult | None]
+) -> DecodeResult | None:
     for candidate in candidates:
         if candidate.kind is TokenKind.OEM_PN:
             continue
@@ -281,17 +329,41 @@ def _run_ladder(
     listing: Listing, *, reconsider: bool = False
 ) -> tuple[str, ExtractedAttributes, list[MpnCandidate], ladder.Verdict]:
     canonical = canonicalize_title(f"{listing.title_raw} {listing.condition_label_raw}".strip())
-    extracted = vocab.extract(canonical)
-    candidates = mpn.extract_candidates(
+    attrs = _latest_snapshot_attrs(listing)
+    hint = _category_hint(attrs)
+    slug = categories.dispatch_category(hint)
+    provenance: dict[str, object] = {
+        "category": slug,
+        "category_source": _category_source(hint),
+    }
+    rules = categories.rules_for(slug)
+    if rules is None:
+        # No rules for this category: record it and stop. Falling through to the
+        # drive rules would let a GPU or RAM title alias-hit a drive model and
+        # write drive price history. The prior is deliberately not consulted,
+        # so an earlier drive accept is cleared rather than inherited.
+        return (
+            canonical,
+            ExtractedAttributes(),
+            [],
+            ladder.Verdict(
+                ladder.Outcome.NONE,
+                Grain.NONE,
+                evidence={**provenance, "unsupported_category": True},
+            ),
+        )
+    spec = _SPEC_READERS[slug]
+    extracted = rules.extract(canonical)
+    candidates = rules.extract_candidates(
         canonical,
-        structured_mpn=_structured_mpn(listing),
+        structured_mpn=_structured_mpn(attrs),
         source_key=listing.source_site.normalized_name,
     )
     # reconsider (C.3.4 catalog-refresh re-run): prior=None bypasses rung 0 so
     # rungs 1-2 get a shot at freshly seeded aliases — otherwise a family-grain
     # listing re-accepts its prior forever and the catalog seed can never
     # upgrade it. The veto still runs; unchanged outcomes write no edge.
-    prior = None if reconsider else _prior_from_listing(listing)
+    prior = None if reconsider else _prior_from_listing(listing, spec)
     verdict = ladder.decide(
         extracted,
         candidates,
@@ -299,12 +371,24 @@ def _run_ladder(
         _alias_hits(
             candidates,
             listing.source_site_id,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
+            spec,
         ),
-        _first_decode(candidates),
+        _first_decode(candidates, rules.decode),
+        veto=rules.veto,
     )
+    target = verdict.target
+    if target is not None and target.family_key is not None:
+        # The ladder names a provisional family but not its category; stamp the
+        # dispatch category so _materialize creates it where it was matched.
+        verdict = replace(verdict, target=replace(target, category_slug=slug))
+    verdict = replace(verdict, evidence={**verdict.evidence, **provenance})
     if reconsider:
         verdict = replace(verdict, evidence={**verdict.evidence, "reconsider": True})
     return canonical, extracted, candidates, verdict
+
+
+def _category_source(hint: str | None) -> Literal["hint", "legacy_default"]:
+    return "legacy_default" if hint is None else "hint"
 
 
 def _materialize(
@@ -320,6 +404,11 @@ def _materialize(
     model: ProductModel | None = None
     variant: ProductVariant | None = None
     if target.family_key is not None:
+        if target.category_slug is None:
+            # Raising routes to resolve_listing's error-edge fallback. Defaulting
+            # to drive here would re-create the hard-coded drive path dispatch
+            # replaced, silently filing another category's family under drive.
+            raise ValueError(f"provisional family {target.family_key!r} has no category")
         vendor, family_name = target.family_key
         manufacturer, _ = Manufacturer.objects.get_or_create(
             normalized_name=vendor,
@@ -329,7 +418,7 @@ def _materialize(
             manufacturer=manufacturer,
             normalized_name=canonicalize_title(family_name),
             defaults={
-                "category": Category.objects.get(slug="drive"),
+                "category": Category.objects.get(slug=target.category_slug),
                 "name": family_name.title(),
             },
         )

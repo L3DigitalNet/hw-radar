@@ -63,13 +63,16 @@ class TargetRef:
     """Ladder-side identity reference. family_id is populated even for
     model/variant grains (enables the OEM family collapse); family_key names a
     not-yet-materialized provisional family for rung 2 — the resolver
-    get_or_creates it (vendor, family_name)."""
+    get_or_creates it (vendor, family_name). category_slug is never set by the
+    ladder: the resolver stamps the dispatch category onto family_key targets so
+    a provisional family is created under the category it was matched in."""
 
     grain: Grain
     family_id: int | None = None
     model_id: int | None = None
     variant_id: int | None = None
     family_key: tuple[str, str] | None = None
+    category_slug: str | None = None
 
 
 @dataclass(frozen=True)
