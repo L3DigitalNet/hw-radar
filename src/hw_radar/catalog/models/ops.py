@@ -115,6 +115,24 @@ class RunCompleteness(models.TextChoices):
     FAILED = "failed", "Failed"
 
 
+class TruncationReason(models.TextChoices):
+    """Which cap cut a TRUNCATED remote run short (MS2-D-11, revision 5).
+
+    It qualifies RunCompleteness.TRUNCATED only and never adds a completeness
+    state: every cause has identical delist semantics, so splitting TRUNCATED
+    into per-cause members would break the ADR-0021 taxonomy and every
+    TRUNCATED branch of the gate for no behavioral gain. RESOURCE_LIMIT is a
+    byte or transfer budget set at admission. Unused by any field for now; the
+    Slice D provider-run table adds the nullable column.
+    """
+
+    ITEM_LIMIT = "item_limit", "Item limit"
+    PAGE_LIMIT = "page_limit", "Page limit"
+    REQUEST_LIMIT = "request_limit", "Request limit"
+    TIME_LIMIT = "time_limit", "Time limit"
+    RESOURCE_LIMIT = "resource_limit", "Resource (byte/transfer) limit"
+
+
 class SourceConfig(TimeStamped):
     source_site = models.OneToOneField(SourceSite, on_delete=models.PROTECT, related_name="config")
     enabled = models.BooleanField(default=False)
