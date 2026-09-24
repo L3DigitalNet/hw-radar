@@ -435,11 +435,13 @@ def test_family_grain_uses_the_agreement_set(seeded: None, site: SourceSite) -> 
     assert family is not None
     listing = _listing(site, "gpu-family", "NVIDIA GeForce RTX", "gpu")
     _accept_family(listing, family)
-    # Seeded GeForce RTX members agree on 24 GB and active cooling but differ
-    # on TDP (350 W vs 450 W).
-    agreed = _watch("gpu", GpuRequirementSpec(min_vram_gb=24, coolings=("active",)))  # pyright: ignore[reportArgumentType] - str coerces to the enum
+    # Seeded GeForce RTX members agree on 24 GB VRAM and chip vendor nvidia,
+    # differ on TDP (350 W vs 450 W), and have no chip-level cooling fact
+    # (cooling is a board-level attribute, seeded null; see e95227b).
+    agreed = _watch("gpu", GpuRequirementSpec(min_vram_gb=24, chip_vendors=("nvidia",)))  # pyright: ignore[reportArgumentType] - str coerces to the enum
     disagreed = _watch("gpu", GpuRequirementSpec(max_tdp_w=500))
-    contradicted = _watch("gpu", GpuRequirementSpec(coolings=("passive",)))  # pyright: ignore[reportArgumentType] - str coerces to the enum
+    contradicted = _watch("gpu", GpuRequirementSpec(chip_vendors=("amd",)))  # pyright: ignore[reportArgumentType] - str coerces to the enum
+    cooling_required = _watch("gpu", GpuRequirementSpec(coolings=("active",)))  # pyright: ignore[reportArgumentType] - str coerces to the enum
 
     evaluate_listing(listing.pk)
 
@@ -448,6 +450,9 @@ def test_family_grain_uses_the_agreement_set(seeded: None, site: SourceSite) -> 
     # agreement-set rule: the listing could be either member.
     assert _verdict(disagreed, listing) is U
     assert _verdict(contradicted, listing) is N
+    # Missing chip-level evidence never passes: the null cooling fact
+    # cannot satisfy any requirement on that field.
+    assert _verdict(cooling_required, listing) is U
 
 
 def test_basic_watch_target_clause(seeded: None, site: SourceSite) -> None:
