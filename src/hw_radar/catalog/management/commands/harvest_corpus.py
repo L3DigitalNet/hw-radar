@@ -68,21 +68,29 @@ def _oem_dual_label(title: str, source_key: str) -> bool:
 
 
 def _staging_entry(source_key: str, listing: ParsedListing) -> dict[str, Any]:
+    # Exactly the ParsedListing fields the eval harness rebuilds from (design §3);
+    # `attrs` is the connector's real dict, copied verbatim so the resolver sees
+    # production-identical input (SA-004).
+    fields: dict[str, Any] = {
+        "source_listing_key": listing.source_listing_key,
+        "url": listing.url,
+        "price": str(listing.price),
+        "currency": listing.currency,
+        "condition_label": listing.condition_label,
+        "attrs": listing.attrs,
+    }
+    # MS2-D-27: written only when the collector asserted a category, so every
+    # unhinted (drive-only MS-1) listing stages byte-identically to before. Its
+    # counterpart is corpus.ListingFields.category_hint, which evaluate._ingest
+    # replays into ParsedListing; omitting a real hint would replay a non-drive
+    # listing through the drive rules.
+    if listing.category_hint is not None:
+        fields["category_hint"] = listing.category_hint
     return {
         "id": f"{source_key}:{listing.source_listing_key}",
         "source": source_key,
         "title": listing.title,
-        # Exactly the ParsedListing fields the eval harness rebuilds from (design §3);
-        # `attrs` is the connector's real dict, copied verbatim so the resolver sees
-        # production-identical input (SA-004).
-        "listing": {
-            "source_listing_key": listing.source_listing_key,
-            "url": listing.url,
-            "price": str(listing.price),
-            "currency": listing.currency,
-            "condition_label": listing.condition_label,
-            "attrs": listing.attrs,
-        },
+        "listing": fields,
         "oem_dual_label": _oem_dual_label(listing.title, source_key),
     }
 
