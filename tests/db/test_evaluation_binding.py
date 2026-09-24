@@ -57,7 +57,13 @@ def site(db: None) -> SourceSite:
     return SourceSite.objects.create(name="Demo Market", normalized_name="demomarket")
 
 
-def _snapshot(listing: Listing, *, price: Decimal, observed_at: datetime) -> None:
+def _snapshot(
+    listing: Listing,
+    *,
+    price: Decimal,
+    observed_at: datetime,
+    shipping: Decimal | None = Decimal(0),
+) -> None:
     persist.append_snapshot(
         listing,
         NormalizedListing(
@@ -65,6 +71,7 @@ def _snapshot(listing: Listing, *, price: Decimal, observed_at: datetime) -> Non
             url=listing.canonical_url,
             title=listing.title_raw,
             price=price,
+            shipping_price=shipping,
             fx_rate=Decimal(1),
             fx_pair="USD/USD",
             fx_rate_date=date(2026, 9, 24),

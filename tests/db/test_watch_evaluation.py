@@ -101,6 +101,9 @@ def _snapshot(
     category: str | None,
     *,
     price: Decimal = Decimal("100.00"),
+    # Explicit free shipping by default: a max-price clause can only `match`
+    # when shipping is stated.
+    shipping: Decimal | None = Decimal(0),
     stock: str = "in_stock",
     observed_at: datetime = _OBSERVED_AT,
 ) -> None:
@@ -111,6 +114,7 @@ def _snapshot(
             url=listing.canonical_url,
             title=listing.title_raw,
             price=price,
+            shipping_price=shipping,
             stock_status=stock,
             fx_rate=Decimal(1),
             fx_pair="USD/USD",
@@ -574,3 +578,35 @@ def test_malformed_category_hint_raises_and_writes_nothing(seeded: None, site: S
     with pytest.raises(ValueError, match="category hint"):
         evaluate_listing(listing.pk)
     assert not WatchEvaluation.objects.exists()
+
+
+@pytest.mark.parametrize(
+    ("price", "shipping", "expected", "reason_code"),
+    [
+        (Decimal("95.00"), None, U, "shipping_unknown"),
+        (Decimal("105.00"), None, N, None),
+        (Decimal("95.00"), Decimal(0), M, None),
+        (Decimal("95.00"), Decimal("10.00"), N, None),
+    ],
+)
+def test_unknown_shipping_never_passes_a_max_price(
+    seeded: None,
+    site: SourceSite,
+    price: Decimal,
+    shipping: Decimal | None,
+    expected: EligibilityVerdict,
+    reason_code: str | None,
+) -> None:
+    number, title, _, _ = _CASES["cpu"]
+    listing = _listing(site, f"cpu-ship-{price}-{shipping}", title, "cpu")
+    OfferSnapshot.objects.filter(listing=listing).delete()
+    _snapshot(listing, "cpu", price=price, shipping=shipping)
+    _accept(listing, _model(number))
+    watch = _watch("cpu", CpuRequirementSpec(max_unit_price_usd=Decimal("100.00")))
+
+    evaluate_listing(listing.pk)
+
+    assert _verdict(watch, listing) is expected
+    observed = _reasons(watch, listing)["offer.max_unit_price_usd"]["observed"]
+    assert observed["shipping_known"] is (shipping is not None)  # pyright: ignore[reportIndexIssue] - observed is a JSON object
+    assert observed.get("reason_code") == reason_code  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType] - observed is a JSON object

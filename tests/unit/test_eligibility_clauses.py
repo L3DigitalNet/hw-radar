@@ -305,7 +305,7 @@ def test_no_target_means_no_target_clause() -> None:
 def _facts(**overrides: object) -> OfferFacts:
     base: dict[str, object] = {
         "snapshot_observed_at": _OBSERVED,
-        "landed_usd": Decimal("100.00"),
+        "price_usd": Decimal("100.00"),
         "shipping_known": True,
         "quantity": None,
         "stock_status": StockStatus.IN_STOCK.value,
@@ -319,17 +319,27 @@ def _facts(**overrides: object) -> OfferFacts:
 @pytest.mark.parametrize(
     ("maximum", "facts", "expected"),
     [
-        (None, _facts(landed_usd=None), M),
+        (None, _facts(price_usd=None), M),
         (Decimal(150), _facts(), M),
         (Decimal(100), _facts(), M),
         (Decimal(50), _facts(), N),
-        (Decimal(150), _facts(landed_usd=None), U),
+        (Decimal(150), _facts(price_usd=None), U),
         # A confident lot of 4 divides: 100 / 4 = 25.
         (Decimal(30), _facts(quantity=_attr(4, 0.95)), M),
         (Decimal(20), _facts(quantity=_attr(4, 0.95)), N),
         # An uncertain quantity is only an upper bound: it can pass, never fail.
         (Decimal(150), _facts(quantity=_attr(4, 0.7)), M),
         (Decimal(30), _facts(quantity=_attr(4, 0.7)), U),
+        # Unknown shipping: the price is a lower bound, so it can fail but
+        # never pass.
+        (Decimal(150), _facts(shipping_known=False), U),
+        (Decimal(50), _facts(shipping_known=False), N),
+        # Uncertain quantity AND unknown shipping: neither bound decides.
+        (Decimal(150), _facts(shipping_known=False, quantity=_attr(4, 0.7)), U),
+        (Decimal(30), _facts(shipping_known=False, quantity=_attr(4, 0.7)), U),
+        # A confident divisor with unknown shipping still cannot pass.
+        (Decimal(30), _facts(shipping_known=False, quantity=_attr(4, 0.95)), U),
+        (Decimal(20), _facts(shipping_known=False, quantity=_attr(4, 0.95)), N),
     ],
 )
 def test_price_clause(
@@ -340,6 +350,9 @@ def test_price_clause(
 
 def test_price_reason_records_unknown_shipping() -> None:
     result = price_clause(Decimal(150), _facts(shipping_known=False), POLICY)
+    assert result.outcome is U
+    assert result.detail.startswith("shipping_unknown")
+    assert result.as_reason()["observed"]["reason_code"] == "shipping_unknown"  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportUnknownMemberType] - observed is a JSON dict here
     assert result.as_reason()["observed"]["shipping_known"] is False  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportUnknownMemberType] - observed is a JSON dict here
     assert result.as_reason()["source"] == {"snapshot_observed_at": _OBSERVED.isoformat()}
 

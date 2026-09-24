@@ -95,7 +95,7 @@ from hw_radar.matching.types import Attribute, ExtractedAttributes
 # stored row whose evaluator_version differs is non-current (MS2-D-20), so a
 # bump makes every old verdict pending until re-evaluated. Forgetting it leaves
 # verdicts computed under the old rules looking current.
-EVALUATOR_VERSION: Final = "ms2c.1"
+EVALUATOR_VERSION: Final = "ms2c.2"
 # Bump when the CatalogInputs shape or its canonical JSON changes, so every
 # stored fingerprint stops matching instead of silently comparing across shapes.
 CATALOG_INPUTS_VERSION: Final = "1"
@@ -316,15 +316,20 @@ def _equals[T](expected: T | None) -> Callable[[T], bool] | None:
 class OfferFacts:
     """Offer-tier inputs, read from the latest snapshot and the listing.
 
-    `landed_usd` is the snapshot's total landed price converted with its FX
-    stamp; None when there is no snapshot or no FX rate (a foreign amount is
-    never read as USD, ADR-0008). It follows the stored `total_landed_price`
-    convention: an unstated shipping or tax amount counts as zero, and
-    `shipping_known` records that so the reason shows it.
+    `price_usd` is item price + shipping IF STATED + tax IF STATED, converted
+    with the snapshot's FX stamp; None when there is no snapshot or no FX rate
+    (a foreign amount is never read as USD, ADR-0008). When shipping is
+    unstated it is therefore a LOWER bound on the landed price, and
+    `shipping_known` says so; price_clause relies on that flag to keep an
+    unknown shipping cost from passing a hard maximum. Unstated tax is
+    excluded by definition: the hard maximum is a pre-tax bound whenever the
+    source states no tax. (The stored `OfferSnapshot.total_landed_price`
+    coalesces both to zero; that convention is unchanged and is not what the
+    hard clause reads.)
     """
 
     snapshot_observed_at: datetime | None
-    landed_usd: Decimal | None
+    price_usd: Decimal | None
     shipping_known: bool
     quantity: Attribute[int] | None
     stock_status: str | None
@@ -335,12 +340,18 @@ class OfferFacts:
 def price_clause(
     max_unit_price_usd: Decimal | None, facts: OfferFacts, policy: CategoryPolicy
 ) -> ClauseResult:
-    """Unit price = landed USD / quantity.
+    """Unit price = `OfferFacts.price_usd` / quantity, compared with the
+    watch maximum (pre-tax when the source states no tax; see OfferFacts).
+
+    Unknown shipping never passes (hard missing evidence is `unknown`): the
+    price without shipping is a lower bound, so exceeding the maximum proves
+    `no_match`, while being within it is only `unknown` (`shipping_unknown`).
+    `match` requires stated shipping, an explicit 0 included.
 
     No quantity statement in the title is read as a single unit (the spec's
     $/TB convention). A quantity stated below the policy confidence is not
-    trusted as a divisor: the landed total is then only an UPPER bound on the
-    unit price, so it can prove `match` (total <= max) but never `no_match`.
+    trusted as a divisor: the undivided total is then only an UPPER bound on
+    the unit price, so exceeding the maximum proves nothing (`unknown`).
     """
     src = {"snapshot_observed_at": facts.snapshot_observed_at}
     if max_unit_price_usd is None:
@@ -353,7 +364,7 @@ def price_clause(
             "no constraint",
             src,
         )
-    if facts.landed_usd is None:
+    if facts.price_usd is None:
         return ClauseResult(
             "offer.max_unit_price_usd",
             EligibilityVerdict.UNKNOWN,
@@ -366,19 +377,26 @@ def price_clause(
     quantity = facts.quantity
     trusted = quantity is not None and quantity.confidence >= policy.listing_min_confidence
     divisor = quantity.value if trusted and quantity is not None and quantity.value > 0 else 1
-    unit = facts.landed_usd / divisor
-    observed = {
-        "landed_usd": facts.landed_usd,
+    uncertain_quantity = quantity is not None and not trusted
+    unit = facts.price_usd / divisor
+    observed: dict[str, object] = {
+        "price_usd": facts.price_usd,
         "quantity": divisor,
-        "quantity_uncertain": quantity is not None and not trusted,
+        "quantity_uncertain": uncertain_quantity,
         "unit_usd": unit,
         "shipping_known": facts.shipping_known,
     }
     if unit <= max_unit_price_usd:
-        outcome, detail = EligibilityVerdict.MATCH, "unit price within the maximum"
-    elif quantity is not None and not trusted:
-        outcome = EligibilityVerdict.UNKNOWN
-        detail = "total exceeds the maximum and the lot quantity is uncertain"
+        if facts.shipping_known:
+            outcome, detail = EligibilityVerdict.MATCH, "unit price within the maximum"
+        else:
+            outcome, code = EligibilityVerdict.UNKNOWN, "shipping_unknown"
+            observed["reason_code"] = code
+            detail = f"{code}: price before shipping is within the maximum"
+    elif uncertain_quantity:
+        outcome, code = EligibilityVerdict.UNKNOWN, "quantity_uncertain"
+        observed["reason_code"] = code
+        detail = f"{code}: total exceeds the maximum but the lot quantity is uncertain"
     else:
         outcome, detail = EligibilityVerdict.NO_MATCH, "unit price exceeds the maximum"
     return ClauseResult(
@@ -1199,17 +1217,20 @@ class WatchEvaluator:
 
 
 def _offer_facts(listing: Listing, snapshot: OfferSnapshot | None, canonical: str) -> OfferFacts:
-    landed: Decimal | None = None
+    price: Decimal | None = None
     shipping_known = False
     if snapshot is not None:
         shipping_known = snapshot.shipping_price is not None
-        total = cast("Decimal | None", snapshot.total_landed_price)
         rate = snapshot.fx_rate
-        if total is not None and rate is not None:
-            landed = (total * rate).quantize(Decimal("0.01"))
+        if rate is not None:
+            # Stated components only (see OfferFacts): read explicitly rather
+            # than from total_landed_price, which silently zeroes unstated ones.
+            stated = [snapshot.shipping_price, snapshot.tax_price]
+            total = snapshot.item_price + sum((c for c in stated if c is not None), Decimal(0))
+            price = (total * rate).quantize(Decimal("0.01"))
     return OfferFacts(
         snapshot_observed_at=None if snapshot is None else snapshot.observed_at,
-        landed_usd=landed,
+        price_usd=price,
         shipping_known=shipping_known,
         # Quantity comes from the one quantity vocabulary the codebase has
         # (matching.vocab); the category rules modules extract none.
