@@ -2,7 +2,7 @@
 
 Covers the three category gates the resolver applies after `ladder.decide` —
 cross-category guard, acceptance policy, auto-accept flag — plus server
-no-variant and the per-category veto on the live path.
+no-variant, the per-category veto on the live path, and the category-change edge.
 
 Auto-accept is OFF for gpu/ram/cpu at merge, so every test that needs to see the
 acceptance policy (not the flag) decide an outcome enables it through a test-only
@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import cast
 
@@ -614,3 +614,25 @@ def test_basic_watch_non_authoritative_alias_is_review(site: SourceSite) -> None
     edge = _resolve(listing)
     assert edge.evidence["outcome"] == "review"
     assert edge.evidence["acceptance_policy"] == {"source_kind": "manual", "grain": "model"}
+
+
+# --- category change -------------------------------------------------------------
+
+
+def test_category_change_writes_new_edge_even_when_outcome_unchanged(site: SourceSite) -> None:
+    listing = _listing(site, "c-1", "Mystery accelerator card 80GB")
+    first = _resolve(listing)
+    assert first.evidence["outcome"] == "none"
+    assert first.evidence["category"] == "drive"
+
+    _snapshot(listing, category_hint="gpu", observed_at=_OBSERVED_AT + timedelta(hours=1))
+    second = _resolve(listing)
+    assert second.pk != first.pk
+    assert second.evidence["outcome"] == "none"
+    assert second.evidence["category"] == "gpu"
+    assert second.evidence["category_source"] == "hint"
+    assert _edge_count(listing) == 2
+
+    # Same category again: the ordinary no-spam rule applies.
+    _resolve(listing)
+    assert _edge_count(listing) == 2

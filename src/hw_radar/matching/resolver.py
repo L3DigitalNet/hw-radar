@@ -25,7 +25,8 @@ Invariants:
   the matching.categories rules and the _SPEC_READERS entry; no hint is the
   legacy drive default. A category without registered rules gets an
   `unsupported_category` none-edge and never runs drive rules. Every edge the
-  ladder path writes records `category` and `category_source`.
+  ladder path writes records `category` and `category_source`, and a change of
+  `category` alone is a decision-input change that writes a new edge.
 - Category gates (MS2-D-05/-21), applied to the ladder's verdict in this order:
   cross-category guard (an accept whose target family belongs to another
   category), the category's AcceptancePolicy, then its auto_accept flag. Each
@@ -780,7 +781,20 @@ def _apply(
         and current is not None
         and current.evidence.get("error") == verdict.evidence.get("error")
     )
-    if unchanged_accept or unchanged_miss or unchanged_error:
+    # A changed dispatch category is a changed decision input even when the
+    # outcome is not: without a new edge, a listing whose drive-era `none` edge
+    # predates its gpu hint would keep reporting category=drive forever. Edges
+    # written before category provenance existed were all drive decisions, so a
+    # missing key reads as the legacy default and drive re-polls stay silent.
+    # Error verdicts carry no category and stay governed by unchanged_error.
+    category_changed = (
+        current is not None
+        and "error" not in current.evidence
+        and "category" in verdict.evidence
+        and current.evidence.get("category", categories.LEGACY_DEFAULT_CATEGORY)
+        != verdict.evidence["category"]
+    )
+    if ((unchanged_accept or unchanged_miss) and not category_changed) or unchanged_error:
         # Routine re-poll with an unchanged outcome: no edge spam
         # (append-only ≠ append-always). Distinct NEW errors DO append (CR-001).
         # But freshness IS recorded (MS-1b carry-forward): a long-lived miss
@@ -798,7 +812,12 @@ def _apply(
         # Non-accept (incl. error) edges never materialize identity rows — this
         # also keeps the CR-001 fallback error-write free of _materialize.
         grain, family, model, variant, on_demand = ResolutionGrain.NONE, None, None, None, False
-    if accepted and current is not None and "error" not in current.evidence:
+    if (
+        accepted
+        and current is not None
+        and "error" not in current.evidence
+        and not category_changed
+    ):
         new_targets = (
             family.pk if grain == ResolutionGrain.FAMILY and family is not None else None,
             model.pk if grain == ResolutionGrain.MODEL and model is not None else None,
