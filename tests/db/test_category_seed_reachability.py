@@ -235,6 +235,25 @@ def test_seed_alias_reaches_review_then_accepts_with_auto_accept(
     assert listing.product_model == expected
 
 
+@pytest.mark.usefixtures("seeded")
+def test_partner_liquid_cooled_variant_not_vetoed_on_chip_cooling(site: SourceSite) -> None:
+    """SeedGpuSpec.cooling is chip-level, not board-level (Founders Edition is
+    one NVIDIA reference design among many partner boards). A partner
+    liquid-cooled RTX 4090 title must still reach the shared 'GeForce RTX
+    4090' alias and land on review, not be vetoed for a cooling mismatch
+    against a board attribute the chip seed no longer asserts."""
+    title = "MSI GeForce RTX 4090 SUPRIM LIQUID X 24GB GDDR6X"
+    expected = _seeded_model("GeForce RTX 4090")
+    assert _candidate_alias_models("gpu", title) == {expected.pk}
+
+    listing = _hinted(site, "reach", title, "gpu")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["auto_accept_disabled"] is True
+    assert edge.evidence.get("veto") is None
+    assert listing.product_model is None
+
+
 # --- no exact token, contradiction, missing identity evidence --------------------
 
 

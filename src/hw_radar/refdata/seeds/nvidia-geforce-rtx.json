@@ -22,7 +22,7 @@
   "models": [
     {
       "model_number": "GeForce RTX 3090",
-      "spec": {"chip_vendor": "nvidia", "vram_gb": 24, "interface": null, "cooling": "active", "tdp_w": 350},
+      "spec": {"chip_vendor": "nvidia", "vram_gb": 24, "interface": null, "cooling": null, "tdp_w": 350},
       "aliases": [
         {"alias_type": "mpn", "text": "GeForce RTX 3090", "is_primary": true}
       ],
@@ -31,7 +31,7 @@
     },
     {
       "model_number": "GeForce RTX 4090",
-      "spec": {"chip_vendor": "nvidia", "vram_gb": 24, "interface": null, "cooling": "active", "tdp_w": 450},
+      "spec": {"chip_vendor": "nvidia", "vram_gb": 24, "interface": null, "cooling": null, "tdp_w": 450},
       "aliases": [
         {"alias_type": "mpn", "text": "GeForce RTX 4090", "is_primary": true}
       ],
