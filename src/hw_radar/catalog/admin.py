@@ -3,9 +3,11 @@ from django.http import HttpRequest
 
 from hw_radar.catalog.models import (
     Category,
+    CpuSpec,
     DriveSpec,
     DriveUnit,
     FxRateDaily,
+    GpuSpec,
     Listing,
     ListingResolution,
     Manufacturer,
@@ -13,6 +15,7 @@ from hw_radar.catalog.models import (
     ProductFamily,
     ProductModel,
     ProductVariant,
+    RamSpec,
     RefdataConfig,
     ReferenceFetchRequest,
     ScraperRun,
@@ -28,6 +31,9 @@ admin.site.register(ProductFamily)
 admin.site.register(ProductModel)
 admin.site.register(ProductVariant)
 admin.site.register(DriveSpec)
+admin.site.register(GpuSpec)
+admin.site.register(RamSpec)
+admin.site.register(CpuSpec)
 admin.site.register(ProductAlias)
 admin.site.register(DriveUnit)
 admin.site.register(SourceSite)
