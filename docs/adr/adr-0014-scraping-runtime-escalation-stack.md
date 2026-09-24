@@ -93,7 +93,7 @@ The ladder may now execute:
 
 Moving a collector to Apify is **not** permission to skip directly to browser automation, residential proxies, CAPTCHA solving, or anti-bot bypass. Browser and proxy use remain explicit, source-specific escalation decisions.
 
-Hardware Radar has a hard **$20/month Apify ceiling** ([ADR 0021](adr-0021-hybrid-acquisition-apify.md)); the initial operating target is $12/month. No collector may automatically escalate to paid residential proxies or a paid third-party Actor after failure. If a source cannot meet its required value/freshness inside the legal/operational guardrails and budget, reduce cadence/scope or skip it.
+Hardware Radar has a hard **$20/month Apify ceiling** ([ADR 0021](adr-0021-hybrid-acquisition-apify.md)); the initial operating target is $12/month. No collector may automatically escalate to paid residential proxies or a paid third-party Actor after failure. If a source cannot meet its required value/freshness inside the legal/operational guardrails and budget, reduce cadence/scope or skip it. See ADR 0021's 2026-09-24 owner amendment for the current billing-cycle-authoritative accounting of this ceiling.
 
 
 ## More Information

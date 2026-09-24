@@ -30,6 +30,8 @@ HDD/SSD + GPU/accelerator + RAM + CPU first-class categories, category-specific
 (cheap direct/local paths retained; self-owned private Apify Actors selectively)
 under a hard $20/month Hardware Radar Apify ceiling. The detailed ADR-0011 drive
 scoring design remains accepted but is deferred from the immediate critical path.
+Hardware Radar's Apify Actors are built and managed in this repository under
+`actors/<name>/`, not in the separate `apify-actors` repository.
 
 ## Read First
 
