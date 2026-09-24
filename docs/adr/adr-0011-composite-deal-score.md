@@ -82,6 +82,18 @@ Options 2 and 3 were rejected: the arithmetic sum is too compensatory for risky 
 
 The mock-data test ([`drive-deal-scoring-model-test-results`](../research/drive-deal-scoring-model-test-results.md)) is the pre-ratification confirmation. Implementation confirmation is milestone **MS-2**: every listing carries a **reproducible** 0–100 score with a **per-factor breakdown**; thin-cohort listings (`n_eff < 30`) visibly shrink toward neutral and are marked **provisional**; the cohort-relaxation fallback fires when a cohort is too small.
 
+
+## 2026-09-24 Scope Amendment — drive scoring, not a universal launch gate
+
+[ADR 0022](adr-0022-multi-category-watch-first-v1.md) narrows this ADR's role without rejecting its math.
+
+- This remains the accepted **drive-specific advanced scoring design** for HDD/SSD listings when the required data and history exist.
+- It is **not** a universal score contract for GPUs, RAM, CPUs, or unrelated categories; scores from different categories must not be presented as directly comparable.
+- The first-release critical path is saved-requirement eligibility (`match | no_match | unknown`), evidence-backed shortlist, and alerting. A listing may qualify for a watch without any ADR-0011 score.
+- The detailed MS-2/MS-2a scoring substrate is deferred from the immediate implementation sequence. Revisit it after the multi-category watch-first path is working and real observations show which category-specific ranking work is valuable.
+- Any future category scorer must define its own comparability cohort, inputs, missing-data semantics, and explanation contract rather than inheriting `$/TB`, drive fitness, or drive vetoes by analogy.
+
+
 ## More Information
 
 - **Fills** the previously-empty spec `## Scoring System`; maps onto milestone **MS-2**.
