@@ -53,7 +53,7 @@ The hardest modeling problem in Hardware Radar is **identity**: recognizing that
 Two forces constrain the choice, and they pull in opposite directions ([General Design Principles](../specs/hw-radar-master-spec.md#1-purpose--background)):
 
 - **Extensibility & Expandability** — the catalog must accommodate more marketplaces, scoring criteria, users, and eventually **other hardware types** (RAM, GPUs) without a schema rewrite.
-- **Engineered to Needs** — do not over-engineer; v1 is drives only.
+- **Engineered to Needs (original 2026-07-03 scope)** — do not over-engineer; the then-current v1 was drives-only. **ADR 0022 supersedes that scope assumption as of 2026-09-24; this ADR's topology decision is unchanged.**
 
 This ADR fixes the **identity spine and the rules for what lives at each grain**. The exhaustive column lists are delegated to the research (they can evolve without a new ADR); the ADR governs the topology.
 
@@ -98,7 +98,7 @@ Supporting: `product_alias` (external identifiers), `drive_spec` (typed satellit
 
 ### Extensibility, satisfied at the right cost
 
-Four of the five extensibility axes are already met by the data-driven spine (marketplaces = `source_site`/`seller` rows; scoring criteria = `scoring_policy`; users = `users`; alerting = app-layer). Only **hardware types** touches the canonical entity, and it is satisfied structurally: `category`/`product_family`/`product_model`/`product_variant` are category-generic, and the only drive-shaped table is `drive_spec`. Adding RAM = a `ram_spec` satellite + a scoring plugin, no spine change. We **generalize what is costly to reverse** (the identity grains) and **build zero speculative RAM/GPU logic** (v1 is drives only) — the precise line _Engineered to Needs_ draws.
+Four of the five extensibility axes are already met by the data-driven spine (marketplaces = `source_site`/`seller` rows; scoring criteria = category-local scorer/decision logic; users = `users`; alerting = app-layer). Only **hardware types** touch the canonical entity, and they are satisfied structurally: `category`/`product_family`/`product_model`/`product_variant` are category-generic, while typed satellites carry category fields. This was deliberately designed so adding RAM/GPU/CPU does not require a spine rewrite. **ADR 0022 now exercises that extension in v1** rather than deferring it.
 
 ### Consequences
 
