@@ -8,7 +8,8 @@ pattern-checked by the contract, so input can never point a fetch elsewhere.
 Caps (MS2-D-26) are enforced here, not trusted to the platform:
 - maxRequests: HTTP requests sent; maxPages: pages attempted;
 - maxItems: rows emitted; maxBytes: response-body bytes received;
-- timeBudgetSecs: wall time from the start of collect(), also each request's timeout.
+- timeBudgetSecs: a total wall-clock deadline from the start of collect(), checked
+  before each request and after every received body chunk (see _fetch_page).
 A limit counts as *hit* only when it stopped work that remained, so a source that
 exactly fits its caps is complete, not truncated. Every limit binding at the
 moment of stopping is reported, never just the first.
@@ -23,6 +24,7 @@ This module does no Apify SDK call and holds no storage handle; the entry point
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -259,7 +261,7 @@ async def collect(
             break
         run.pages_attempted += 1
         page = await _fetch_page(
-            client, run, page_url(actor_input.fixture_commit, path), deadline - clock(), max_bytes
+            client, run, page_url(actor_input.fixture_commit, path), clock, deadline, max_bytes
         )
         index += 1
         if page is None:
@@ -301,33 +303,58 @@ def _stop_for_limits(
 
 
 async def _fetch_page(
-    client: httpx.AsyncClient, run: _Run, url: str, remaining_secs: float, max_bytes: int
+    client: httpx.AsyncClient,
+    run: _Run,
+    url: str,
+    clock: Callable[[], float],
+    deadline: float,
+    max_bytes: int,
 ) -> dict[str, Any] | None:
-    """GET one page within the remaining time and byte budget; None when unusable.
+    """GET one page before the run's deadline and within the byte budget; None when unusable.
 
     Identity encoding is requested, so the counted body bytes are the transfer
     the cap bounds. If a server compresses anyway, the decoded count exceeds the
     transfer, which only makes the cap stricter, never looser.
-    An over-budget body is discarded whole: a partial page could silently drop
-    listings while still looking parseable.
+    An over-budget or past-deadline body is discarded whole: a partial page
+    could silently drop listings while still looking parseable.
     """
     run.requests += 1
     body = bytearray()
+    remaining_secs = max(deadline - clock(), 0.001)
+    # Three layers, because httpx's timeout is per operation (connect, each
+    # read), not per request: a slow-drip server that sends a byte just inside
+    # every read timeout would otherwise hold one request open indefinitely.
+    # - httpx timeout = remaining budget: no single network wait outlives it.
+    # - the deadline check after every chunk, on the injected clock: stops a
+    #   drip deterministically, and is what the tests drive.
+    # - asyncio.timeout(remaining): a real-time ceiling on the whole request,
+    #   covering a stall after partial progress, which the per-chunk check
+    #   cannot see until the next chunk arrives. In production the injected
+    #   clock is time.monotonic, the same source as the event loop's clock.
     try:
-        async with client.stream(
-            "GET", url, headers={"Accept-Encoding": "identity"}, timeout=max(remaining_secs, 0.001)
-        ) as response:
+        async with (
+            asyncio.timeout(remaining_secs),
+            client.stream(
+                "GET", url, headers={"Accept-Encoding": "identity"}, timeout=remaining_secs
+            ) as response,
+        ):
             if response.status_code != 200:
                 run.error("http_status", f"{url} answered HTTP {response.status_code}")
                 return None
             async for chunk in response.aiter_bytes():
                 run.bytes_read += len(chunk)
-                if run.bytes_read > max_bytes:
-                    run.limits.bytes = True
+                over_bytes = run.bytes_read > max_bytes
+                out_of_time = clock() >= deadline
+                if over_bytes or out_of_time:
+                    # Both may bind at once; every binding limit is reported.
+                    run.limits.bytes = run.limits.bytes or over_bytes
+                    run.limits.time = run.limits.time or out_of_time
                     run.stopped = True
                     return None
                 body.extend(chunk)
-    except httpx.TimeoutException:
+    except httpx.TimeoutException, TimeoutError:
+        # httpx.TimeoutException is not a TimeoutError subclass; asyncio.timeout
+        # raises the builtin. Both mean the time budget ran out mid-request.
         run.limits.time = True
         run.stopped = True
         return None
@@ -409,6 +436,9 @@ def _finish(
     run: _Run, actor_input: CollectorInput, faults: _Faults, planned: int
 ) -> CollectionResult:
     limits = run.limits
+    # These declared-count checks have a counterpart in hw-radar's classifier
+    # (hw_radar.acquisition.apify.contract._contradictions), which rejects a
+    # complete=true report that fails them rather than trusting this Actor.
     if not limits.any() and not run.errors:
         if run.pages_fetched < planned or (
             run.pages_declared is not None and run.pages_fetched < run.pages_declared

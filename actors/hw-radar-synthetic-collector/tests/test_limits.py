@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
+import asyncio
+import time
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
 import httpx
@@ -79,6 +81,99 @@ def test_request_timeout_is_the_remaining_time_budget() -> None:
     assert seen[0]["read"] == pytest.approx(30.0)
     assert _limits(result.output) == _only_hit("time")
     assert result.rows == []
+
+
+class _FakeClock:
+    """A monotonic clock the test advances by hand."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_slow_drip_response_cannot_outlast_the_time_budget() -> None:
+    # Each chunk arrives 10 s after the last, always inside any per-read
+    # timeout, so only a total deadline can stop it. Served whole, the page
+    # would finish at t=16 x 10 s = 160 s, far past the 60 s budget.
+    clock = _FakeClock()
+    page = (SOURCE_DIR / "catalog" / "page-1.json").read_bytes()
+    chunks = [page[i : i + 16] for i in range(0, len(page), 16)][:16]
+    assert len(chunks) == 16
+    served: list[float] = []
+
+    async def drip() -> AsyncIterator[bytes]:
+        for chunk in chunks:
+            clock.now += 10.0
+            served.append(clock.now)
+            yield chunk
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=drip())
+
+    result = run_collect(
+        base_input(timeBudgetSecs=60), transport=httpx.MockTransport(handler), clock=clock
+    )
+
+    # The first chunk at or past the deadline ends the request: t=60 is the 6th.
+    assert served[-1] == 60.0
+    assert len(requests) == 1
+    assert result.rows == []
+    assert _limits(result.output) == _only_hit("time")
+    assert result.output is not None
+    assert result.output["errors"] == []
+    assert result.output["completeness"]["truncated"] is True
+
+
+def test_stalled_response_is_cut_off_at_the_remaining_budget_in_real_time() -> None:
+    # The injected clock leaves 0.05 s of budget; the body then stalls, so no
+    # chunk arrives for the per-chunk check to see. MockTransport ignores
+    # httpx timeouts, which isolates the real-time ceiling on the request.
+    ticks: Iterator[float] = iter([0.0, 59.95, 59.95, 59.95])
+
+    async def stall() -> AsyncIterator[bytes]:
+        yield b"{"
+        await asyncio.sleep(5)
+        yield b"}"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=stall())
+
+    started = time.monotonic()
+    result = run_collect(
+        base_input(timeBudgetSecs=60),
+        transport=httpx.MockTransport(handler),
+        clock=lambda: next(ticks),
+    )
+
+    assert time.monotonic() - started < 2.0
+    assert result.rows == []
+    assert _limits(result.output) == _only_hit("time")
+
+
+def test_byte_and_time_limits_binding_on_one_chunk_are_both_reported() -> None:
+    clock = _FakeClock()
+
+    async def late_oversized() -> AsyncIterator[bytes]:
+        clock.now = 61.0
+        yield b"x" * 100
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=late_oversized())
+
+    result = run_collect(
+        base_input(timeBudgetSecs=60, maxBytes=10),
+        transport=httpx.MockTransport(handler),
+        clock=clock,
+    )
+
+    limits = _limits(result.output)
+    assert limits["time"] is True
+    assert limits["bytes"] is True
 
 
 def test_source_that_exactly_fits_every_cap_is_complete() -> None:

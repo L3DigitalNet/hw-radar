@@ -55,8 +55,10 @@ part: `fixtureCommit`, `fixturePaths`, and `faultMode`.
 - **Caps are enforced by the Actor itself.** The platform's `maxItems` run
   option does not apply to a pay-per-usage Actor, so the Actor cannot rely on
   it. A limit counts as *hit* only when it stopped work that remained. Every
-  limit binding at the moment the Actor stops is reported. Each request's
-  timeout is the remaining time budget.
+  limit binding at the moment the Actor stops is reported. The time budget is
+  one wall-clock deadline for the whole run: it is checked before each request
+  and after every received body chunk, and each request is also bounded in
+  real time by the remaining budget, so a slow-drip response cannot outlast it.
 - **Byte counting.** The Actor requests identity encoding and counts
   response-body bytes. If a server compresses anyway, the decoded count is
   larger than the real transfer. That makes the cap stricter, never looser.
