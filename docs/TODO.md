@@ -6,7 +6,14 @@ Purpose:
 
 Instructions for AI agents:
 - Do not add tasks to the `## User tasks` section.
-- Do add tasks to the `## Agent tasks
+- Do add tasks to the `## Agent tasks` section. Include all open work from agent-managed handoff documents.
+- Use `- [ ]` to indicate open work and `- [x]` for work completed during the current session.
+- Remove completed standalone agent tasks after recording their outcomes in `docs/STATUS.md`.
+-->
+
+## User tasks
+
+## Agent tasks
 
 - [ ] Re-baseline the implementation around [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
   and [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md). **Plan cut** (rev 2,
