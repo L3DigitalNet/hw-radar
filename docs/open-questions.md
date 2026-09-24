@@ -25,7 +25,7 @@ day and recorded directly in `resolved-questions.md`. OQ22 (retention class for
 resolver-learned `ProductAlias` rows, raised by the migration-0016 follow-up) was
 owner-resolved 2026-09-06 and relocated to
 [`resolved-questions.md`](resolved-questions.md#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows).
-The next question opened here takes the number **OQ23**.
+The 2026-09-24 strategy re-baseline did **not** open a question: hybrid acquisition/cost is settled by [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md), and multi-category watch-first v1 scope/sequencing is settled by [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md). The next question opened here takes the number **OQ23**.
 
 ## How to maintain this document
 

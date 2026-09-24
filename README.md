@@ -1,11 +1,13 @@
 # Hardware Radar
 
-A search-and-monitoring tool that watches ~20 online marketplaces — manufacturer
-recertified stores, storage-specialist resellers, eBay/Amazon/Newegg, business VARs,
-and refurbished-server sellers — for hard disk drives (HDDs) and solid-state drives
-(SSDs), and scores each listing (0–100) to surface the best deals for a
-homelab/small-business buyer who favors **enterprise/NAS-grade** and **recertified**
-drives. It alerts on availability and price drops.
+A personal/business PC and server hardware search-and-monitoring tool. The first
+release is **multi-category and watch-first**: HDD/SSD, GPUs/compute accelerators,
+RAM, and CPUs are first-class categories, with selected server/PC components
+supported at a basic exact/curated-watch depth. Hardware Radar evaluates saved
+requirements, tracks price/availability/history, surfaces an evidence-backed
+shortlist, and alerts on qualifying opportunities. Category-specific scoring can
+deepen after the core watch workflow is useful; unrelated hardware categories are
+not forced into one universal score.
 
 Personal/business use; single maintainer.
 
@@ -20,9 +22,14 @@ GitHub Actions CD. The Python verification gate (uv · Ruff · BasedPyright
 strict · pytest + coverage · pip-audit) is green locally and in CI. All
 marketplace sources still ship disabled: the MS-1e evaluation harness and
 harvest tooling are merged and deployed, but the owner-in-the-loop
-ratification step is pending before any source goes live. Scoring (MS-2) is
-designed and owner-ratified but not implemented; alerting (MS-4) and the UI
-(MS-3) are not implemented.
+ratification step is pending before any source goes live. The detailed drive-scoring design (former MS-2 next step) is owner-ratified but
+**deferred from the immediate critical path**. The 2026-09-24 strategy re-baseline
+([ADR 0021](docs/adr/adr-0021-hybrid-acquisition-apify.md),
+[ADR 0022](docs/adr/adr-0022-multi-category-watch-first-v1.md)) moves next work to
+multi-category requirement matching plus a complete watch → shortlist → alert
+workflow, using hybrid acquisition: inexpensive direct/local collectors where they
+fit and self-owned private Apify Actors selectively under a hard **$20/month**
+Hardware Radar Apify ceiling.
 
 ## Documentation
 
@@ -51,8 +58,9 @@ The verification gate needs the dev database running.
 
 ## Decided stack
 
-Python · Scrapy (HTTP-first / structured-data-first / browser-last) · PostgreSQL +
-TimescaleDB · Django + server-rendered templates + HTMX · APScheduler in one
-systemd-supervised poller · deployed to a dedicated Debian LXC container · NGINX +
-Let's Encrypt · GitHub Actions CD. See the master spec §8.3 for the ADR-backed
-rationale behind each choice.
+Python · hybrid acquisition (official APIs / local HTTP+Scrapy where inexpensive;
+self-owned private Apify Actors selectively; HTTP-first / structured-data-first /
+browser-last) · PostgreSQL + TimescaleDB · Django + server-rendered templates +
+HTMX · APScheduler as the scheduling/admission owner · dedicated Debian LXC ·
+NGINX + Let's Encrypt · GitHub Actions CD. See the master spec §8.3 and ADRs
+0021–0022 for the current direction.

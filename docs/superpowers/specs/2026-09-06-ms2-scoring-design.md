@@ -1,5 +1,15 @@
 # MS-2 — Scoring: Design
 
+
+> **Strategy re-baseline notice — 2026-09-24:** [ADR 0022](../../adr/adr-0022-multi-category-watch-first-v1.md)
+> preserves this document as the accepted **advanced HDD/SSD scoring design**, but it no longer
+> defines the next project milestone. Master-spec §19 now assigns MS-2 to the multi-category
+> watch core (category specs + requirement eligibility + hybrid provider/budget proof). Do not
+> generalize the drive-specific cohort/`$/TB`/fitness machinery into a universal GPU/RAM/CPU
+> score, and do not make this scoring substrate a prerequisite for watch matching or alerting.
+> Reuse this design later as a category-local drive scorer after the watch-first path is working.
+
+
 > Design output (2026-09-06, revision 14 — **owner-ratified 2026-09-06: every one of the 27 §1.2 decisions carries an `accept` disposition, none overridden**). Instantiates master-spec §19 "MS-2 — Domain logic" as five sequenced sub-milestones, each with its own implementation plan and its own `dev→main` PR, the way the [MS-1 ingestion design](2026-07-05-ms1-ingestion-design.md) instantiated §19 "MS-1 — Core workflow". The master spec and ADRs remain the design source of truth; this document records the MS-2 *decomposition* and the scope decisions §1.2 put to the owner, now ratified. It introduces no new architecture except where §1 says so explicitly and identifies it as a decision the owner disposed of — every other mechanism below is fixed by an existing ADR or spec section, cited inline.
 >
 > **Revision 2 (2026-09-06)** answered cross-agent review round 1 (findings SA-001…SA-010) and an independent code-claim verification pass. Material changes: §1 becomes a ratification table with an explicit owner-disposition column; §2.2 defines one scoring population; §2.3 adopts a conservative eBay compliance boundary and a derived-field clearing contract; §3.2.1 fixes the unit-inconsistent veto formula; §3.2.2 folds lot quantity into `$/TB`; §3.2.3 replaces a mathematically false `n_eff` property; §3.3.1–§3.3.3 make cohort bucketing and relaxation deterministic and total and correct a false claim about where N2 attributes are persisted; §3.4.1–§3.4.3 define a complete invalidation model, a canonical-digest write-on-change rule, and an immutable version-dispatch contract.

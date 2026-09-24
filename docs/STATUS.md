@@ -4,6 +4,12 @@
 
 - MS-0 and MS-1a through MS-1d are implemented and merged: Django/TimescaleDB foundation, ingestion substrate, matching, catalog seed, five connectors, and availability heartbeat.
 - All marketplace sources ship disabled; scoring and alerting are not implemented.
+- **Strategy re-baselined 2026-09-24:** [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
+  adopts hybrid acquisition (retain cheap direct/local collectors; use self-owned private Apify
+  Actors selectively; third-party Actors by measured exception) with a hard **$20/month**
+  Hardware Radar Apify ceiling and a $12/month initial operating target. [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md)
+  broadens v1 to HDD/SSD + GPU/accelerator + RAM + CPU first-class categories and makes
+  requirement matching / watches / shortlist / alerting the launch-critical workflow.
 - Bounded-retention expiry enforcement, eBay listing-grain delete-on-delist (CR-004), and the
   per-lane scheduling-state split (ADR-0020) landed on `dev` (`5a7f5b7`, 2026-08-16).
 - Retention/delist follow-up fixes landed on `dev` (`db62b6f`, 2026-08-30): partial `expires_at`
@@ -26,7 +32,8 @@
   resolved/2 partial/1 open/4 new (2 design-owned, folded into design revision 14), addressed in
   plan revision 3; pass 3 (`b92dd220`) 4 resolved/16 of 17 partial/19 new (all plan-owned),
   addressed in plan revision 4 and confirmed by an in-house verifier (no fourth Codex pass).
-  Next step is owner-gated: MS-2a execution (engineer legs per plan phases) once the owner says go.
+  **Execution is now deferred by ADR 0022.** The design remains the accepted advanced
+  drive-scoring design, but MS-2a is no longer the next implementation step or a first-release gate.
 - Master-spec hygiene pass landed (`c3af4d7`, Revision History 0.15): score home = listing_score,
   $/TB computed in the scoring lib rather than an offer_snapshot generated column, lot-quantity
   wording, C.4 cap units 0.35/0.60, and ADR-0011 wording (q = price percentile, 1-q cheapness).
@@ -39,6 +46,9 @@
   the deferred owner-in-the-loop step (design §6); `tests/db/test_ratification_corpus.py` skips
   with "corpus not yet harvested" until that step lands.
 - The full Python verification gate passes on `dev`; DB-backed tests require TimescaleDB.
+- **Current implementation focus:** align the domain/acquisition boundaries with ADRs 0021–0022,
+  then deliver the smallest complete multi-category watch path: saved requirement → collection →
+  normalization/matching → match/no-match/unknown eligibility → shortlist/evidence → exactly-one alert.
 - Work belongs on `dev`; protected `main` advances through pull requests.
 - Project Standards Catalog 5 is pinned to release 5.29.0 with Agent Handoff 1.17, contract 1.0, and the dual automatic Claude/Codex profile.
 - Upstream project-standards issue #80 (automatic handoff injection under the `uv-strict-python`
