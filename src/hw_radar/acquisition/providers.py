@@ -12,14 +12,36 @@ the pipeline applies to every run, whoever collected it:
 
 Both are pure so their full truth tables are unit-tested
 (tests/unit/test_provider_evidence.py) independently of the pipeline.
+
+LocalCollectionProvider wraps an unchanged SourceAdapter so today's collectors
+enter the pipeline through the same CollectionProvider seam a remote provider will.
+Its evidence mapping is chosen so the gate is the identity on every local path:
+the eBay complete/truncated delist behavior and scope-less sources' continuity
+are exactly what they were before the seam existed.
 """
 
 from __future__ import annotations
 
 from dataclasses import replace
 
-from hw_radar.acquisition.contracts import DelistScope, ProviderRunEvidence
-from hw_radar.catalog.models import RunCompleteness
+from hw_radar.acquisition.contracts import (
+    DelistDetector,
+    DelistScope,
+    ParsedListing,
+    ProviderRunEvidence,
+    RawBatch,
+    SourceAdapter,
+)
+from hw_radar.catalog.models import ProviderKind, RunCompleteness, RunKind
+
+# completeness_reason values a LocalCollectionProvider records. They land in
+# ScraperRun.detail_json["provider"], so changing one changes stored run history.
+REASON_ADAPTER_SWEEP_COMPLETE = "adapter_sweep_complete"
+REASON_ADAPTER_SWEEP_INCOMPLETE = "adapter_sweep_incomplete"
+# The adapter has no DelistDetector, or its delist_scope returned None.
+REASON_COMPLETENESS_NOT_ASSERTED = "completeness_not_asserted"
+# HEARTBEAT/PROBE runs: the delist stage is FULL-only, so no scope is requested.
+REASON_ABSENCE_NOT_EVALUATED = "absence_not_evaluated"
 
 
 def gate_delist_scope(
@@ -66,3 +88,63 @@ def counts_toward_sweep_continuity(evidence: ProviderRunEvidence) -> bool:
     if evidence.completeness is RunCompleteness.COMPLETE:
         return True
     return evidence.completeness is RunCompleteness.TRUNCATED and evidence.stale_absence_eligible
+
+
+class LocalCollectionProvider:
+    """CollectionProvider over an in-process SourceAdapter, delegating unchanged.
+
+    Evidence mapping (MS2-D-11 "local mapping"): an adapter scope with
+    complete=True is COMPLETE; anything else — complete=False, no scope, no
+    DelistDetector, or a non-FULL run — is stale-absence-eligible TRUNCATED. That
+    keeps the local absence heuristics exactly as they were: truncated local
+    sweeps still reach the grace-plus-continuity stale path and still advance
+    lane continuity, which scope-less sources have always done.
+    """
+
+    provider_key = "local"
+
+    def __init__(self, adapter: SourceAdapter) -> None:
+        self.adapter = adapter
+        self.provider_kind = ProviderKind.LOCAL
+        self.site_key = adapter.site_key
+        self.run_kind = adapter.run_kind
+        self.expects_json = adapter.expects_json
+
+    async def fetch(self) -> RawBatch:
+        return await self.adapter.fetch()
+
+    def parse(self, batch: RawBatch) -> list[ParsedListing]:
+        return self.adapter.parse(batch)
+
+    def delist_scope(self, batch: RawBatch, parsed: list[ParsedListing]) -> DelistScope | None:
+        # DelistDetector stays an optional structural capability, as it was when
+        # run_source probed the adapter directly: no adapter changes for the seam.
+        if isinstance(self.adapter, DelistDetector):
+            return self.adapter.delist_scope(batch, parsed)
+        return None
+
+    def run_evidence(
+        self,
+        batch: RawBatch,
+        parsed: list[ParsedListing],
+        scope: DelistScope | None,
+        *,
+        run_kind: RunKind,
+    ) -> ProviderRunEvidence:
+        completeness = RunCompleteness.TRUNCATED
+        if run_kind is not RunKind.FULL:
+            reason = REASON_ABSENCE_NOT_EVALUATED
+        elif scope is None:
+            reason = REASON_COMPLETENESS_NOT_ASSERTED
+        elif scope.complete:
+            completeness = RunCompleteness.COMPLETE
+            reason = REASON_ADAPTER_SWEEP_COMPLETE
+        else:
+            reason = REASON_ADAPTER_SWEEP_INCOMPLETE
+        return ProviderRunEvidence(
+            provider_kind=self.provider_kind,
+            provider_key=self.provider_key,
+            completeness=completeness,
+            completeness_reason=reason,
+            stale_absence_eligible=True,
+        )

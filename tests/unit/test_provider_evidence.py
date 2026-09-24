@@ -7,15 +7,32 @@ so that a later provider (Slice D's Apify Actor) cannot widen it silently.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
 
-from hw_radar.acquisition.contracts import DelistScope, ProviderRunEvidence
-from hw_radar.acquisition.providers import counts_toward_sweep_continuity, gate_delist_scope
-from hw_radar.catalog.models import ProviderKind, RunCompleteness
+from hw_radar.acquisition.contracts import (
+    CollectionProvider,
+    DelistScope,
+    ParsedListing,
+    ProviderRunEvidence,
+    RawBatch,
+    RawItem,
+)
+from hw_radar.acquisition.providers import (
+    REASON_ABSENCE_NOT_EVALUATED,
+    REASON_ADAPTER_SWEEP_COMPLETE,
+    REASON_ADAPTER_SWEEP_INCOMPLETE,
+    REASON_COMPLETENESS_NOT_ASSERTED,
+    LocalCollectionProvider,
+    counts_toward_sweep_continuity,
+    gate_delist_scope,
+)
+from hw_radar.catalog.models import ProviderKind, RunCompleteness, RunKind
 
 OBSERVED_AT = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
 
@@ -123,3 +140,128 @@ def test_continuity_counts_only_complete_or_eligible_truncated(
         completeness is RunCompleteness.TRUNCATED and eligible
     )
     assert counts_toward_sweep_continuity(_evidence(completeness, eligible=eligible)) is expected
+
+
+class _PlainAdapter:
+    """A SourceAdapter with no DelistDetector capability (most sources today)."""
+
+    name = "plain"
+    site_key = "demo"
+    run_kind = RunKind.FULL
+    expects_json = True
+    last_parse_skipped = 0
+
+    def __init__(self) -> None:
+        self.fetched = 0
+        self.parsed_batches: list[RawBatch] = []
+
+    async def fetch(self) -> RawBatch:
+        self.fetched += 1
+        return RawBatch(
+            source=self.name,
+            fetched_at=OBSERVED_AT,
+            items=[RawItem(url="https://demo.invalid/a", payload_json={"sku": "a"})],
+        )
+
+    def parse(self, batch: RawBatch) -> list[ParsedListing]:
+        self.parsed_batches.append(batch)
+        return [
+            ParsedListing(
+                source_listing_key="k-1",
+                url="https://demo.invalid/a",
+                title="Demo 8TB",
+                price=Decimal("99.99"),
+            )
+        ]
+
+
+class _DelistingAdapter(_PlainAdapter):
+    """Implements DelistDetector structurally, with a configurable completeness claim."""
+
+    def __init__(self, *, complete: bool) -> None:
+        super().__init__()
+        self._complete = complete
+
+    def delist_scope(self, batch: RawBatch, parsed: list[ParsedListing]) -> DelistScope | None:
+        return DelistScope(
+            seen_keys=frozenset(p.source_listing_key for p in parsed),
+            observed_at=batch.fetched_at,
+            complete=self._complete,
+            absence_grace=timedelta(hours=6),
+        )
+
+
+def _collect(provider: LocalCollectionProvider) -> tuple[RawBatch, list[ParsedListing]]:
+    batch = asyncio.run(provider.fetch())
+    return batch, provider.parse(batch)
+
+
+def test_local_provider_delegates_fetch_and_parse() -> None:
+    adapter = _PlainAdapter()
+    provider = LocalCollectionProvider(adapter)
+    batch, parsed = _collect(provider)
+    assert adapter.fetched == 1
+    assert adapter.parsed_batches == [batch]
+    assert [p.source_listing_key for p in parsed] == ["k-1"]
+    assert (provider.site_key, provider.run_kind, provider.expects_json) == (
+        "demo",
+        RunKind.FULL,
+        True,
+    )
+    assert (provider.provider_kind, provider.provider_key) == (ProviderKind.LOCAL, "local")
+    assert provider.delist_scope(batch, parsed) is None
+
+
+def test_local_evidence_complete_when_adapter_proves_complete() -> None:
+    provider = LocalCollectionProvider(_DelistingAdapter(complete=True))
+    batch, parsed = _collect(provider)
+    scope = provider.delist_scope(batch, parsed)
+    assert scope is not None
+    assert scope.complete is True
+    evidence = provider.run_evidence(batch, parsed, scope, run_kind=RunKind.FULL)
+    assert evidence.completeness is RunCompleteness.COMPLETE
+    assert evidence.completeness_reason == REASON_ADAPTER_SWEEP_COMPLETE
+    assert evidence.provider_kind is ProviderKind.LOCAL
+    assert gate_delist_scope(scope, evidence) is scope
+
+
+def test_local_evidence_truncated_eligible_when_adapter_sweep_incomplete() -> None:
+    provider = LocalCollectionProvider(_DelistingAdapter(complete=False))
+    batch, parsed = _collect(provider)
+    scope = provider.delist_scope(batch, parsed)
+    assert scope is not None
+    evidence = provider.run_evidence(batch, parsed, scope, run_kind=RunKind.FULL)
+    assert evidence.completeness is RunCompleteness.TRUNCATED
+    assert evidence.completeness_reason == REASON_ADAPTER_SWEEP_INCOMPLETE
+    assert evidence.stale_absence_eligible is True
+    # The eBay truncated-sweep path is preserved: the gate hands the scope
+    # through untouched (already complete=False) and continuity still counts.
+    assert gate_delist_scope(scope, evidence) == scope
+    assert counts_toward_sweep_continuity(evidence) is True
+
+
+def test_local_evidence_truncated_eligible_when_adapter_has_no_delist_detector() -> None:
+    provider = LocalCollectionProvider(_PlainAdapter())
+    batch, parsed = _collect(provider)
+    evidence = provider.run_evidence(batch, parsed, None, run_kind=RunKind.FULL)
+    assert evidence.completeness is RunCompleteness.TRUNCATED
+    assert evidence.completeness_reason == REASON_COMPLETENESS_NOT_ASSERTED
+    assert evidence.stale_absence_eligible is True
+    # Scope-less sources must keep advancing lane continuity exactly as before.
+    assert counts_toward_sweep_continuity(evidence) is True
+
+
+@pytest.mark.parametrize("run_kind", [RunKind.HEARTBEAT, RunKind.PROBE])
+def test_local_evidence_for_non_full_run_records_absence_not_evaluated(run_kind: RunKind) -> None:
+    provider = LocalCollectionProvider(_DelistingAdapter(complete=True))
+    batch, parsed = _collect(provider)
+    evidence = provider.run_evidence(batch, parsed, None, run_kind=run_kind)
+    assert evidence.completeness is RunCompleteness.TRUNCATED
+    assert evidence.completeness_reason == REASON_ABSENCE_NOT_EVALUATED
+
+
+def test_local_provider_satisfies_protocol() -> None:
+    # The annotated assignment is the real assertion: basedpyright (strict, run
+    # over tests/) rejects it if LocalCollectionProvider drifts from the Protocol.
+    provider: CollectionProvider = LocalCollectionProvider(_PlainAdapter())
+    assert provider.provider_kind is ProviderKind.LOCAL

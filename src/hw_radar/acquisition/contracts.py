@@ -39,7 +39,7 @@ class RawBatch(BaseModel):
     fetched_at: datetime
     items: list[RawItem] = Field(default_factory=list)
     # Raw scrapy.statscollectors.StatsCollector.get_stats() snapshot from
-    # run_spider() (None for non-Scrapy adapters). run_source() filters this
+    # run_spider() (None for non-Scrapy adapters). run_collection() filters this
     # down to a stable subset before it lands in ScraperRun.detail_json.
     scrapy_stats: dict[str, object] | None = None
 
@@ -227,3 +227,41 @@ class ProviderRunEvidence(BaseModel):
         if self.stale_absence_eligible and self.provider_kind is not ProviderKind.LOCAL:
             raise ValueError("only a local provider may be stale-absence eligible")
         return self
+
+
+class CollectionProvider(Protocol):
+    """Who collects one source's data for the pipeline (MS2-D-10, ADR 0021).
+
+    run_collection (acquisition.pipeline) is the only consumer. site_key names the
+    SourceSite whose listings the run touches — source identity — which is
+    independent of provider_kind/provider_key, so switching a source between a
+    local adapter and a remote Actor never forks listing identity or history.
+
+    delist_scope reports what the provider saw; run_evidence reports whether that
+    may be read as absence. The pipeline never acts on the scope directly, only on
+    acquisition.providers.gate_delist_scope(scope, evidence). run_evidence takes
+    the pipeline's effective run kind (which can override the provider's own
+    run_kind, e.g. a PROBE replay) and the scope the pipeline obtained — None for
+    non-FULL runs, where absence is never evaluated.
+    """
+
+    provider_kind: ProviderKind
+    provider_key: str
+    site_key: str
+    run_kind: RunKind
+    expects_json: bool  # drives the anti_bot "JSON endpoint answered text/html" check
+
+    async def fetch(self) -> RawBatch: ...
+
+    def parse(self, batch: RawBatch) -> list[ParsedListing]: ...
+
+    def delist_scope(self, batch: RawBatch, parsed: list[ParsedListing]) -> DelistScope | None: ...
+
+    def run_evidence(
+        self,
+        batch: RawBatch,
+        parsed: list[ParsedListing],
+        scope: DelistScope | None,
+        *,
+        run_kind: RunKind,
+    ) -> ProviderRunEvidence: ...
