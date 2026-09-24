@@ -32,6 +32,15 @@
 > task IDs are added, and no migration is renumbered: the new schema lands in
 > the unmerged migrations `0020`, `0021`, and `0022`. The F-04 residual is a
 > Slice A code correction (A4/A6 text below).
+>
+> **Revision 4 (2026-09-24).** Resolves cross-agent review round 3: the three
+> partially resolved findings (F-08, N-01, N-02) and one new one (M-01). All
+> four concern out-of-order asynchronous imports and accounting horizons in
+> Slices D and E. See the round-3 table in *Review lineage*. Existing decision
+> and task IDs are unchanged. New decisions are MS2-D-34..-37. No new task IDs
+> and no migration renumbering: the new columns land in the unmerged `0021`
+> (Slice D) and `0022` (Slice E). Slice D (core) now has an explicit entry
+> gate (see *Slice D entry gate*). Slices B and C are unaffected.
 
 **Goal:** prove the smallest complete multi-category decision path without an
 ADR-0011 score:
@@ -118,14 +127,22 @@ bounded, idempotent, completeness-honest, and budget-admitted.
 - Do not let one collection scope's sweeps prove continuity for another scope
   (MS2-D-31).
 - Do not let an older observation overwrite newer current listing state,
-  revive a listing after newer absence evidence, or delist a listing that a
-  newer run observed (MS2-D-30).
+  write current content to (or revive) a listing that newer absence evidence
+  retired, create an active listing for a key a newer complete sweep of its
+  scope omitted, or delist a listing that a newer run observed (MS2-D-30,
+  MS2-D-35).
+- Do not copy a snapshot's retention from the current `Listing` on an
+  ordering-guarded path; retention follows the observation's own time
+  (MS2-D-37).
+- Do not let an older run restore continuity that a newer break ended, on any
+  scope, the legacy NULL scope included (MS2-D-36).
 - Do not let a stored eligibility verdict outlive the inputs it evaluated,
   catalog inputs included (MS2-D-20, MS2-D-29), and do not default any remote
   import to `merchant_fact` retention (MS2-D-25).
 - Do not release a spend reservation while charge-producing work remains
-  (MS2-D-32). Do not anchor a retention deadline at a locally observed event
-  (MS2-D-33).
+  (MS2-D-32), and do not age settled spend out of the admission window by its
+  `reserved_at`; it counts until 31 days after its final charge (MS2-D-34).
+  Do not anchor a retention deadline at a locally observed event (MS2-D-33).
   Do not change the eBay delist path or the lane-continuity gate (migration 0015)
   (D5).
 - Do not create listings, fork history, duplicate observations, or reset watch
@@ -477,6 +494,10 @@ envelope gets a category-discriminated spec payload and per-row
     stale-delist on continuity that no run ever proved.
   - Because every ineligible run nulls continuity, the next eligible run always
     restarts it. So the previous-run lookup needs no completeness predicate.
+    That argument assumes runs are recorded in order, which holds in Slice A.
+    From Slice D, asynchronous imports can record out of order, so every break
+    carries its event time and an older run cannot restore continuity a newer
+    break ended (MS2-D-36).
   - *Rejected:* tracking the last eligible sweep in a new lane column. It needs a
     migration in Slice A and duplicates the ScraperRun record.
   - Local runs are always eligible, so local-only behavior is unchanged.
@@ -538,7 +559,7 @@ envelope gets a category-discriminated spec payload and per-row
   3. Provider imports use insert-if-absent on `(listing_id, observed_at)`.
   4. The `ScraperRun` is created once and reused on every retry.
   5. Idempotency is not ordering. A delayed import may still be older than
-     state a newer run already wrote; MS2-D-30 guards that.
+     state a newer run already wrote; MS2-D-30, -35, -36, and -37 guard that.
 - **Retention.** The table holds no merchant content, only ids, counts, and
   status, so it is not retention-bearing (like `ScraperRun`). Raw dataset items
   land in `RawPayload` under the source's registered retention (MS2-D-25).
@@ -791,16 +812,18 @@ Replaces revision 1's "persist and mark `imported` in one transaction".
     `read_cap_exhausted`.
   - Run `classify_run`. A `failed` result goes to *Reject*.
 
-  Otherwise the transaction does: `store_raw`; the ordering-guarded listing
-  upsert and relist (MS2-D-30); insert-if-absent snapshots;
-  `import_listing_ids`; and state `observations_committed`. The transaction
-  re-checks the deadline. A crash rolls the whole stage back; a retry is
-  another counted read.
+  Otherwise the transaction does: `store_raw`; the scope-row lock and the
+  ordering-guarded listing observation, including absence-gated content
+  writes, relist, and creation (MS2-D-30, MS2-D-35); insert-if-absent
+  snapshots with per-observation retention (MS2-D-37); `import_listing_ids`;
+  and state `observations_committed`. The transaction re-checks the deadline.
+  A crash rolls the whole stage back; a retry is another counted read.
 - **Stage 2 (one transaction).** Continuity is recorded or broken for the
-  run's admitted `scope_key` (MS2-D-11, MS2-D-31). The gated scoped delist then
-  runs with the newer-observation guard (MS2-D-12, -14, -30), and the state
-  becomes `absence_applied`. PROBE runs skip absence and continuity (existing
-  rule).
+  run's admitted `scope_key`, in event-time order (MS2-D-11, -31, -36). The
+  gated scoped delist then runs with the newer-observation guard (MS2-D-12,
+  -14, -30). A gated complete FULL scope also raises that scope's
+  complete-sweep watermark (MS2-D-35). The state becomes `absence_applied`.
+  PROBE runs skip absence, continuity, and the watermark (existing rule).
 - **Stage 3.** Resolve each id in `import_listing_ids`, then set `resolved`.
   Resolver errors are counted in `stage_detail` and never block.
 - **Stage 4.** Evaluate each listing whose resolution did not raise (MS2-D-20),
@@ -817,7 +840,9 @@ Replaces revision 1's "persist and mark `imported` in one transaction".
   and the state becomes `rejected`. What else happens depends on `run_kind`
   (revision 3, review F-07 residual):
   - **FULL:** the failure lifecycle outcome is applied, and continuity is
-    broken for the run's admitted `scope_key` (MS2-D-31).
+    broken for the run's admitted `scope_key`, with the run's `startedAt` as
+    the break's event time, or `admitted_at` when no start response was
+    recorded (MS2-D-31, MS2-D-36).
   - **PROBE:** the outcome is `PROBE_FAILURE` (state-neutral, MS2-D-24).
     Continuity is never touched, so a rejected probe cannot shorten or reset a
     lane it did not sweep.
@@ -968,17 +993,16 @@ admission (Slice E; review F-08).** This decision amends MS2-D-17.
 - **Invariant.** `reconciled_actual(window) + Σ unreconciled reservations of any
   age + new reservation ≤ class cap`. "Unreconciled" means `reserved` or
   `usage_observed`, each counted at its full estimate (MS2-D-32).
-- **Window and attribution.**
-  - Spend is attributed at `reserved_at`, fixed for good.
-  - The window is 31 days plus the full charge horizon of a normally settled
-    run, `…_STORAGE_CLEANUP_MAX` (revision 3). Admission already requires the
-    run timeout and the import to fit inside the absolute retention deadline
-    (MS2-D-33), so this horizon covers execution, import reads, and cleanup. A
-    run reserved just before a billing-cycle start whose charges land inside
-    that cycle is therefore still counted. Revision 2 added only the run
-    timeout, which missed post-run reads and storage.
-  - A reservation that is not `reconciled` never ages out, so charges past
-    the horizon (failed cleanup) stay counted.
+- **Window and attribution** (revision 4, MS2-D-34 replaces the revision-3
+  text).
+  - `reserved_at` is fixed for good, but it is provenance only: it records
+    when admission happened and never decides when spend leaves the window.
+  - A `reconciled` reservation counts at its settled amount while its
+    `last_charge_at` (the time of its final charge-producing operation,
+    MS2-D-34) is within the last 31 days. It leaves the window only 31 days
+    after that operation, however late cleanup succeeded.
+  - A reservation that is not `reconciled` never ages out. It is counted at
+    its full estimate regardless of age.
 - **Serialization.** Reserve, reconcile, latch trip, and latch reset each take
   the same `pg_advisory_xact_lock(APIFY_BUDGET_LOCK)`.
 - **Overrun latch.** A new `apify_budget_latch` table in migration 0022 records
@@ -1089,31 +1113,38 @@ migration 0021; review N-01).**
     only ever raised, never lowered. A NULL means "no observation since the
     column existed", so the guards treat it as older than any observation. No
     backfill is needed.
-  - Absence: the existing `Listing.delisted_at`, plus per-scope
-    `last_eligible_sweep_at` for continuity (MS2-D-31).
+  - Absence, per listing: a new nullable `Listing.last_absence_at`, raised by
+    `mark_delisted` to its evidence time and never lowered (MS2-D-35).
+  - Absence, per scope: a complete-sweep watermark `last_complete_sweep_at`
+    (MS2-D-35), plus the continuity watermarks `last_eligible_sweep_at` and
+    `continuity_broken_at` (MS2-D-31, MS2-D-36).
 - **Guards.** Each runs in the persisting transaction under
   `select_for_update` on the listing row, on the local and the import path
-  alike:
+  alike (revision 4 wording; MS2-D-35 gives the absence half):
   - *Current state.* A new `persist.observe_listing(site, normalized,
-    retention_class, *, expires_at, observed_at)` creates an absent listing
-    normally. It replaces the content columns (`canonical_url`, `url_hash`,
-    `title_raw`, `condition_label_raw`, `is_international`,
-    `retention_class`, `expires_at`, `collection_scope`) and raises
-    `last_observed_at` only when `observed_at ≥ last_observed_at` (or the
-    watermark is NULL). An older observation leaves the row untouched, so
-    `last_seen` is not bumped either. `upsert_listing` keeps its signature for
-    existing callers.
-  - *Revival.* Relist only if `delisted_at is None` or
-    `observed_at > delisted_at`. An older observation never revives a listing
-    that newer absence evidence delisted.
+    retention_class, *, expires_at, observed_at)` replaces the content
+    columns (`canonical_url`, `url_hash`, `title_raw`, `condition_label_raw`,
+    `is_international`, `retention_class`, `expires_at`, `collection_scope`),
+    relists, and raises `last_observed_at` only when the observation is
+    *current-eligible*: `observed_at ≥ last_observed_at` (or the watermark is
+    NULL) **and** `observed_at` is not older than any absence watermark that
+    applies to the row (MS2-D-35). Content writes and revival share this one
+    predicate, so no path can restore content that a newer delist retired
+    or extend its `expires_at`. An observation that is not current-eligible
+    leaves the row untouched, so `last_seen` is not bumped either.
+    `upsert_listing` keeps its signature for existing callers.
+  - *Creation.* A key with no row is created active only if the observation
+    is not older than its scope's complete-sweep watermark. Otherwise it is
+    created already delisted (MS2-D-35).
   - *Absence.* `_apply_delist` excludes candidates whose `last_observed_at >
     scope.observed_at`, and re-checks that under the row lock before
     `mark_delisted`. A listing observed or first seen by a newer run is never
     delisted by an older sweep, whether complete or stale.
-  - *History.* Snapshots always append (insert-if-absent on `(listing_id,
-    observed_at)`). "Latest snapshot" is ordered by `observed_at`
-    (`resolver.py:156`), so an older snapshot never replaces the current offer,
-    and the MS2-D-20 binding is unaffected.
+  - *History.* Snapshots append with insert-if-absent on `(listing_id,
+    observed_at)`, carrying the observation's own retention, not the current
+    row's (MS2-D-37). "Latest snapshot" is ordered by `observed_at`
+    (`resolver.py:156`), so an older snapshot never replaces the current
+    offer, and the MS2-D-20 binding is unaffected.
 - **Local path.** A local run's `observed_at` is its own fetch time, so it is
   normally the newest. The guards are then no-ops, and the frozen pipeline and
   delist tests stay green.
@@ -1135,26 +1166,32 @@ review N-02).**
   that scope can then stale-delist on borrowed history.
 - **Decision: per-scope tracking.** Scopes are provider-independent
   (MS2-D-12), so one record serves local and Actor runs of the same scope:
-  - **Legacy NULL scope:** keeps today's mechanism, the lane's
-    `continuous_since` plus the `ScraperRun` previous-run lookup, and today's
-    behavior. One rule is added. A successful FULL run that did not sweep the
-    NULL scope **breaks** the NULL-scope continuity. This keeps the existing
-    invariant that every intervening non-proving run nulls continuity, so the
-    site-level lookup still needs no predicate. Before D every run sweeps the
-    NULL scope, so nothing changes until scoped runs exist.
+  - **Legacy NULL scope:** keeps the lane's `continuous_since` and the
+    `ScraperRun` previous-run lookup for gap detection, so in-order legacy
+    polling behaves exactly as today. Revision 4 (MS2-D-36) makes it ordered:
+    the FULL lane row gains the NULL scope's own `last_eligible_sweep_at` and
+    `continuity_broken_at`, and the record and break rules below apply to it
+    under `select_for_update` on the lane row. One extra rule remains: a
+    successful FULL run that did not sweep the NULL scope **breaks** the
+    NULL-scope continuity, with the run's `observed_at` as the break's event
+    time. That keeps a scoped run from ever serving as the NULL scope's
+    predecessor in the site-level lookup. Before D every run sweeps the NULL
+    scope, so nothing changes until scoped runs exist.
   - **Non-null scopes:** a new table `scope_sweep_continuity` (`source_site`
     FK, `collection_scope` CharField(100) not null, `continuous_since` null,
-    `last_eligible_sweep_at` null, `updated_at`; unique `(source_site,
+    `last_eligible_sweep_at` null, `continuity_broken_at` null,
+    `last_complete_sweep_at` null, `updated_at`; unique `(source_site,
     collection_scope)`). Gap detection reads the row's own
     `last_eligible_sweep_at`, never another scope's runs. The tolerance is
     `max(2 × FULL current_interval_s, MIN_CONTINUITY_TOLERANCE)`, as for the
     lane.
-    - *Record:* this runs under `select_for_update` on the row. An eligible
-      sweep whose `observed_at` is older than `last_eligible_sweep_at` changes
-      nothing (MS2-D-30). Otherwise it restarts `continuous_since` if the
-      value is null or the gap exceeds tolerance, then sets
-      `last_eligible_sweep_at`.
-    - *Break:* sets `continuous_since := None`.
+  - **Record and break, every scope** (MS2-D-36 gives the full rule):
+    - *Record:* under the row lock, an eligible sweep observed at `t` changes
+      nothing if `t ≤ continuity_broken_at` or `t < last_eligible_sweep_at`.
+      Otherwise it restarts `continuous_since` at `t` if the value is null or
+      the gap exceeds tolerance, then sets `last_eligible_sweep_at := t`.
+    - *Break:* sets `continuous_since := None` and raises
+      `continuity_broken_at` to the break's event time.
 - **Which scopes a run swept.**
   - A local run: the `scope_key` of each `DelistScope` it returns (F1's
     multi-scope capability can return several). A scope-less local run swept
@@ -1230,7 +1267,8 @@ and 0022; review F-08 residual).** This decision amends MS2-D-17 and MS2-D-26.
     the post-run liability estimate. The bound then counts as spent, which
     fails closed.
   - The overrun check compares the settled amount with the estimate.
-- **Window.** 31 days + `…_STORAGE_CLEANUP_MAX` (MS2-D-26). A row that is not
+- **Window.** A settled row counts until 31 days after its final
+  charge-producing operation (MS2-D-34, revision 4). A row that is not
   `reconciled` is counted regardless of age.
 - **Live admission stays denied** wherever a component lacks an enforceable
   bound: a missing unit price, unverified transfer direction, an unset storage
@@ -1292,6 +1330,231 @@ MS2-D-25.
 - *Reopen if* D3 verifies a per-run or per-storage expiry that can be set at or
   below the source TTL. Bounded-source Actor paths could then be admitted.
 
+**MS2-D-34 — Settled spend stays in the window until 31 days after its final
+charge (Slice E, migration 0022; review F-08 residual, round 3).** This
+decision amends the *Window* rules of MS2-D-26 and MS2-D-32.
+- **Hazard.** Revision 3 aged a reconciled reservation out at `reserved_at` +
+  31 days + `…_STORAGE_CLEANUP_MAX`, but MS2-D-32 lets cleanup succeed after
+  its deadline (retries up to the delete-attempt cap). Counterexample: a run
+  is reserved on day 0, misses its day-1 cleanup deadline, deletes on day 3,
+  and reconciles. Its settled amount left the window shortly after day 32,
+  while its day-3 delete and storage charges still fall inside billing cycles
+  that run to day 34. That under-counts ADR 0021's hard monthly ceiling.
+- **Horizon.** At reconciliation, under the budget lock, set
+  `ApifySpendReservation.last_charge_at := max(provider_run.final_charge_op_at,
+  provider_run.finished_at)`, ignoring a null `finished_at`.
+  `final_charge_op_at` is stamped after the last read or delete, and
+  reconciliation requires verified deletion (MS2-D-32), so it also ends the
+  run's timed storage. Compute ends at `finished_at`.
+- **Window predicate.** `reconciled_actual(now)` sums `actual_usd` over rows
+  with `status = reconciled` and `last_charge_at ≥ now − 31 days`. A row that
+  is not `reconciled` counts at its full estimate whatever its age
+  (unchanged). `reserved_at` stays provenance: it records admission and feeds
+  the report's admission-month view, but it never decides when spend leaves
+  the window.
+- **Why 31 days suffices.** Any billing cycle or calendar month containing
+  `now` started no earlier than `now − 31 days`. A run has a charge in such a
+  period only if its last charge falls at or after that start. Counting the
+  whole settled amount, not just the in-period share, over-counts, which
+  fails closed.
+- *Rejected (a):* accounting each component at its actual charge time. The
+  confirmed run fields (MS2-D-15) give a usage total and a component
+  breakdown with no charge timestamps, so per-component times would be
+  hw-radar guesses. One horizon needs no such data.
+- *Rejected (b):* a longer fixed window, such as `reserved_at` plus the
+  delete-attempt cap times the backoff. Retry timing has no hard bound during
+  an outage, so any fixed extension can be exceeded.
+- *Reopen if* Apify exposes timestamped per-run charge events.
+
+**MS2-D-35 — Absence watermarks gate current content and key creation
+(Slice D, migration 0021; review N-01 residual, round 3).** This decision
+amends MS2-D-30.
+- **Hazard.** Revision 3 gated revival and staleness against
+  `last_observed_at`, but not current-content writes against newer absence,
+  and it created unseen keys normally. Two timelines broke it:
+  1. A listing observed at t0 is delisted at t2 (and redacted, for a
+     delete-on-delist class). A delayed observation from t1 then arrives.
+     Since t1 > t0, the revision-3 current-state guard restored its content
+     and extended `expires_at`; only the relist was refused. The existing
+     `mark_delisted` (`market.py:330-377`) stamps `delisted_at`, pulls bounded
+     expiry forward, and redacts, but advances no watermark that
+     current-state writes consult.
+  2. A complete sweep of scope S at t2 omits key K, which has no row. A
+     delayed t1 import then creates K as active, despite newer complete
+     evidence that K is absent.
+- **Listing absence watermark.** A new nullable `Listing.last_absence_at`.
+  `mark_delisted` raises it to `when` (never lowers it) in its own
+  transaction. `mark_relisted` does not clear it. No backfill: guards read
+  the *effective absence* `greatest(last_absence_at, delisted_at)`, ignoring
+  NULLs, so rows delisted before `0021` are covered by `delisted_at`.
+  - *Why a new column:* `delisted_at` alone is cleared by `mark_relisted`, so
+    the guard would depend on every present and future relist path also
+    raising `last_observed_at`.
+- **Scope complete-sweep watermark.** `last_complete_sweep_at` per scope:
+  for the NULL scope on the FULL `SourceLaneState` row, for non-null scopes on
+  `scope_sweep_continuity` (MS2-D-31). It is raised to `scope.observed_at`,
+  never lowered, by the delist stage of a FULL run whose gated scope is
+  complete, in the same transaction as its `ABSENT_FROM_SWEEP` marks. That
+  includes a complete-empty scope and a complete sweep that delisted nothing,
+  on the local and the import path. Probes, incomplete scopes, stale-absence
+  sweeps, and rejected runs never raise it.
+- **Current-eligible predicate.** An observation at `t` targeting scope S (the
+  `collection_scope` it writes; `None` is the NULL scope) is
+  *current-eligible* iff all three hold, each with NULL meaning "no bound":
+  - `t ≥ last_observed_at`;
+  - `t ≥ effective absence`;
+  - `t ≥ last_complete_sweep_at(S)`.
+
+  Ties go to presence, as today. A run persists its observations before its
+  own delist stage raises either watermark, and fixture adapters that reuse
+  one `fetched_at` across runs (for example `tests/db/test_poller_jobs.py:44`)
+  must keep relisting on reappearance. Distinct remote runs never tie in
+  practice, because `startedAt` differs.
+
+  Only a current-eligible observation writes content, relists, raises
+  `last_observed_at`, or creates an active row (MS2-D-30 *Current state*).
+  The third condition matters only for keys without a row and for rows that
+  were already delisted before S's newest complete sweep. Any active row that
+  sweep saw already has `last_observed_at ≥` that sweep.
+- **Not current-eligible:**
+  - *Existing row:* untouched, including content, `expires_at`, the relist,
+    `last_observed_at`, and `last_seen`. The snapshot follows MS2-D-37.
+  - *No row:* the row is created as a delisted history anchor. In one
+    transaction, the listing is inserted from the observation, with
+    `last_observed_at := t`, and then
+    `mark_delisted(ABSENT_FROM_SWEEP, when=last_complete_sweep_at(S))` runs.
+    That applies the existing retention semantics: bounded expiry is pulled
+    forward, delete-on-delist content is redacted before commit, and
+    `last_absence_at` is raised. The snapshot follows MS2-D-37, so it is
+    kept for merchant-fact classes and not written for bounded ones. The key
+    now has an identity, so a later current-eligible observation relists the
+    same pk (DR-003, D6).
+- **Serialization.** The transaction that writes listings (import stage 1 or
+  the local persist step) first takes `select_for_update` on each touched
+  scope's watermark row: the FULL lane row for the NULL scope, and the
+  `scope_sweep_continuity` row for a non-null scope, inserted if absent. The
+  delist stage takes the same lock before it raises the watermark and marks
+  listings. Either the creation sees the newer watermark, or the newer sweep
+  sees the created row as a candidate (`last_observed_at = t1 < t2`) and
+  delists it. Locks are taken in a fixed order: scope rows sorted by key,
+  NULL first, then listing rows.
+- **Why "no row" proves absence.** Listings are never row-deleted (the
+  retention anchor, `market.py:341`), and a sweep's own stage 1 creates
+  every key it saw before its stage 2 raises the watermark. So a key with no
+  row was not seen by any sweep that raised S's watermark.
+- *Rejected (a):* skipping creation entirely. That drops merchant-fact
+  history, which MS2-D-30's rejected alternative (a) already protects.
+- *Rejected (b):* creating the row active and letting the next complete
+  sweep delist it. That publishes stale availability until then, and for a
+  delete-on-delist class it holds retired content.
+- *Rejected (c):* a per-scope set of absent keys. Its storage is unbounded,
+  and the watermark plus the no-row argument is sufficient.
+- *Residual:* stale-absence sweeps do not raise the scope watermark, and
+  `last_seen` is stamped at persistence time. See risk R23.
+
+**MS2-D-36 — Ordered continuity with timestamped breaks for every scope,
+the NULL scope included (Slice D, migration 0021; review N-02 residual,
+round 3).** This decision amends MS2-D-11 and MS2-D-31.
+- **Hazard.** Revision 3's NULL-scope break was reversible out of order. A
+  newer GPU-only FULL run breaks NULL continuity. An older NULL-scope run,
+  whose stage 2 was delayed, then calls the unchanged recorder
+  (`pipeline.py:98-141`), finds `continuous_since` null, and sets it to its
+  old observation time. A later local incomplete NULL sweep finds the recent
+  GPU run through the site-wide SUCCESS lookup, keeps that old start, and can
+  stale-delist on cross-scope history.
+- **Watermarks per scope.** Each scope has `last_eligible_sweep_at` and
+  `continuity_broken_at`. For the NULL scope these are two new nullable
+  columns on `SourceLaneState`, written only on the FULL lane row. For
+  non-null scopes they are columns of `scope_sweep_continuity`.
+- **Record** (an eligible sweep of S observed at `t`, under
+  `select_for_update` on S's row):
+  1. If `continuity_broken_at` is set and `t ≤ continuity_broken_at`, change
+     nothing and return `None`, so the run's own stale absence does not fire.
+     A tie goes to the break, which fails closed. Legacy local runs never
+     break, so the tie rule cannot touch them.
+  2. If `last_eligible_sweep_at` is set and `t < last_eligible_sweep_at`,
+     change nothing and return `None`.
+  3. Otherwise find the predecessor. For the NULL scope it is today's
+     `ScraperRun` lookup, unchanged. For a non-null scope it is
+     `last_eligible_sweep_at`. Restart `continuous_since := t` if it is null,
+     there is no predecessor, or the gap exceeds tolerance. Set
+     `last_eligible_sweep_at := t` and return `continuous_since`.
+- **Break** (event time `e`): `continuous_since := None` and
+  `continuity_broken_at := greatest(continuity_broken_at, e)`. A break
+  always applies, even when `e` is older than the current continuity start.
+  A late break costs one grace of stale absence, never a false delist.
+  Event times:
+  - an ineligible successful FULL run: its `observed_at`;
+  - the NULL-scope break for a successful FULL run that did not sweep the
+    NULL scope: its `observed_at`;
+  - a rejected FULL remote import: its `startedAt`, or `admitted_at` when no
+    start response was recorded.
+- **Why the NULL scope keeps the `ScraperRun` lookup.** A remote run's stage
+  2 (break) precedes its stage 5 (SUCCESS). So by the time a scoped run is
+  visible to the lookup, it has already broken NULL continuity at its own
+  time, and any later restart is newer than it. A run newer than `t` is
+  either an eligible NULL sweep (step 2 fires) or a break (step 1 fires). So
+  a predecessor the lookup returns is never a non-NULL run inside the current
+  chain, and never newer than `t`. For in-order legacy local polling, `t` is
+  monotonic, steps 1 and 2 never fire, and behavior is exactly today's.
+- **Code.** D changes `_record_sweep_continuity` and
+  `_break_sweep_continuity` to take the scope and the event time. Slice A code
+  is not reopened.
+- *Rejected (a):* replacing the NULL scope's `ScraperRun` lookup with the lane
+  watermark as predecessor. The frozen eBay tests simulate pauses by
+  backdating `ScraperRun.started_at` (`test_source_ebay.py:378-381`,
+  `:421`), so `test_ebay_polling_pause_suspends_stale_absence` would stop
+  testing a pause. Deployed data would also lose its first predecessor.
+- *Rejected (b):* moving the NULL scope into `scope_sweep_continuity`, for
+  MS2-D-31's reason (b).
+- *Rejected (c):* ignoring any remote run that finishes after a newer run.
+  Ordering is per scope, and a run older than another scope's run is still
+  valid evidence for its own scope.
+
+**MS2-D-37 — Snapshot retention follows the observation (Slice D task D10;
+review M-01, round 3).** This decision amends MS2-D-30 *History* and changes
+`acquisition/persist.py::append_snapshot`.
+- **Hazard.** `append_snapshot` copies `retention_class` and `expires_at`
+  from the `Listing` (`persist.py:105-106`), and `_persist_all` relies on that
+  (`pipeline.py:285-289`). Once MS2-D-30 leaves a newer listing untouched
+  while appending an older observation, the older snapshot inherits the newer
+  deadline. With a 6 h policy, t1 applied, then t0 < t1 appended, the t0
+  snapshot expires at t1 + 6 h. Its raw payload expires correctly, because
+  `store_raw` takes the fetch-time expiry. `observe_listing` is shared, so the
+  local path is exposed too, and the bounded-source Actor denial (MS2-D-33)
+  does not close the defect.
+- **Contract (Binding).**
+  `append_snapshot(listing, normalized, *, observed_at, raw=None,
+  retention: ObservationRetention | None = None)`.
+  `ObservationRetention(retention_class, expires_at)` is a frozen value type in
+  `persist.py`.
+  - `None` copies from the listing, exactly as today. Existing callers and
+    frozen tests are unchanged.
+  - The ordering-guarded observation path always passes it explicitly: the
+    source policy's class for this observation (the MS2-D-25 registry for
+    imports, `adapter_retention` locally) and that policy's expiry computed
+    from the observation's own `observed_at` (`None` for indefinite classes).
+    For a local run this equals the batch `expires_at`, so local output is
+    unchanged.
+- **Newer-absence restriction.** For a bounded class, when newer absence
+  exists (the effective absence of MS2-D-35, or the scope watermark used to
+  create the row delisted, strictly after `observed_at`), the snapshot's
+  `expires_at := min(own deadline, that absence time)`. This is the same
+  pull-forward `mark_delisted` applies to existing snapshots. If the result
+  is at or before the transaction's `now`, the snapshot is not written,
+  because newer evidence already retired that content. Indefinite
+  (`merchant_fact`) classes keep a NULL expiry and always append as history;
+  `mark_delisted` never expires them either.
+- **Effect.** Each snapshot expires on its own deadline. The purge sweep
+  removes the t0 snapshot at t0 + 6 h while the listing and the t1 snapshot
+  remain.
+- **Ownership.** D10 makes this change, together with `observe_listing`.
+  `store_raw` is unchanged.
+- *Rejected (a):* skipping older snapshots for bounded classes. That drops
+  history MS2-D-30 keeps.
+- *Rejected (b):* recomputing snapshot expiry in the purge sweeper. The DR-001
+  CHECK pair and the sweep index read the stored column.
+
 ## Requirement traceability
 
 MS-2 acceptance bullets are labeled AC-1..AC-8 in master-spec order (:937-944).
@@ -1351,8 +1614,12 @@ Task IDs refer to the slices below.
 | MS-2 Task 6 prerequisite — non-drive corpus replay | spec :932 | B6 | `test_corpus_category_hint.py::test_harvested_non_drive_entry_reaches_category_rules` |
 | FR-014 — catalog correction cannot leave a stale pass (MS2-D-29) | spec :259 | C1, C3, C4 | `test_evaluation_binding.py::test_same_target_catalog_correction_excludes_match_from_shortlist_immediately`, `::test_family_membership_change_makes_family_grain_evaluation_pending` |
 | IR-008 / CR-004 — delayed imports cannot overwrite, revive, or delist (MS2-D-30) | spec :284 | D2, D10 | `test_apify_import_ordering.py::test_reverse_completion_older_import_does_not_overwrite_newer_listing_state`, `::test_delayed_remote_import_after_switch_back_to_local_preserves_newer_content_and_delist_state` |
+| IR-008 / DR-008 — delayed imports cannot restore retired content or create keys a newer complete sweep omitted (MS2-D-35) | spec :284, :290 | D2, D10 | `test_apify_import_ordering.py::test_delayed_observation_after_newer_delist_restores_no_content_and_keeps_expiry`, `::test_delayed_import_of_unknown_key_after_newer_complete_sweep_creates_no_active_listing`, `::test_delayed_observation_cannot_relist_row_delisted_before_newer_complete_sweep`, `::test_stage1_creation_and_newer_complete_sweep_serialize_on_scope_row` |
 | ADR 0021 — stale absence needs the relevant scope's continuity (MS2-D-11, -31) | ADR 0021 :92-108 | A4–A6, D2, D10 | `test_collection_provider.py::test_remote_complete_evidence_incomplete_scope_breaks_continuity_then_local_cannot_stale_delist`; `test_scope_continuity.py::test_scope_a_continuity_does_not_authorize_first_incomplete_scope_b_sweep` |
+| ADR 0021 — an older run cannot restore continuity a newer break ended (MS2-D-36) | ADR 0021 :92-108 | D2, D10 | `test_scope_continuity.py::test_delayed_null_scope_run_after_newer_scoped_run_cannot_restore_continuity`, `::test_eligible_sweep_older_than_break_is_noop` [NULL, non-null]; frozen `test_source_ebay.py` continuity tests green |
+| DR-001 / DR-008 — snapshot retention follows the observation's own time (MS2-D-37) | spec :290 | D10 | `test_persist_observation_retention.py::test_reverse_order_bounded_observation_snapshot_keeps_its_own_deadline`, `::test_older_bounded_observation_after_newer_delist_is_not_snapshotted`, `::test_append_snapshot_default_copies_listing_retention` |
 | AC-7 — reservation bounds cumulative work (MS2-D-32) | spec :943 | D10, E1–E4 | `test_apify_ledger.py::test_repeated_pre_commit_reads_are_capped_and_reserved`, `::test_non_null_usage_before_cleanup_completes_does_not_release_liability`, `::test_delayed_deletion_keeps_storage_liability_outstanding` |
+| AC-7 — settled spend counts until 31 days after its final charge (MS2-D-34) | spec :943 | E1, E3, E4 | `test_apify_ledger.py::test_late_cleanup_settled_spend_counts_until_31_days_after_final_charge`, `::test_reconciled_spend_rolls_off_31_days_after_last_charge` |
 | DR-001/DR-008 — absolute remote retention deadline (MS2-D-33) | spec :290 | D5, D11 | `test_apify_storage_cleanup.py::test_restart_after_source_ttl_rejects_expired_content_before_persistence`, `::test_unobserved_run_past_deadline_is_aborted_and_cleaned` |
 
 ## Slice order and migration assignment
@@ -1363,7 +1630,7 @@ Task IDs refer to the slices below.
 | **B** | GPU/RAM/CPU satellites, category rows, rules, reference seeds, cross-category guard | `0018_category_spec_satellites`, `0019_seed_categories` | A | C's product clauses read the satellites. |
 | **C** | Watch + requirement satellites + evaluator + `watch_evaluation` (with `catalog_fingerprint`) + shortlist read model | `0020_watch_requirements` | B | D's provider-switch test must prove watch state survives (AC-4). |
 | **D-prep** | D1 (contract models, committed schemas, `classify_run`, fixtures) and D3 (httpx client). Pure code with no DB schema and no pipeline wiring. | none | A | Has no dependency on B or C, so it may be developed and merged any time after A. |
-| **D** (core) | D2, D4–D12: `provider_run`, staged import, scoped absence, per-scope continuity (`scope_sweep_continuity`), ordering watermarks (`Listing.last_observed_at`), provider selection, poll selectors, probes, retention, cleanup. Production admission = deny-all | `0021_provider_runs` | C, D-prep | D7 needs `WatchEvaluation` (C), and stage 4 needs the evaluator. Live runs are impossible until E replaces deny-all. D is fail-closed by construction. |
+| **D** (core) | D2, D4–D12: `provider_run`, staged import, scoped absence, per-scope ordered continuity (`scope_sweep_continuity`, NULL-scope lane watermarks), ordering and absence watermarks (`Listing.last_observed_at`, `Listing.last_absence_at`, per-scope `last_complete_sweep_at`), per-observation snapshot retention, provider selection, poll selectors, probes, retention, cleanup. Production admission = deny-all. Starts only after the *Slice D entry gate* | `0021_provider_runs` | C, D-prep, entry gate | D7 needs `WatchEvaluation` (C), and stage 4 needs the evaluator. Live runs are impossible until E replaces deny-all. D is fail-closed by construction. |
 | **E** | Spend ledger, admission, reconcile, `budget_paused`, spend report | `0022_apify_spend_ledger` | D | Reservations attach to `provider_run`. |
 | **F** | Pilot sources (eBay category sweeps, SPD check), measurement, owner-gated Actor proof, end-to-end evidence | none planned | B–E | Integration and measurement last (ADR 0022 "measure before breadth"). |
 
@@ -2078,12 +2345,41 @@ empty frozen-file diff for every other pre-B test file.
 
 ## Slice D — Apify provider (source-agnostic)
 
-**Scope:** MS2-D-12…-16, -18, -22…-25, -28, -30, -31, -33, and the D-side
-counters of -32.
+**Scope:** MS2-D-12…-16, -18, -22…-25, -28, -30, -31, -33, -35…-37, and the
+D-side counters of -32.
 
 **PRs:** D-prep is D1 + D3. D (core) runs in the order D2 → D4 → D10 → D5 →
 D6 → D7 → D8 → D11 → D12 → D9. The staged importer (D10) comes before the jobs
 and the tests that import through it. See *Slice order*.
+
+**Slice D entry gate (revision 4).** Before D (core) implementation starts at
+D2, the D/E asynchronous-ordering design gets a focused design review against
+the then-current code. D-prep (D1, D3) is not gated.
+- **Design under review:** the watermarks (MS2-D-30, -35), per-scope ordered
+  continuity (MS2-D-31, -36), per-observation retention (MS2-D-37), the charge
+  horizon (MS2-D-32, -34), and the absolute retention deadline (MS2-D-33).
+- **Re-verify against code:** the seams these decisions cite still behave as
+  cited. That means `persist.upsert_listing` and `append_snapshot`
+  (`persist.py:52-107`); `_persist_all`'s relist and snapshot calls
+  (`pipeline.py:284-289`); `_record_sweep_continuity`,
+  `_break_sweep_continuity`, and `_apply_delist` (`pipeline.py:98-205`);
+  `Listing.mark_delisted` and `mark_relisted` (`market.py:330-377`, `:482`);
+  `SourceLaneState` (`ops.py:190`); and the frozen continuity tests in
+  `test_source_ebay.py` and `test_collection_provider.py`.
+- **Re-verify externally** (these are already D3 and E2 gates; the review
+  confirms the design does not depend on an unverified answer):
+  - Apify wire fields: `usageTotalUsd`, `buildNumber`, the `usage` component
+    keys, platform `maxItems` semantics, and the response to aborting a run
+    that already finished (MS2-D-15, -33; D3).
+  - Storage expiry: default-storage expiry for the chosen plan, and whether a
+    per-run or per-storage expiry exists (MS2-D-25, -33 *Reopen if*).
+  - Billing completeness: whether run usage covers the importer's reads, the
+    deletes, and timed default storage; whether `GET` run polls bill; and the
+    direction of transfer pricing (MS2-D-32; E2).
+- **Also settle:** the lock order and contention of the MS2-D-35 scope-row
+  locks against the poller's lane-state writes, and risk R23.
+- **Outcome.** Record the review and its disposition in *Review lineage*. A
+  finding that changes a contract revises this plan before D2 starts.
 
 **Files:**
 - new `acquisition/apify/{client,contract,provider,jobs}.py`;
@@ -2093,12 +2389,18 @@ and the tests that import through it. See *Slice order*.
 - migration `0021`;
 - `contracts.py` (`ParsedListing.collection_scope`, `DelistScope.scope_key`);
 - `persist.py` (scope write; insert-if-absent snapshot for provider imports;
-  the ordering-guarded `observe_listing`, MS2-D-30);
-- `catalog/models/market.py` (`Listing.last_observed_at`, MS2-D-30) and
-  `catalog/models/provider.py` (`ScopeSweepContinuity`, MS2-D-31);
-- `pipeline.py` (scope-filtered and newer-observation-guarded `_apply_delist`;
-  per-scope continuity and the NULL-scope break rule; guarded relist; stage
-  functions extracted from `run_collection`; local-only `_median_body_bytes`);
+  the ordering-guarded `observe_listing`, MS2-D-30, -35; and the
+  `ObservationRetention` parameter of `append_snapshot`, MS2-D-37);
+- `catalog/models/market.py` (`Listing.last_observed_at`, MS2-D-30;
+  `Listing.last_absence_at`, raised by `mark_delisted`, MS2-D-35),
+  `catalog/models/ops.py` (the NULL-scope watermarks on `SourceLaneState`,
+  MS2-D-35, -36), and `catalog/models/provider.py` (`ScopeSweepContinuity`,
+  MS2-D-31, -35, -36);
+- `pipeline.py` (scope-filtered and newer-observation-guarded `_apply_delist`
+  that raises the complete-sweep watermark; ordered per-scope continuity with
+  timestamped breaks and the NULL-scope break rule; absence-gated relist and
+  creation; explicit snapshot retention in `_persist_all`; stage functions
+  extracted from `run_collection`; local-only `_median_body_bytes`);
 - new `acquisition/retention_policy.py`;
 - new `acquisition/apify/importer.py` (the stage machine);
 - `poller/service.py` (apify start branch, provider-dispatched recovery probe,
@@ -2126,13 +2428,19 @@ and the tests that import through it. See *Slice order*.
   - Add `ProviderRun` with the MS2-D-13 fields, including the
     MS2-D-22/-23/-25/-32/-33 state columns; `SourceConfig.collection_provider`
     + CHECK; `Listing.collection_scope` + index; `Listing.last_observed_at`
-    (nullable, no backfill, MS2-D-30); and the `scope_sweep_continuity` table
-    (MS2-D-31).
+    (nullable, no backfill, MS2-D-30); `Listing.last_absence_at` (nullable,
+    no backfill, MS2-D-35); the NULL-scope watermarks on `SourceLaneState`,
+    all nullable and written only on the FULL lane row
+    (`last_eligible_sweep_at`, `continuity_broken_at`,
+    `last_complete_sweep_at`; MS2-D-35, -36); and the `scope_sweep_continuity`
+    table with the same three watermarks (MS2-D-31, -35, -36).
   - `_apply_delist` scope filter (None ⇔ NULL).
   - Tests: CHECK, uniqueness of `(provider_kind, external_run_id)` and of the
     idempotency key (null run ids allowed for starting rows),
     `test_scoped_complete_sweep_cannot_delist_other_scopes`, and the
     `(source_site, collection_scope)` uniqueness of `scope_sweep_continuity`.
+    Every revision-4 column is nullable with no backfill, so deployed rows
+    upgrade with the column NULL, which each guard reads as "no bound".
     Frozen eBay delist tests stay green.
 - **D3 — Client.** Add a thin `httpx.AsyncClient` wrapper for the seven calls
   (MS2-D-15), with dataset pagination and the token from `HW_RADAR_APIFY_TOKEN`.
@@ -2240,7 +2548,50 @@ and the tests that import through it. See *Slice order*.
       stays delisted with its `delisted_at` unchanged. The test is
       parametrized over a delete-on-delist class, where Y also stays redacted,
       and a merchant-fact class. Nothing the local sweep observed is delisted.
+      Revision 4 adds one assertion: X's `expires_at` and Y's content columns
+      are also unchanged (MS2-D-35).
     - `test_legacy_listing_without_watermark_accepts_first_observation`.
+    - Revision 4 (MS2-D-35, N-01 residual), in the same file:
+      - `test_delayed_observation_after_newer_delist_restores_no_content_and_keeps_expiry`
+        (timeline 1). Listing X is observed at t0 and delisted at t2 by a
+        complete sweep. An import observed at t1 (t0 < t1 < t2) then
+        completes. X stays delisted with `delisted_at == t2`, its content
+        columns and `expires_at` are unchanged, and `last_observed_at` stays
+        t0. Parametrized over a delete-on-delist class, where X also stays
+        redacted (`is_content_redacted()` holds, as in the existing
+        switch-back test), and a merchant-fact class. Also parametrized over
+        the t2 delist coming from a complete sweep or from stale absence. The
+        stale case raises no scope watermark, so it isolates
+        `last_absence_at`.
+      - `test_delayed_import_of_unknown_key_after_newer_complete_sweep_creates_no_active_listing`
+        (timeline 2). A complete sweep of scope S at t2 omits key K, which has
+        no row. The t1 import then creates K already delisted
+        (`ABSENT_FROM_SWEEP`, `delisted_at == last_absence_at == t2`),
+        never active. Parametrized over S as a non-null scope and as the NULL
+        scope, and over a merchant-fact class (the t1 snapshot is kept as
+        history) and a bounded delete-on-delist class (the row is redacted and
+        no snapshot is written). A later current-eligible observation at t3
+        relists the same pk.
+      - `test_delayed_observation_cannot_relist_row_delisted_before_newer_complete_sweep`:
+        a row delisted at t0.5, a complete sweep of its scope at t2, then an
+        import observed at t1. The row stays delisted.
+      - `test_stage1_creation_and_newer_complete_sweep_serialize_on_scope_row`:
+        two threads interleave the t1 import's stage 1 with the t2 sweep's
+        delist stage under the scope-row lock. In both commit orders, K ends
+        delisted.
+  - Snapshot retention (MS2-D-37, M-01), in the new file
+    `tests/db/test_persist_observation_retention.py`:
+    - `test_reverse_order_bounded_observation_snapshot_keeps_its_own_deadline`.
+      A bounded fixture source has a 6 h class. The t1 observation is applied
+      first, then t0 < t1. The listing keeps t1's state and
+      `expires_at == t1 + 6 h`. The t0 snapshot has `expires_at == t0 + 6 h`.
+      After the clock passes t0 + 6 h, the purge sweep removes the t0
+      snapshot while the listing and the t1 snapshot remain.
+    - `test_older_bounded_observation_after_newer_delist_is_not_snapshotted`:
+      the newer delist time is in the past, so no t1 snapshot row exists.
+    - `test_merchant_fact_older_observation_appends_history_with_null_expiry`.
+    - `test_append_snapshot_default_copies_listing_retention`: the
+      compatibility default is byte-identical to today's behavior.
   - Per-scope continuity (MS2-D-31), in the new file
     `tests/db/test_scope_continuity.py`:
     - `test_scope_a_continuity_does_not_authorize_first_incomplete_scope_b_sweep`,
@@ -2255,6 +2606,21 @@ and the tests that import through it. See *Slice order*.
     - `test_older_eligible_sweep_does_not_move_scope_watermark_back`.
     - `test_legacy_null_scope_only_runs_keep_todays_continuity` (a
       behavior-preservation control).
+    - Revision 4 (MS2-D-36, N-02 residual):
+      - `test_delayed_null_scope_run_after_newer_scoped_run_cannot_restore_continuity`.
+        NULL-scope continuity is established. A GPU-only FULL run at t_g
+        breaks it (`continuity_broken_at == t_g`). A NULL-scope remote run
+        observed at t_n < t_g then reaches stage 2: continuity stays null.
+        Then a local incomplete NULL sweep runs, with a short grace and a
+        listing aged past it. Expected: zero stale delists, and
+        `continuous_since` equals that local sweep's time.
+      - `test_eligible_sweep_older_than_break_is_noop`, parametrized over
+        the NULL scope and a non-null scope.
+      - `test_late_older_break_still_breaks` (fail-safe direction).
+    - Scope complete-sweep watermark (MS2-D-35):
+      `test_only_gated_complete_full_scopes_raise_complete_sweep_watermark`,
+      parametrized over complete, complete-empty, truncated, stale-absence,
+      PROBE, and rejected runs.
 - **D11 — Source retention and storage cleanup (MS2-D-25).**
   - Tests (`tests/db/test_apify_retention.py`):
     - `test_bounded_source_import_retains_listings_snapshots_raw_and_evaluations`:
@@ -2316,9 +2682,14 @@ and the tests that import through it. See *Slice order*.
 - Remote retention never defaults, and Apify storage is deleted by an
   absolute deadline in every run outcome, whether or not termination was
   observed.
-- A delayed or reordered import never overwrites newer listing state, revives
-  a newer delist, or delists a newer observation.
-- One scope's continuity never authorizes another scope's stale absence.
+- A delayed or reordered import never overwrites newer listing state, writes
+  content to or revives a listing that newer absence retired, creates an
+  active listing for a key a newer complete sweep omitted, or delists a newer
+  observation.
+- Every snapshot carries its own observation's retention deadline.
+- One scope's continuity never authorizes another scope's stale absence, and
+  an older run never restores continuity that a newer break ended, on any
+  scope.
 - A rejected probe records `PROBE_FAILURE` and leaves continuity unchanged.
 - Recovery probes honor the selected provider.
 - A complete-empty result is distinguishable from a failed one.
@@ -2327,7 +2698,7 @@ and the tests that import through it. See *Slice order*.
 
 ## Slice E — Apify spend ledger and admission
 
-**Scope:** MS2-D-17, -26, -32, and the E-side latch wiring of -33.
+**Scope:** MS2-D-17, -26, -32, -34, and the E-side latch wiring of -33.
 
 **Files:**
 - new `acquisition/apify/budget.py`;
@@ -2359,9 +2730,11 @@ and the tests that import through it. See *Slice order*.
     MS2-D-32);
   - `estimate_usd` and `actual_usd` (Decimal 10,4); `execution_bound_usd` and
     `post_run_liability_usd` (Decimal 10,4, MS2-D-32); a `component_bounds`
-    JSON breakdown; `estimator_version`; `reserved_at` (the attribution time,
-    never changed); `reconciled_at`; and `denial_reason`;
-  - indexes on `reserved_at` and `status`.
+    JSON breakdown; `estimator_version`; `reserved_at` (admission time,
+    provenance only, never changed); `reconciled_at`; `last_charge_at`
+    (nullable, set at reconciliation, the window anchor, MS2-D-34); and
+    `denial_reason`;
+  - indexes on `reserved_at`, `status`, and `(status, last_charge_at)`.
   - `ApifyBudgetLatch` (MS2-D-26): `tripped_at`, `provider_run` null, `reason`,
     `cleared_at`, `cleared_reason`, and `estimator_version`.
 - **E2 — Pure policy.** Implement `estimate_run_cost` (the MS2-D-26 component
@@ -2390,20 +2763,31 @@ and the tests that import through it. See *Slice order*.
     - `test_tripped_latch_denies_everything`;
     - invalid inputs.
 - **E3 — Ledger service.** Implement `reserve()` under the budget advisory lock,
-  with the MS2-D-26 window (31 days + `…_STORAGE_CLEANUP_MAX`, attribution at
-  `reserved_at`; revision 3).
+  with the MS2-D-34 window: reconciled rows count while `last_charge_at ≥ now −
+  31 days`, and unreconciled rows count at full estimate regardless of age
+  (revision 4).
   - Tests (`tests/db/test_apify_ledger.py`):
     - `test_concurrent_reservations_one_admitted_at_boundary` (two threads);
     - `test_run_spanning_window_boundary_is_counted`;
-    - `test_reconciled_spend_rolls_off_after_window`;
+    - `test_reconciled_spend_rolls_off_31_days_after_last_charge` (replaces
+      revision 3's `test_reconciled_spend_rolls_off_after_window`);
+    - `test_late_cleanup_settled_spend_counts_until_31_days_after_final_charge`
+      (MS2-D-34, F-08 residual). A run is reserved on day 0 and misses its
+      day-1 cleanup deadline. Deletion succeeds on day 3, usage is re-read,
+      and the row is reconciled with `last_charge_at` = day 3. The clock then
+      moves past `reserved_at` + 31 days + `…_STORAGE_CLEANUP_MAX` (the
+      revision-3 horizon). The settled amount still counts, and a new
+      reservation that fits only without it is denied. Past day 3 + 31 days
+      it rolls off, and the same reservation is admitted;
     - `test_unreconciled_reservation_never_ages_out`;
     - `test_stuck_reservation_still_counted`.
 - **E4 — Reconcile and the overrun latch.** Settle under the same lock per
   MS2-D-32 (revision 3). A non-null `usage_total_usd` read while import, read,
   or cleanup work remains only moves the row to `usage_observed` and keeps the
   full estimate counted. `reconciled` requires a terminal import, verified
-  deletion, and a usage read after `final_charge_op_at`. The reconcile unit
-  joins the MS2-D-23 outstanding selector. A null value keeps the estimate and
+  deletion, and a usage read after `final_charge_op_at`. Reconciliation sets
+  `last_charge_at` in the same locked transaction (MS2-D-34). The reconcile
+  unit joins the MS2-D-23 outstanding selector. A null value keeps the estimate and
   is retried. After 31 days an unsettled row is flagged `unreconciled_stale`.
   - Latch trips: an overrun beyond tolerance, non-zero proxy usage, a dataset
     count over `max_items`, a KV store over its byte cap, a start-option
@@ -2443,7 +2827,9 @@ and the tests that import through it. See *Slice order*.
     in `shortlist()`; a later successful import clears it.
 - **E6 — Attribution report (AC-7).** `apify_spend_report` prints the rolling
   window, calendar-month, and per-source/provider totals from the ledger and
-  `provider_run.usage_total_usd`.
+  `provider_run.usage_total_usd`. The rolling-window total uses the admission
+  predicate (MS2-D-34). The calendar-month view is labeled by admission month
+  (`reserved_at`).
   - Test: output for a seeded ledger.
 - **E8 — Budget-admitted probe (MS2-D-24 with the real ledger).**
   `test_budget_admitted_actor_probe_recovers_source_with_ledger`: a probe is
@@ -2458,6 +2844,8 @@ effective cap, on a tripped overrun latch, on missing prices, on an unset OQ23
 deduction, on any component without an enforceable bound, and on missing
 settings. Reconciliation and admission are serialized. No reservation ages out
 unreconciled, and none is released while charge-producing work remains.
+Settled spend stays counted until 31 days after its final charge-producing
+operation, however late cleanup succeeded.
 
 ## Slice F — Pilot sources, measurement, end-to-end proof
 
@@ -2574,6 +2962,7 @@ recorded after the owner gates clear.
 | R20 | MS2-D-33 denies an Actor path to every bounded-retention source, because no enforceable remote expiry within hours is confirmed. The Actor-proof source (R1) must therefore be a merchant-fact source, or D3 must verify a per-run storage expiry. | Consider it when choosing the R1 source | F5 if a bounded source is chosen |
 | R21 | A start whose response is lost leaves a remote run hw-radar cannot identify (`orphaned_start`). MS2-D-33 detects it at the deadline and trips the latch. Automatic discovery would need an extra list-runs call outside MS2-D-15's seven, which is not planned. | Clean up manually on report; reset the latch | E live operation |
 | R22 | MS2-D-31's per-scope tolerance uses the FULL lane interval. If Actor runs rotate scopes more slowly than that, per-scope continuity keeps restarting. That fails closed (stale absence does not fire), but it can hide real absence until a complete sweep. | Revisit if per-scope cadence becomes configurable | none |
+| R23 | MS2-D-35 residual. Stale-absence sweeps raise no scope watermark, and `last_seen` is `auto_now`, so an import stamps it at persistence time rather than at `observed_at`. A delayed current-eligible import therefore makes a listing look fresher to stale absence by up to the import delay, which the storage deadline bounds (default 24 h). A previously unknown key that a stale sweep would have treated as absent stays active for about one grace longer. This fails toward keeping a listing active, never toward a false delist. The fix, stamping `last_seen` from `observed_at` on the import path, touches the `auto_now` contract that `redact_merchant_content` documents. | Decide at the *Slice D entry gate* | none (D entry gate decision) |
 
 No new ADR or OQ file is created by this plan. R3 makes OQ23 an owner gate for
 live admission, and R12 recommends an optional ADR, for the owner to open.
@@ -2585,7 +2974,9 @@ read-only review of revision 1 at `df114de`).
 - **Verdict:** REVISION NEEDED, with 12 findings (F-01..F-12).
 - **Disposition:** all 12 ACCEPTED and resolved in revision 2. The rows below
   describe revision 2. Where round 2 found a residual (F-03, F-04, F-07, F-08,
-  F-10), the round-2 table supersedes the row.
+  F-10), the round-2 table supersedes the row, and where round 3 found one
+  (F-08), the round-3 table supersedes both. Each table records the revision
+  that answered it; the decision text above is the current contract.
 - The review's "verified correct" items stand unchanged: the migration head, the
   spine and satellite pattern, the listing and snapshot keys, the three veto
   sites, site-wide absence, the gate contents, and the milestone boundary.
@@ -2627,6 +3018,8 @@ read-only review of revision 2 at `e82a83a` plus the Slice A code).
 - The review's "verified correct" items stand: callable veto sites, category
   dispatch, the scope gate, the continuity break for non-complete evidence,
   and migration ordering from `0018`.
+- Round 3 found residuals in F-08, N-01, and N-02. For those three, the
+  round-3 table supersedes the rows below.
 
 | Finding | Sev. | Status | Decision / plan location (changed text) | Named tests |
 | --- | --- | --- | --- | --- |
@@ -2645,6 +3038,38 @@ have not yet merged:
 - `0021`: `Listing.last_observed_at`, `scope_sweep_continuity`, and the new
   `provider_run` columns;
 - `0022`: the reservation status values and liability columns.
+
+**Round 3: cross-agent delegate `f1b156e6`** (opposite provider, static
+read-only review of revision 3 at `f4dab71` plus the Slice A code).
+- **Verdict:** REVISION NEEDED. Five items were RESOLVED (F-03, F-04, F-07,
+  F-10, N-03), three were PARTIAL (F-08, N-01, N-02), and one finding was new
+  (M-01). Slice B was found unblocked.
+- **Disposition:** all four open items ACCEPTED and resolved in revision 4 as
+  plan changes to Slices D and E. No Slice A, B, or C contract changes;
+  MS2-D-11 gains only a forward note to MS2-D-36. A focused design review now
+  gates Slice D (core) (*Slice D entry gate*).
+- The review's "verified correct" items stand: the F-04 gate and reset in
+  Slice A code, catalog fingerprinting, state-neutral rejected probes,
+  admission-time deadlines with the bounded-source Actor denial, Slice B's
+  narrow test-update authorization, and the migration assignment B
+  `0018`/`0019`, C `0020`, D `0021`, E `0022` on head `0017`.
+
+| Item | Sev. | Status | Decision / plan location (changed text) | Named tests |
+| --- | --- | --- | --- | --- |
+| F-08 residual: settled spend aged out by `reserved_at` although cleanup may succeed later | high | Accepted; resolved | MS2-D-34 (new; `last_charge_at` window anchor; `reserved_at` provenance only; component-time accounting rejected); MS2-D-26 *Window and attribution*; MS2-D-32 *Window*; *Things not to do*; E1 (`last_charge_at`, index), E3, E4, E6; Slice E scope and acceptance | `test_apify_ledger.py::test_late_cleanup_settled_spend_counts_until_31_days_after_final_charge`, `::test_reconciled_spend_rolls_off_31_days_after_last_charge` (replaces `::test_reconciled_spend_rolls_off_after_window`), `::test_unreconciled_reservation_never_ages_out` |
+| N-01 residual: current-content writes and unknown-key creation ignore newer absence | high | Accepted; resolved | MS2-D-35 (new; `Listing.last_absence_at`; per-scope `last_complete_sweep_at`; one current-eligible predicate for content, relist, and creation; unknown keys older than the scope watermark created as delisted history anchors; scope-row lock serialization); MS2-D-30 *Watermarks* and *Guards*; MS2-D-22 stages 1–2; D2, D10; Slice D acceptance; R23 | `test_apify_import_ordering.py::test_delayed_observation_after_newer_delist_restores_no_content_and_keeps_expiry` [delete-on-delist (stays redacted), merchant-fact] × [complete, stale delist], `::test_delayed_import_of_unknown_key_after_newer_complete_sweep_creates_no_active_listing` [non-null, NULL scope] × [merchant-fact, bounded delete-on-delist], `::test_delayed_observation_cannot_relist_row_delisted_before_newer_complete_sweep`, `::test_stage1_creation_and_newer_complete_sweep_serialize_on_scope_row`, `::test_delayed_remote_import_after_switch_back_to_local_preserves_newer_content_and_delist_state` (redaction assertion kept, content and expiry assertions added); `test_scope_continuity.py::test_only_gated_complete_full_scopes_raise_complete_sweep_watermark` |
+| N-02 residual: NULL-scope break reversible by a delayed older run | high | Accepted; resolved | MS2-D-36 (new; per-scope `last_eligible_sweep_at` + `continuity_broken_at`, NULL scope on the FULL lane row; breaks carry event time; the NULL scope keeps the `ScraperRun` predecessor lookup so frozen eBay pause tests keep their meaning); MS2-D-31 *Legacy NULL scope*, *Record and break*; MS2-D-11 *Continuity*; MS2-D-22 stage 2 and *Reject*; D2, D10 | `test_scope_continuity.py::test_delayed_null_scope_run_after_newer_scoped_run_cannot_restore_continuity`, `::test_eligible_sweep_older_than_break_is_noop` [NULL, non-null], `::test_late_older_break_still_breaks`, `::test_legacy_null_scope_only_runs_keep_todays_continuity`; frozen `test_source_ebay.py` continuity tests green |
+| M-01 (new): historical snapshots inherit the newer listing's retention deadline | high | Accepted; resolved | MS2-D-37 (new; an optional `ObservationRetention` argument to `append_snapshot`, whose omitted default copies from the listing; explicit per-observation class and expiry on the guarded path; newer-absence pull-forward, and no write when already retired); MS2-D-30 *History*; D *Files* (`persist.py`, owned by D10); D10 | `test_persist_observation_retention.py::test_reverse_order_bounded_observation_snapshot_keeps_its_own_deadline`, `::test_older_bounded_observation_after_newer_delist_is_not_snapshotted`, `::test_merchant_fact_older_observation_appends_history_with_null_expiry`, `::test_append_snapshot_default_copies_listing_retention` |
+
+**Migrations (round 3):** no number changes. The new columns land in
+migrations that have not yet merged, all nullable with no backfill:
+- `0021` (Slice D, D2): `Listing.last_absence_at`; on `SourceLaneState`,
+  `last_eligible_sweep_at`, `continuity_broken_at`, and
+  `last_complete_sweep_at`; and on `scope_sweep_continuity`,
+  `continuity_broken_at` and `last_complete_sweep_at`.
+- `0022` (Slice E, E1): `ApifySpendReservation.last_charge_at` and the
+  `(status, last_charge_at)` index.
+- `0018`–`0020` are unchanged.
 
 ## Next slice after A
 
