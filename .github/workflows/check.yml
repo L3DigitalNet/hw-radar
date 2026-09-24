@@ -69,3 +69,22 @@ jobs:
 
       - name: Dependency audit
         run: uv run pip-audit
+
+      # Actor projects (MS2-D-38): each is its own uv project with its own lock,
+      # so its gate runs in its own environment. Mirrors scripts/check.py's
+      # actor_commands(); keep the two in step. --directory (not --project) so
+      # the tools read the Actor's own basedpyright/pytest/coverage config.
+      - name: "Actor hw-radar-synthetic-collector: sync"
+        run: uv sync --directory actors/hw-radar-synthetic-collector --locked --all-groups
+
+      - name: "Actor hw-radar-synthetic-collector: type check"
+        run: uv run --directory actors/hw-radar-synthetic-collector --locked basedpyright
+
+      - name: "Actor hw-radar-synthetic-collector: test with coverage"
+        run: uv run --directory actors/hw-radar-synthetic-collector --locked coverage run -m pytest
+
+      - name: "Actor hw-radar-synthetic-collector: coverage report"
+        run: uv run --directory actors/hw-radar-synthetic-collector --locked coverage report
+
+      - name: "Actor hw-radar-synthetic-collector: dependency audit"
+        run: uv run --directory actors/hw-radar-synthetic-collector --locked pip-audit
