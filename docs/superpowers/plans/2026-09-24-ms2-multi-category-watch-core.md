@@ -2309,14 +2309,31 @@ replaced.
   `last_charge_at`, possibly in a later cycle or after a long outage. They
   are debited through a second interval rather than by moving
   `last_charge_at` or the correction deadline:
-  - Each row carries `monitoring_bound_usd` (MS2-D-32 *Reservation split*)
-    and `monitoring_charge_last_at`, which every selector-4 read stamps when
-    its counter is incremented, before the read is sent.
+  - Each row carries `monitoring_bound_usd` (MS2-D-32 *Reservation split*),
+    `monitoring_charge_last_at`, and `monitoring_call_pending_since`. Each
+    selector-4 read sets `monitoring_call_pending_since` in the same commit
+    that increments its counter, before the read is sent. When the read
+    completes (any outcome), one commit clears the marker and sets
+    `monitoring_charge_last_at` to the completion time (final resolution
+    check, R10-03: the pre-send stamp alone could end the interval while the
+    counted call was still to run, e.g. a worker suspended past a cycle
+    boundary).
   - A **further monitoring call is possible** while
     `correction_monitor_closed_at` is null and `correction_read_count <
-    …_MAX_CORRECTION_READS`. Otherwise the interval ends at
-    `monitoring_charge_last_at`, or at `reconciled_at` if no read was ever
-    sent.
+    …_MAX_CORRECTION_READS`, **or** while `monitoring_call_pending_since` is
+    set. Otherwise the interval ends at `monitoring_charge_last_at`, or at
+    `reconciled_at` if no read was ever sent.
+  - An uncertain outcome keeps the liability. The poller is the only process
+    that sends selector-4 reads, so a marker left by a previous process can
+    no longer be sent once that process is gone. At poller start, a stale
+    marker is resolved to the new process's start time, which is the
+    verified cancellation point, and the interval ends no earlier than
+    that. Test:
+    `test_monitoring_interval_stays_open_while_final_read_is_pending_across_cycle_boundary`
+    (the last increment commits more than one guard before the cycle ends,
+    the worker pauses, the read is sent in the next cycle, and the
+    allowance counts in the new cycle), plus
+    `test_stale_monitoring_marker_resolves_at_poller_start`.
   - `monitoring_bound_usd` counts (in full until it settles, below), in
     `HR_cycle`, in its class cap,
     and in both account checks, for **every** cycle that the interval
@@ -4601,11 +4618,16 @@ the then-current code. D-prep (D1, D3) is not gated.
   makes the overshoot bounded and matches the MS2-D-26 *Data transfer* row.
   It lands in D (core) with D5, before any F5a deploy, in one hw-radar PR
   that changes `actors/` (MS2-D-38):
-  - `_fetch_page` counts **wire** body bytes. After each chunk it sets
-    `bytes_read` from `response.num_bytes_downloaded`, so a compressed body
-    is counted as received, and it stops at the first chunk that crosses
-    `maxBytes`. That chunk is at most one network read (httpcore's
-    `READ_NUM_BYTES`, 65536, pinned by the Actor's lockfile and a test);
+  - `_fetch_page` counts **wire** body bytes in a **run-wide cumulative
+    raw-input counter** (final resolution check, R10-02). The counter lives
+    on the run, not the response: it carries every earlier response's total,
+    including responses that failed or were abandoned. It is advanced and
+    checked on each raw receive **before** decoding (iterating the raw
+    stream, e.g. `aiter_raw()`), so compressed input that yields little or
+    no decoded output still advances it. The fetch stops on the first raw
+    read that makes the cumulative total cross `maxBytes`. That read is at
+    most one network read (httpcore's `READ_NUM_BYTES`, 65536, pinned by the
+    Actor's lockfile and a test);
   - `new_http_client` (`main.py:52-59`) builds its transport with
     `SO_RCVBUF` = 65536, so the bytes in flight when a response is abandoned
     (over the byte cap, past the deadline, or a non-200 body that is never
@@ -4618,7 +4640,11 @@ the then-current code. D-prep (D1, D3) is not gated.
   - Actor tests: `test_limits.py::test_byte_cap_counts_wire_bytes_and_stops_on_first_crossing_chunk`
     (a 100-byte chunk under `maxBytes=10`: one chunk read, `limitsHit.bytes`,
     no second request) and
-    `test_limits.py::test_http_client_pins_receive_buffer`. The existing
+    `test_limits.py::test_http_client_pins_receive_buffer`, plus
+    `test_limits.py::test_byte_cap_is_cumulative_across_responses` (the cap
+    is crossed in a later response, with earlier totals carried) and
+    `test_limits.py::test_byte_cap_counts_compressed_raw_bytes` (a gzip body
+    crosses the cap in raw bytes while decoding little). The existing
     `test_byte_and_time_limits_binding_on_one_chunk_are_both_reported`
     stays unchanged.
   - hw-radar estimator test (E2):
@@ -6123,6 +6149,20 @@ and `storage_cleanup_attempts` also counts the start-option-mismatch abort;
 both are semantic notes for the D2/D10 implementation. `0022` (E1):
 `ApifySpendReservation.monitoring_bound_usd` and `monitoring_charge_last_at`,
 `operator_kind` value `probe`, and the `ApifyCycleDiscovery` table.
+
+**Revision 11 resolution check — delegate (codex) 2026-09-25, final targeted
+round.** 10 of 12 findings resolved. R10-02 and R10-03 were partly resolved,
+with no new critical or high finding. Both were completed in-house in revision
+11 without another review round:
+- R10-02: the Actor's byte counter is run-wide and cumulative, counted per raw
+  receive before decoding, with multi-response and gzip tests (*D1 follow-up*).
+- R10-03: a durable `monitoring_call_pending_since` marker keeps the
+  monitoring interval open until the final counted read completes. A stale
+  marker resolves at poller start, and the boundary test is added
+  (MS2-D-34 *Monitoring charges*).
+
+The column goes into Slice E's unmerged `0022`. The review loop closes here:
+later medium or low issues are handled in implementation review.
 
 ## Next slice after A
 
