@@ -8,7 +8,9 @@ the real Actor emits for that fault mode. No test touches the network.
 The provider is exercised through run_collection where the pipeline's own
 behavior is the point (soft-block classification, persisted scope and hint), and
 directly where the provider's contract is the point (scope, evidence, paging).
-The durable stage machine that will wrap it is D10's; nothing here depends on it.
+
+The D10 section at the end drives the durable stage machine
+(acquisition.apify.importer) through crashes, read caps, and in-memory retries.
 """
 
 from __future__ import annotations
@@ -24,9 +26,12 @@ from typing import Any, Final, cast
 
 import httpx
 import pytest
+from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
 
+from hw_radar.acquisition import pipeline
+from hw_radar.acquisition.apify import importer
 from hw_radar.acquisition.apify.client import ApifyClient
 from hw_radar.acquisition.apify.contract import (
     DATASET_PAGE_ENVELOPE_BYTES,
@@ -34,6 +39,7 @@ from hw_radar.acquisition.apify.contract import (
     ContractViolation,
     page_limit,
 )
+from hw_radar.acquisition.apify.importer import import_provider_run
 from hw_radar.acquisition.apify.provider import (
     OUTPUT_RECORD_KEY,
     ApifyImportError,
@@ -50,21 +56,31 @@ from hw_radar.acquisition.contracts import (
 )
 from hw_radar.acquisition.pipeline import MEDIAN_BODY_WINDOW, run_collection, run_source
 from hw_radar.acquisition.retention_policy import UnknownSourceRetention, source_retention
+from hw_radar.acquisition.scheduling.apply import apply_run_outcome
 from hw_radar.catalog.models import (
+    Category,
     Listing,
     OfferSnapshot,
     ProviderKind,
     ProviderRun,
+    RawPayload,
     RetentionClass,
     RunCompleteness,
     RunFailureClass,
     RunKind,
     RunStatus,
+    SchedulingLane,
+    ScopeSweepContinuity,
     ScraperRun,
+    SourceConfig,
     SourceSite,
+    SourceTier,
+    Watch,
+    WatchEvaluation,
 )
 from hw_radar.catalog.models.ops import TruncationReason
-from hw_radar.catalog.models.provider import AdmissionClass
+from hw_radar.catalog.models.provider import AdmissionClass, ImportState
+from hw_radar.eligibility.requirements import DriveRequirementSpec, save_requirement
 
 # transaction=True: the provider and run_collection write from sync_to_async
 # threads. serialized_rollback=True: truncation would otherwise delete the
@@ -617,3 +633,361 @@ def test_page_limit_follows_the_configured_page_byte_cap(synthetic_site: SourceS
     _run(provider.fetch())
 
     assert fake.dataset_requests == [(0, 2), (2, 2), (4, 2)]
+
+
+# ── D10: durable staged import (MS2-D-22, -23, -32, -35) ──────────────────────
+#
+# Crash injection raises a BaseException subclass from a patched stage
+# boundary: it escapes every `except Exception` in the importer and the
+# pipeline exactly as a process loss would, so whatever the stage had not yet
+# committed is rolled back and the next invocation must resume from the
+# recorded import_state.
+
+
+class Crash(BaseException):
+    """Simulated process loss at a stage boundary."""
+
+
+class _FailOnce:
+    """Wrap a callable so its first call raises Crash (optionally after running it)."""
+
+    def __init__(self, real: Any, *, after: bool = False) -> None:
+        self.real = real
+        self.after = after
+        self.calls = 0
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        self.calls += 1
+        if self.calls == 1:
+            if self.after:
+                self.real(*args, **kwargs)
+            raise Crash
+        return self.real(*args, **kwargs)
+
+
+def _drive_fixture() -> dict[str, Any]:
+    # The complete fixture's rows retargeted at the seeded `drive` category, so
+    # the production evaluator has a watch to bind; everything else is the
+    # Actor's own output.
+    fixture = copy.deepcopy(_fixture("complete"))
+    for row in fixture["datasetItems"]:
+        row["categoryHint"] = "drive"
+    return fixture
+
+
+def _drive_watch() -> Watch:
+    watch = Watch.objects.create(name="d10", category=Category.objects.get(slug="drive"))
+    save_requirement(watch, DriveRequirementSpec(max_unit_price_usd=Decimal("1000.00")))
+    return watch
+
+
+def _importer_run(
+    row: ProviderRun,
+    fake: FakeApify,
+    *,
+    resolver: Any = None,
+    evaluator: Any = None,
+) -> ImportState:
+    client = ApifyClient(TOKEN, transport=httpx.MockTransport(fake))
+    return _run(
+        import_provider_run(
+            row.pk,
+            client=client,
+            actor_name=ACTOR,
+            resolver=resolver if resolver is not None else NullResolver(),
+            evaluator=evaluator,
+        )
+    )
+
+
+def _counts(site: SourceSite) -> tuple[int, int, int]:
+    return (
+        Listing.objects.filter(source_site=site).count(),
+        OfferSnapshot.objects.filter(listing__source_site=site).count(),
+        RawPayload.objects.filter(endpoint__startswith=f"apify-dataset:{DATASET}/").count(),
+    )
+
+
+def _assert_imported_once(
+    site: SourceSite, row: ProviderRun, fixture: dict[str, Any], watch: Watch | None = None
+) -> ScraperRun:
+    row.refresh_from_db()
+    assert row.import_state == ImportState.FINALIZED
+    rows = len(fixture["datasetItems"])
+    assert _counts(site) == (rows, rows, rows)
+    assert ScraperRun.objects.filter(source_site=site).count() == 1
+    run = ScraperRun.objects.get(source_site=site)
+    assert row.scraper_run_id == run.pk  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType] - django-types has no <fk>_id stubs
+    assert run.status == RunStatus.SUCCESS
+    assert run.snapshots_appended == rows
+    started = datetime.fromisoformat(fixture["startedAt"])
+    if watch is not None:
+        evaluations = WatchEvaluation.objects.filter(watch=watch)
+        assert evaluations.count() == rows
+        assert {e.snapshot_observed_at for e in evaluations} == {started}
+    return run
+
+
+@pytest.fixture
+def crash_setup(synthetic_site: SourceSite) -> tuple[SourceSite, ProviderRun, dict[str, Any]]:
+    fixture = _drive_fixture()
+    return synthetic_site, _provider_run(synthetic_site, fixture), fixture
+
+
+def test_crash_after_observation_commit_resumes_without_duplicates(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site, row, fixture = crash_setup
+    watch = _drive_watch()
+    monkeypatch.setattr(importer, "_stage2", _FailOnce(importer._stage2))  # pyright: ignore[reportPrivateUsage]
+
+    with pytest.raises(Crash):
+        _importer_run(row, _fake(fixture))
+    row.refresh_from_db()
+    assert row.import_state == ImportState.OBSERVATIONS_COMMITTED
+    assert row.scraper_run is not None
+    first_run_pk = row.scraper_run.pk
+
+    fake = _fake(fixture)
+    assert _importer_run(row, fake) is ImportState.FINALIZED
+
+    run = _assert_imported_once(site, row, fixture, watch)
+    assert run.pk == first_run_pk
+    # Resumption past stage 1 never reads the dataset again.
+    assert fake.dataset_requests == []
+    assert row.dataset_read_count == 1
+
+
+def test_crash_during_resolution_resumes_and_evaluates(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+) -> None:
+    site, row, fixture = crash_setup
+    watch = _drive_watch()
+
+    class CrashingResolver:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def resolve_listing(self, listing_id: int) -> None:
+            self.calls += 1
+            if self.calls == 2:
+                raise Crash
+
+    with pytest.raises(Crash):
+        _importer_run(row, _fake(fixture), resolver=CrashingResolver())
+    row.refresh_from_db()
+    assert row.import_state == ImportState.ABSENCE_APPLIED
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+    _assert_imported_once(site, row, fixture, watch)
+
+
+def test_crash_during_evaluation_resumes_and_evaluates(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+) -> None:
+    site, row, fixture = crash_setup
+    watch = _drive_watch()
+
+    class CrashingEvaluator:
+        def evaluate_listing(self, listing_id: int) -> object:
+            raise Crash
+
+    with pytest.raises(Crash):
+        _importer_run(row, _fake(fixture), evaluator=CrashingEvaluator())
+    row.refresh_from_db()
+    assert row.import_state == ImportState.RESOLVED
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+    _assert_imported_once(site, row, fixture, watch)
+
+
+def test_crash_before_finalization_finalizes_once(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site, row, fixture = crash_setup
+    watch = _drive_watch()
+    config = SourceConfig.objects.create(
+        source_site=site,
+        tier=SourceTier.T2_SPECIALIST,
+        domain="synthetic.invalid",
+        cadence_baseline_s=3600,
+        cadence_ceiling_s=900,
+        collection_provider=ProviderKind.APIFY,
+    )
+    lane = config.lane_state(SchedulingLane.FULL)
+    clean_before = lane.clean_polls
+    # The crash lands inside stage 5's transaction, after the lifecycle outcome
+    # was applied: the rollback must undo it, or the retry would apply it twice.
+    monkeypatch.setattr(importer, "apply_run_outcome", _FailOnce(apply_run_outcome, after=True))
+
+    with pytest.raises(Crash):
+        _importer_run(row, _fake(fixture))
+    row.refresh_from_db()
+    assert row.import_state == ImportState.EVALUATED
+    assert ScraperRun.objects.get(source_site=site).status == RunStatus.RUNNING
+    lane.refresh_from_db()
+    assert lane.clean_polls == clean_before
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+    # A third invocation is a no-op at the compare-and-set.
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+    _assert_imported_once(site, row, fixture, watch)
+    lane.refresh_from_db()
+    assert lane.clean_polls == clean_before + 1
+
+
+# ── Read caps (MS2-D-32) ──────────────────────────────────────────────────────
+
+
+def test_stage1_process_loss_rereads_count_against_read_cap(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site, row, fixture = crash_setup
+    crash = _FailOnce(importer.persist_observations, after=True)
+    monkeypatch.setattr(importer, "persist_observations", crash)
+
+    with pytest.raises(Crash):
+        _importer_run(row, _fake(fixture))
+    row.refresh_from_db()
+    assert (row.import_state, row.dataset_read_count, row.kv_read_count) == (
+        ImportState.PENDING,
+        1,
+        1,
+    )
+    # The crashed stage-1 transaction left nothing behind.
+    assert _counts(site) == (0, 0, 0)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+    row.refresh_from_db()
+    assert row.dataset_read_count == 2
+    _assert_imported_once(site, row, fixture)
+
+
+def test_read_cap_exhausted_rejects_import_and_cleans_up(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+) -> None:
+    site, row, fixture = crash_setup
+    ProviderRun.objects.filter(pk=row.pk).update(
+        dataset_read_count=importer.DEFAULT_MAX_DATASET_READS
+    )
+    fake = _fake(fixture)
+
+    assert _importer_run(row, fake) is ImportState.REJECTED
+
+    row.refresh_from_db()
+    assert row.stage_detail["reject_reason"] == "read_cap_exhausted"
+    assert row.dataset_read_count == importer.DEFAULT_MAX_DATASET_READS
+    assert fake.dataset_requests == []
+    assert _counts(site) == (0, 0, 0)
+    run = ScraperRun.objects.get(source_site=site)
+    assert run.status == RunStatus.FAILED
+    # Rejection leaves storage retained for D11's cleanup selector: import is
+    # terminal while storage_state is not `deleted` (MS2-D-23 selector 2).
+    assert row.storage_state == "retained"
+
+
+def test_failed_run_is_rejected_before_anything_is_persisted(synthetic_site: SourceSite) -> None:
+    fixture = _fixture("ambiguous-empty")
+    row = _provider_run(synthetic_site, fixture)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.REJECTED
+
+    row.refresh_from_db()
+    assert row.stage_detail["reject_reason"] == "failed_run"
+    assert _counts(synthetic_site) == (0, 0, 0)
+    assert ScraperRun.objects.get(source_site=synthetic_site).status == RunStatus.FAILED
+    # The admitted scope's continuity is broken at the run's startedAt.
+    continuity = ScopeSweepContinuity.objects.get(
+        source_site=synthetic_site, collection_scope=SCOPE
+    )
+    assert continuity.continuity_broken_at == datetime.fromisoformat(fixture["startedAt"])
+
+
+# ── In-memory retry (MS2-D-35) ────────────────────────────────────────────────
+
+
+def _raise_sqlstate(code: str) -> None:
+    # A real Postgres abort with the given SQLSTATE, raised inside the
+    # transaction under test, so Django wraps it exactly as a real conflict.
+    with connection.cursor() as cursor:
+        cursor.execute(f"DO $$ BEGIN RAISE EXCEPTION 'injected' USING ERRCODE = '{code}'; END $$")
+
+
+class _AbortAfter:
+    """Run the real stage body, then abort its transaction with `code` `times` times."""
+
+    def __init__(self, real: Any, code: str, *, times: int) -> None:
+        self.real = real
+        self.code = code
+        self.times = times
+        self.calls = 0
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        result = self.real(*args, **kwargs)
+        self.calls += 1
+        if self.calls <= self.times:
+            _raise_sqlstate(self.code)
+        return result
+
+
+@pytest.mark.parametrize("code", ["40P01", "40001", "23505"])
+@pytest.mark.parametrize("stage", ["persist_observations", "apply_absence"])
+def test_forced_retryable_sqlstate_retried_in_memory_without_reread(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+    code: str,
+    stage: str,
+) -> None:
+    site, row, fixture = crash_setup
+    abort = _AbortAfter(getattr(importer, stage), code, times=1)
+    monkeypatch.setattr(importer, stage, abort)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+
+    assert abort.calls == 2
+    row.refresh_from_db()
+    assert row.dataset_read_count == 1
+    assert len(row.import_listing_ids) == len(fixture["datasetItems"])
+    assert row.stage_detail["snapshots_appended"] == len(fixture["datasetItems"])
+    _assert_imported_once(site, row, fixture)
+
+
+def test_retry_exhaustion_leaves_no_partial_effects_and_next_tick_rereads_counted(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site, row, fixture = crash_setup
+    abort = _AbortAfter(importer.persist_observations, "40P01", times=4)
+    monkeypatch.setattr(importer, "persist_observations", abort)
+    before = timezone.now()
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.PENDING
+
+    assert abort.calls == 4
+    row.refresh_from_db()
+    assert _counts(site) == (0, 0, 0)
+    assert row.stage_detail["retry_exhausted"] == 1
+    assert row.next_attempt_at is not None and row.next_attempt_at > before
+    assert row.dataset_read_count == 1
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+    row.refresh_from_db()
+    assert row.dataset_read_count == 2
+    _assert_imported_once(site, row, fixture)
+
+
+def test_local_persist_retry_exhaustion_rolls_back_like_a_crash(
+    synthetic_site: SourceSite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    abort = _AbortAfter(pipeline.persist_observations, "40001", times=4)
+    monkeypatch.setattr(pipeline, "persist_observations", abort)
+
+    run, _ = _run(run_source(_LocalAdapter(["a", "b"], body_bytes=100), NullResolver()))
+
+    assert run.status == RunStatus.FAILED
+    assert abort.calls == 4
+    assert Listing.objects.filter(source_site=synthetic_site).count() == 0
+    assert OfferSnapshot.objects.filter(listing__source_site=synthetic_site).count() == 0

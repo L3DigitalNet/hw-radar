@@ -144,7 +144,7 @@ class DelistScope:
         freshness obligation, not from the poll interval: the question it answers
         is "how stale may this offer be before we must stop showing it". It is
         measured in POLLING time, not wall-clock time — the pipeline's delist
-        stage (see _record_sweep_continuity) refuses stale-absence marks unless
+        stage (see acquisition.stages.record_continuity) refuses stale-absence marks unless
         the lane actually swept continuously across the whole window, so a source
         that was paused for a day does not delist its catalogue on resume.
 
