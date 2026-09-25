@@ -261,7 +261,8 @@ def test_report_for_seeded_ledger_spanning_two_cycles() -> None:
 
     unsettled = _section(text, "Unsettled rows:")
     assert f"#{seeded.open_straddling.pk} watch_refresh beta-shop" in unsettled
-    assert "reserved, no_provider_run" in unsettled
+    # Admitted in cycle 1 and still open after it ended: reconcile.is_unreconciled_stale.
+    assert "reserved, unreconciled_stale, no_provider_run" in unsettled
     assert f"#{seeded.build_unbound.pk} operator/build" in unsettled
     assert "build_id_unbound" in unsettled
     assert f"#{seeded.overrun_c2.pk} watch_refresh alpha-shop" in unsettled

@@ -5698,6 +5698,36 @@ the then-current code. D-prep (D1, D3) is not gated.
   - Tests: `test_denied_start_records_denial_and_starts_nothing`;
     `test_denied_start_shows_budget_paused_with_reason_in_shortlist`; a later
     successful import clears it.
+  - Landed 2026-09-25 (E5). `jobs.BUDGET_ADMISSION` is `LedgerAdmission`;
+    `DenyAllAdmission` is removed, and no permissive binding exists in
+    production code. The admission protocol is async
+    (`admit(request, reader)`): when `ledger.account_read_useful` says the
+    request passes every rule before the account-state checks, it refreshes
+    the snapshot (counted reads, no transaction across an await), then calls
+    `ledger.reserve(..., source_site_id=...)`, which persists the admitted or
+    denied row (probe denials included) and trips the latch on
+    `external_liability_exceeded`. `BudgetRequest` gained `source_site_id`,
+    `max_requests`, and `max_bytes`; `BudgetDecision` gained
+    `reservation_id`, and the start job creates the provider_run and attaches
+    it to that reservation in one budget-locked commit. The shortlist
+    (`eligibility.shortlist`) has `Freshness.BUDGET_PAUSED` and
+    `ShortlistRow.budget_paused_reason`: the latch (reason `overrun_latch`,
+    `apify` sources only), or a newest ledger row that is a denial with no
+    SUCCESS `ScraperRun` finished after it. With the production defaults
+    (kill switch off, no Actor id, no `RUN_SPECS`, no prices) no start
+    request and no account read is sent. E4 residuals folded in: the OUTPUT
+    record's size is exposed by `provider.py` and trips `kv_store_over_cap`
+    above `…_MAX_KV_BYTES`; stale selector-4 markers are resolved once at
+    poller start (`poller.service.run`), no longer every tick; `report.py`
+    uses `reconcile.correction_close_overdue` and `is_unreconciled_stale`
+    (it now flags `unreconciled_stale` rows). Also: an over-cap account read
+    trips `api_response_over_cap` instead of reading as a transient failure.
+    Choices this plan left open: the snapshot refresh is skipped when a
+    setting already denies; "a later successful import" is a SUCCESS
+    `ScraperRun` whose `finished_at` is after the denial; `budget_paused`
+    overrides `fresh`/`stale`. Bootstrap order: the first enabled start
+    discovers the cycle and is denied `ledger_authority_missing`, after which
+    `apify_ledger_claim` can claim it.
 - **E6 — Attribution report (AC-7).** Revision 5: `apify_spend_report` prints,
   per billing cycle (the authoritative view): the cycle bounds, the project
   allocation, consumed finalized usage, outstanding reservations, remaining
@@ -5737,6 +5767,15 @@ the then-current code. D-prep (D1, D3) is not gated.
   `test_budget_admitted_actor_probe_recovers_source_with_ledger`: a probe is
   admitted under the `discovery` class, reserved, imported, and reconciled, and
   the source recovers. `test_probe_denied_when_discovery_exhausted`.
+  - Landed 2026-09-25 (E8), in `tests/db/test_apify_recovery_probe.py`. The
+    probe is started by `recovery_probe_job` through the real
+    `LedgerAdmission`, which refreshes a stale snapshot through the fake
+    account endpoints, reserves under `discovery`, and attaches the run;
+    three real `apify_poll_tick`s import it (the source recovers), delete its
+    storage, and settle it through the reconcile unit (`bound`, actual ≤
+    estimate, no latch). Nothing is staged directly. The exhausted case
+    fills the discovery class (A − watch-refresh reserve) and gets a
+    `class_cap` denial row under `discovery` with no call sent.
 - **E7 — Close-out.** This runs last. Gate; TODO/STATUS. Record the owner
   tasks (revision 9, owner decision (s4, 2026-09-25); replaces revision 5's
   list): keep the account-level usage limit at or below the prepaid credit;

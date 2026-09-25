@@ -4,8 +4,9 @@
 
 Every Apify call is served by an httpx.MockTransport (`FakeApify`), so no test
 touches the network. Budget admission is bound to the test-only AllowAll below
-wherever a start must reach the wire; production stays DenyAllAdmission, which
-test_production_defaults_never_send_a_start_request pins.
+wherever a start must reach the wire; production binds jobs.LedgerAdmission,
+whose fail-closed defaults test_production_defaults_never_send_a_start_request
+pins.
 
 The restart tests at the end (named in plan D10) inject process loss with a
 BaseException raised from a patched importer stage, exactly as
@@ -48,7 +49,7 @@ from hw_radar.acquisition.apify.jobs import (
     start_mismatches,
     start_provider_run,
 )
-from hw_radar.acquisition.apify.ledger import reserve_operator
+from hw_radar.acquisition.apify.ledger import AccountReader, reserve_operator
 from hw_radar.acquisition.contracts import NullResolver
 from hw_radar.acquisition.scheduling.buckets import BucketRegistry
 from hw_radar.acquisition.sources import ADAPTERS
@@ -117,12 +118,12 @@ def _committed[T](query: Callable[[], T]) -> T:
 
 
 class AllowAll:
-    """Test-only budget admission; production binds DenyAllAdmission."""
+    """Test-only budget admission; production binds jobs.LedgerAdmission."""
 
     def __init__(self) -> None:
         self.requests: list[BudgetRequest] = []
 
-    def admit(self, request: BudgetRequest) -> BudgetDecision:
+    async def admit(self, request: BudgetRequest, reader: AccountReader) -> BudgetDecision:
         self.requests.append(request)
         return BudgetDecision(True)
 
@@ -488,7 +489,8 @@ def test_start_request_is_never_retried(config: SourceConfig) -> None:
 
 def test_production_defaults_never_send_a_start_request(config: SourceConfig) -> None:
     fake = FakeApify()
-    # Kill switch default (false) and the production DenyAll binding.
+    # Kill switch default (false) and the production ledger binding.
+    assert isinstance(jobs.BUDGET_ADMISSION, jobs.LedgerAdmission)
     disabled = _run(start_provider_run(config, run_specs=_specs(), client_factory=fake.client))
     with LIVE:
         denied = _run(start_provider_run(config, run_specs=_specs(), client_factory=fake.client))
@@ -498,10 +500,18 @@ def test_production_defaults_never_send_a_start_request(config: SourceConfig) ->
         )
 
     assert (disabled.status, disabled.reason) == (StartStatus.REFUSED, "apify_disabled")
-    assert (denied.status, denied.reason) == (StartStatus.DENIED, "budget_admission_unavailable")
+    # No unit price has a default, so the ledger denies before any account read.
+    assert (denied.status, denied.reason) == (StartStatus.DENIED, "pricing_unverified")
     assert (unspecced.status, unspecced.reason) == (StartStatus.REFUSED, "no_run_spec")
     assert fake.requests == []
     assert not ProviderRun.objects.exists()
+    # The denial is a ledger row (MS2-D-17); the refusals leave none.
+    [denial] = ApifySpendReservation.objects.all()
+    assert (denial.status, denial.denial_reason, denial.source_site) == (
+        ReservationStatus.DENIED,
+        "pricing_unverified",
+        config.source_site,
+    )
 
 
 @LIVE

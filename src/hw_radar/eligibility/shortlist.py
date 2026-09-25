@@ -23,9 +23,17 @@ the package's imports.
 Freshness (a labeled, tunable assumption, plan C4): `stale` when the listing's
 latest snapshot is older than STALE_CADENCE_MULTIPLE x its source's
 `cadence_baseline_s`, or when there is no snapshot or no source config to
-judge by; else `fresh`. Slice E adds `budget_paused`. The age is observation
-time measured against processing `now`; neither clock is derived from the
-other (MS2-D-39).
+judge by; else `fresh`. The age is observation time measured against
+processing `now`; neither clock is derived from the other (MS2-D-39).
+
+`budget_paused` (Slice E5, MS2-D-17 *Freshness*) overrides both for a source
+whose Apify spend admission is holding it back, with the reason carried in
+`budget_paused_reason`: while the overrun latch is tripped (reason
+`overrun_latch`), for an `apify`-provider source; or when the source's newest
+ledger row is a budget denial and no successful import (a SUCCESS ScraperRun)
+finished after that denial (reason: the persisted DenialReason). A later
+admitted reservation or a later successful import clears it. It says why the
+price is not being refreshed, which a plain `stale` cannot.
 """
 
 # pyright: reportPrivateUsage=false
@@ -41,9 +49,20 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Final, cast
 
+from django.db.models import Max
 from django.utils import timezone
 
-from hw_radar.catalog.models import EligibilityVerdict, SourceConfig, Watch
+from hw_radar.catalog.models import (
+    ApifyBudgetLatch,
+    ApifySpendReservation,
+    EligibilityVerdict,
+    ProviderKind,
+    ReservationStatus,
+    RunStatus,
+    ScraperRun,
+    SourceConfig,
+    Watch,
+)
 from hw_radar.eligibility import evaluate
 from hw_radar.eligibility.service import RowCurrency, candidate_rows, row_currency
 from hw_radar.matching.normalize import canonicalize_title
@@ -56,6 +75,13 @@ STALE_CADENCE_MULTIPLE: Final = 2
 class Freshness(StrEnum):
     FRESH = "fresh"
     STALE = "stale"
+    BUDGET_PAUSED = "budget_paused"
+
+
+# The latch's visible reason: the DenialReason every admission gets while it
+# is tripped (budget.DenialReason.OVERRUN_LATCH; this package does not import
+# the acquisition layer).
+OVERRUN_LATCH_REASON: Final = "overrun_latch"
 
 
 class ReviewState(StrEnum):
@@ -82,6 +108,8 @@ class ShortlistRow:
     # lot quantity). Annotation only; it never changes membership (MS2-D-07).
     meets_target: bool | None
     freshness: Freshness
+    # The denial reason when freshness is BUDGET_PAUSED, else None.
+    budget_paused_reason: str | None
     observed_at: datetime | None
     evaluated_at: datetime
     reasons: Sequence[Mapping[str, object]]
@@ -117,6 +145,46 @@ def _baselines(states: Sequence[RowCurrency]) -> dict[int, int]:
     }
 
 
+def budget_paused_sources(site_ids: set[int]) -> dict[int, str]:
+    """Return {source_site_id: reason} for the given sites that are budget_paused.
+
+    Three queries whatever the number of sites (module docstring for the rule).
+    """
+    if not site_ids:
+        return {}
+    paused: dict[int, str] = {}
+    newest = (
+        ApifySpendReservation.objects.filter(source_site_id__in=site_ids)
+        .order_by("source_site_id", "-reserved_at", "-pk")
+        .distinct("source_site_id")
+        .values_list("source_site_id", "status", "denial_reason", "reserved_at")
+    )
+    denied = {
+        cast("int", site_id): (reason, at)
+        for site_id, status, reason, at in newest
+        if status == ReservationStatus.DENIED.value
+    }
+    if denied:
+        imported = dict(
+            ScraperRun.objects.filter(source_site_id__in=list(denied), status=RunStatus.SUCCESS)
+            .values("source_site")
+            .annotate(last=Max("finished_at"))
+            .values_list("source_site_id", "last")
+        )
+        for site_id, (reason, at) in denied.items():
+            last = imported.get(site_id)
+            if last is None or last <= at:
+                paused[site_id] = reason
+    if ApifyBudgetLatch.objects.filter(cleared_at__isnull=True).exists():
+        # The latch outranks a denial reason: it is why every later admission
+        # is denied, and only the owner's reset clears it.
+        for site_id in SourceConfig.objects.filter(
+            source_site_id__in=site_ids, collection_provider=ProviderKind.APIFY
+        ).values_list("source_site_id", flat=True):
+            paused[cast("int", site_id)] = OVERRUN_LATCH_REASON
+    return paused
+
+
 def _freshness(observed_at: datetime | None, baseline_s: int | None, now: datetime) -> Freshness:
     # Unknown cadence or no observation cannot vouch for a live price, so it
     # reads as stale rather than fresh.
@@ -149,6 +217,9 @@ def shortlist(watch_id: int) -> list[ShortlistRow]:
         s for s in states if s.current and s.evaluation.verdict == EligibilityVerdict.MATCH.value
     ]
     baselines = _baselines(matches)
+    paused = budget_paused_sources(
+        {cast("int", s.evaluation.listing.source_site.pk) for s in matches}
+    )
     now = timezone.now()
     rows: list[ShortlistRow] = []
     for s in matches:
@@ -158,6 +229,13 @@ def shortlist(watch_id: int) -> list[ShortlistRow]:
         canonical = canonicalize_title(f"{listing.title_raw} {listing.condition_label_raw}".strip())
         facts = evaluate._offer_facts(listing, snapshot, canonical)
         observed_at = None if snapshot is None else snapshot.observed_at
+        site_id = cast("int", listing.source_site.pk)
+        paused_reason = paused.get(site_id)
+        freshness = (
+            Freshness.BUDGET_PAUSED
+            if paused_reason is not None
+            else _freshness(observed_at, baselines.get(site_id), now)
+        )
         rows.append(
             ShortlistRow(
                 evaluation_id=cast("int", e.pk),
@@ -169,9 +247,8 @@ def shortlist(watch_id: int) -> list[ShortlistRow]:
                 landed_usd=facts.price_usd,
                 shipping_known=facts.shipping_known,
                 meets_target=_meets_target(e.watch, facts),
-                freshness=_freshness(
-                    observed_at, baselines.get(cast("int", listing.source_site.pk)), now
-                ),
+                freshness=freshness,
+                budget_paused_reason=paused_reason,
                 observed_at=observed_at,
                 evaluated_at=e.evaluated_at,
                 reasons=e.reasons,

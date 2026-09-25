@@ -127,6 +127,48 @@ def test_run_shuts_down_cleanly_on_sigterm(caplog: pytest.LogCaptureFixture) -> 
     assert "poller stopped" in caplog.text
 
 
+def test_run_resolves_stale_ledger_markers_before_the_scheduler_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # MS2-D-34 (E5 r2): markers a dead poller left are resolved once, at
+    # start, before any apify-poll tick of this process could stamp one. The
+    # DB-touching steps are replaced so this stays a unit test; the resolution
+    # itself is pinned by tests/db/test_apify_admission.py.
+    from hw_radar.poller import service
+
+    order: list[str] = []
+
+    def load_buckets(*, now_s: float) -> BucketRegistry:
+        return BucketRegistry()
+
+    def save_buckets(_registry: BucketRegistry) -> None:
+        return None
+
+    def resolve() -> int:
+        order.append("resolve")
+        return 0
+
+    monkeypatch.setattr(service, "load_buckets", load_buckets)
+    monkeypatch.setattr(service, "save_buckets", save_buckets)
+    monkeypatch.setattr(service, "resolve_stale_ledger_markers", resolve)
+    real_start = AsyncIOScheduler.start
+
+    def start(self: AsyncIOScheduler, paused: bool = False) -> None:
+        order.append("scheduler")
+        real_start(self, paused)
+
+    monkeypatch.setattr(AsyncIOScheduler, "start", start)
+
+    async def drive() -> None:
+        task = asyncio.ensure_future(run(configs=[], checkpoint=True))
+        await asyncio.sleep(0.05)
+        os.kill(os.getpid(), signal.SIGTERM)
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(drive())
+    assert order == ["resolve", "scheduler"]
+
+
 def test_refdata_refresh_job_registered_on_utc_cron() -> None:
     scheduler = build_scheduler(BucketRegistry(), [])
     job = scheduler.get_job("refdata-refresh")

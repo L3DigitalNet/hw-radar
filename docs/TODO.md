@@ -68,9 +68,9 @@ Instructions for AI agents:
   start response has no storage ids to delete, residual R21 + E latch; `delete_failed` at the
   attempt cap; overdue cleanup *starts* at the deadline). No production path can start a live
   run. Live Actor runs remain owner-gated (scoped runtime token, Slice E admission, operator
-  reservation before any build). Remaining hand-offs to E/F5a (E4 landed the
-  `final_charge_op_at` stamp and the D-side latch trips): E5 replaces `BUDGET_ADMISSION` and
-  records probe budget denials as ledger rows (D12 only logs them); F5a registers the synthetic site's `ActorRunSpec` in
+  reservation before any build). Remaining hand-offs to F5a (E4 landed the
+  `final_charge_op_at` stamp and the D-side latch trips; E5 bound the ledger as
+  `BUDGET_ADMISSION` and records probe denials as ledger rows): F5a registers the synthetic site's `ActorRunSpec` in
   `jobs.RUN_SPECS` (empty in production, so every `apify` source is refused `no_run_spec`). Open:
   the start job does not yet refuse a new FULL start while a previous run of the same scope is
   outstanding (only PROBE runs have the one-outstanding rule, D12). Apify push/build/run: none
@@ -94,16 +94,20 @@ Instructions for AI agents:
   unit and bound-build reads, selector 4 with pending markers and closing reads, MS2-D-47
   correction re-checks; latch trips/reset/estimator-version clear in `ledger`;
   `apify_operator_reserve --settle` and `apify_budget_reset --reason`; `ApifyUsageRead`
-  append-only; E3 residuals: denied envelope rows persisted, `--reason` stored). **Next:** E5
-  binding (`BudgetRequest` must add `maxRequests`/`maxBytes`; refresh the snapshot before
-  `reserve`, attach the provider_run to the reserved row, which is what makes selector 2
-  reconcile it), E8, E7. Mirror any `ledger._tally` predicate change in `report._place` (pinned
-  by `test_cycle_totals_match_ledger_cycle_debits`); `report.py` also derives
-  `correction_close_overdue`/`unreconciled_stale` separately from `reconcile`'s predicates.
-  Open from E4: the KV-store byte-cap latch trip is not wired (the importer never sees the
-  OUTPUT record's size; needs `provider.py` to expose it). Owner/operator before F5a: set the eight unit prices from
-  `apify.com/pricing`, plus `…_MARGIN`, `…_MAX_TIMEOUT_S`, `…_MAX_KV_WRITES`, `…_MAX_KV_BYTES`,
-  and `…_STORAGE_MAX_LIFETIME` (no plan defaults; unset denies).
+  append-only; E3 residuals: denied envelope rows persisted, `--reason` stored). **E5 done**
+  (`jobs.LedgerAdmission` is the production binding: account-snapshot refresh only when a
+  setting would not already deny, then `reserve`; the run is attached to its reservation in the
+  row's creating commit; `budget_paused` + reason in the shortlist; E4 residuals: KV byte-cap
+  trip, stale selector-4 markers resolved at poller start, `report.py` on `reconcile`'s
+  predicates; over-cap account reads trip the latch). **E8 done** (probe admitted, imported,
+  and settled through the real ledger and reconcile unit). **Next:** E7 close-out. Mirror any
+  `ledger._tally` predicate change in `report._place` (pinned by
+  `test_cycle_totals_match_ledger_cycle_debits`). Owner/operator before F5a's first paid call:
+  set the eight unit prices from `apify.com/pricing`, plus `…_MARGIN`, `…_MAX_TIMEOUT_S`,
+  `…_MAX_KV_WRITES`, `…_MAX_KV_BYTES`, and `…_STORAGE_MAX_LIFETIME` (no plan defaults; unset
+  denies); set `…_LEDGER_ID`, `…_ACTOR_ID`, and `HW_RADAR_APIFY_ENABLED=true`; render the scoped
+  `HW_RADAR_APIFY_TOKEN`; the first enabled start then discovers the billing cycle (denied
+  `ledger_authority_missing`), after which the owner runs `apify_ledger_claim`.
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
   categories and both local + self-owned-Apify provider paths. Measure cost, completeness,
   identifier quality, condition/shipping coverage, freshness, and failure recovery before adding

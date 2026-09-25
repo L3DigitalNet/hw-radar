@@ -62,6 +62,7 @@ from hw_radar.acquisition.apify.ledger import (
     discovery_status,
     load_ledger_config,
 )
+from hw_radar.acquisition.apify.reconcile import correction_close_overdue, is_unreconciled_stale
 from hw_radar.catalog.models import (
     AdmissionClass,
     ApifyBudgetCycle,
@@ -77,6 +78,7 @@ from hw_radar.catalog.models.provider import ImportState, SettlementBasis, Stora
 __all__ = [
     "CORRECTION_CLOSE_OVERDUE",
     "TREND_WINDOW",
+    "UNRECONCILED_STALE",
     "CycleReport",
     "Figure",
     "FlaggedRow",
@@ -88,6 +90,8 @@ __all__ = [
 # The MS2-D-23 name for an obligation whose closing read has not committed
 # although its deadline has passed or its read cap is spent.
 CORRECTION_CLOSE_OVERDUE: Final = "correction_close_overdue"
+# E4's name for an open row still unsettled after its admission cycle ended.
+UNRECONCILED_STALE: Final = "unreconciled_stale"
 # MS2-D-32 *Run polls*: a row at the poll cap settles at its bound and is
 # reported by this name.
 API_CALL_CAP_EXHAUSTED: Final = "api_call_cap_exhausted"
@@ -334,22 +338,17 @@ def _provider_key(row: ApifySpendReservation) -> str:
     return "unattached"
 
 
-def _close_overdue(row: ApifySpendReservation, config: LedgerConfig, now: datetime) -> bool:
-    """MS2-D-23: an open obligation past its deadline or at its read cap."""
-    if (
-        row.status != ReservationStatus.RECONCILED.value
-        or not _has_obligation(row)
-        or row.correction_monitor_until is None
-        or row.correction_monitor_closed_at is not None
-    ):
-        return False
-    cap = config.budget.max_correction_reads
-    at_cap = cap is not None and _correction_reads(row) >= cap
-    return now >= row.correction_monitor_until or at_cap
+# Both row flags are reconcile.py's own predicates, imported rather than
+# re-derived here, so the report can never disagree with the settlement side
+# about which rows are overdue or stale.
 
 
-def _unsettled_reasons(row: ApifySpendReservation, config: LedgerConfig) -> tuple[str, ...]:
+def _unsettled_reasons(
+    row: ApifySpendReservation, config: LedgerConfig, now: datetime
+) -> tuple[str, ...]:
     reasons = [row.status]
+    if is_unreconciled_stale(row, now):
+        reasons.append(UNRECONCILED_STALE)
     run = row.provider_run
     cap = config.budget.max_run_polls
     polls = run.run_poll_count if run is not None else row.run_poll_count
@@ -611,10 +610,10 @@ def build_report(
                     _label(row),
                     row.reserved_at,
                     row.estimate_usd,
-                    _unsettled_reasons(row, config),
+                    _unsettled_reasons(row, config, now),
                 )
             )
-        elif _close_overdue(row, config, now):
+        elif correction_close_overdue(row, now, config):
             until = row.correction_monitor_until
             assert until is not None
             unsettled.append(

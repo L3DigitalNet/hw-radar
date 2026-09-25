@@ -25,15 +25,17 @@ Apify schedules or webhooks):
   (reconcile.record_run_usage). The kill switch does not stop the tick: it
   settles liability already reserved (MS2-D-17, ED-07).
 
-Production safety. The budget admission binding is DenyAllAdmission until
-Slice E wires the ledger (E5), so no start request can be sent: DenyAll is the
-module default and nothing in production passes another binding. The kill
-switch settings.HW_RADAR_APIFY_ENABLED (default false) is checked before budget
-admission as well, and an unset HW_RADAR_APIFY_ACTOR_ID refuses every start. No
-site has an ActorRunSpec registered in RUN_SPECS, so even an `apify` source
-with everything else allowed is refused `no_run_spec`. The poll tick never
-starts a run; with no provider_run rows it makes no API call and constructs no
-client, so it is safe to schedule with no token rendered.
+Production safety. The budget admission binding is LedgerAdmission (E5): the
+Slice E spend ledger, which records every denial as a ledger row and fails
+closed on every unset price, cap, or account fact (MS2-D-17, -40). Nothing in
+production binds anything else. In front of it, the kill switch
+settings.HW_RADAR_APIFY_ENABLED (default false) refuses every start, an unset
+HW_RADAR_APIFY_ACTOR_ID refuses every start, and no site has an ActorRunSpec
+registered in RUN_SPECS, so even an `apify` source with everything else allowed
+is refused `no_run_spec`. With the production defaults no start request, and
+no account read, is ever sent. The poll tick never starts a run; with no
+provider_run rows it makes no API call and constructs no client, so it is safe
+to schedule with no token rendered.
 
 SCOPE: storage deletion and the overdue abort-and-delete sequence are D11's
 units of work (MS2-D-25, -33) in acquisition.apify.storage_cleanup; this module
@@ -73,6 +75,7 @@ from django.utils import timezone
 from pydantic import ValidationError
 
 from hw_radar.acquisition.apify import importer, reconcile
+from hw_radar.acquisition.apify.budget import AdmissionRequest, BudgetClass, RunShape
 from hw_radar.acquisition.apify.client import (
     ApifyApiError,
     ApifyClient,
@@ -89,14 +92,20 @@ from hw_radar.acquisition.apify.contract import (
 )
 from hw_radar.acquisition.apify.importer import RejectReason, import_provider_run
 from hw_radar.acquisition.apify.ledger import (
+    AccountReader,
     LatchReason,
     LedgerConfig,
+    account_read_useful,
     load_ledger_config,
+    refresh_account_snapshot,
+    reserve,
+    take_budget_lock,
     trip_latch,
 )
 from hw_radar.acquisition.contracts import AdapterRetention, ListingResolver
 from hw_radar.acquisition.retention_policy import UnknownSourceRetention, source_retention
 from hw_radar.catalog.models import (
+    ApifySpendReservation,
     ProviderKind,
     ProviderRun,
     ReservationStatus,
@@ -111,8 +120,9 @@ logger = logging.getLogger(__name__)
 APIFY_POLL_SECONDS: Final = 60
 
 # When this poller process started. A selector-4 pending marker older than
-# this was left by a process that is gone and can never send its read, so
-# every tick resolves such markers to this instant (MS2-D-34, R10-03).
+# this was left by a process that is gone and can never send its read; the
+# poller resolves such markers to this instant once, at its start
+# (poller.service.run, MS2-D-34, R10-03), before the first tick can run.
 PROCESS_STARTED_AT: datetime = timezone.now()
 
 # Per-row backoff after a failed unit of work: 1 min doubling to 1 h. The
@@ -144,9 +154,14 @@ if _schema_major(RUN_SCHEMA_VERSION) != CONTRACT_MAJOR:
 
 @dataclass(frozen=True, slots=True)
 class BudgetRequest:
-    """What a start asks budget admission to reserve for (MS2-D-17, -26)."""
+    """What a start asks budget admission to reserve for (MS2-D-17, -26).
+
+    max_requests and max_bytes are the Actor input caps the transfer bound
+    is priced from (budget.RunShape); max_pages is carried for the record.
+    """
 
     site_key: str
+    source_site_id: int
     scope_key: str
     run_kind: RunKind
     admission_class: AdmissionClass
@@ -154,37 +169,87 @@ class BudgetRequest:
     timeout_s: int
     max_items: int
     max_pages: int
+    max_requests: int
+    max_bytes: int
 
 
 @dataclass(frozen=True, slots=True)
 class BudgetDecision:
+    """An admission answer. `reason` is the persisted DenialReason on a denial.
+
+    reservation_id names the admitted ledger row the start job must attach
+    its provider_run to; None means the binding reserved nothing (test-only
+    bindings), and then nothing is attached.
+    """
+
     admitted: bool
     reason: str = ""
+    reservation_id: int | None = None
 
 
 class BudgetAdmission(Protocol):
     """Paid-admission check run after check_admission and before any row exists.
 
-    Synchronous: the Slice E ledger takes a Postgres advisory lock inside a
-    transaction, so the start job calls it through sync_to_async.
+    Async because the ledger may refresh the account snapshot through
+    `reader` first; every database step inside runs through sync_to_async in
+    its own transaction, so no transaction spans an await.
     """
 
-    def admit(self, request: BudgetRequest) -> BudgetDecision: ...
+    async def admit(self, request: BudgetRequest, reader: AccountReader) -> BudgetDecision: ...
 
 
-class DenyAllAdmission:
-    """The production binding until E5: every paid start is denied."""
+class LedgerAdmission:
+    """The production binding: admission by the Slice E spend ledger (E5).
 
-    reason: Final = "budget_admission_unavailable"
+    Two steps, in order. First, only when the request would otherwise get as
+    far as the account-state checks (ledger.account_read_useful), refresh the
+    MS2-D-40 account snapshot: its reads are counted and committed before they
+    are sent, and a failed read leaves the snapshot stale so the reserve below
+    denies. Skipping the refresh when a setting already denies means an
+    environment with unset prices never spends an account read. Second,
+    ledger.reserve under the budget lock, which persists the admitted row or
+    the denial row (probe denials included) and trips the latch itself when
+    the decision says so (external_liability_exceeded).
 
-    def admit(self, request: BudgetRequest) -> BudgetDecision:
-        return BudgetDecision(False, self.reason)
+    `config` and `clock` default to the settings and to the reserve's own
+    post-lock timestamp; tests pass both.
+    """
+
+    def __init__(self, *, config: LedgerConfig | None = None, clock: Clock | None = None) -> None:
+        self._config = config
+        self._clock = clock
+
+    async def admit(self, request: BudgetRequest, reader: AccountReader) -> BudgetDecision:
+        config = self._config or await sync_to_async(load_ledger_config)()
+        ask = AdmissionRequest(
+            budget_class=BudgetClass(request.admission_class.value),
+            run=RunShape(
+                memory_mb=request.memory_mb,
+                timeout_s=request.timeout_s,
+                max_items=request.max_items,
+                max_requests=request.max_requests,
+                max_bytes=request.max_bytes,
+            ),
+        )
+        now = self._clock() if self._clock is not None else timezone.now()
+        if await sync_to_async(account_read_useful)(ask, config=config, now=now):
+            refreshed = await refresh_account_snapshot(reader, config=config, now=now)
+            logger.info("apify account snapshot for %s: %s", request.site_key, refreshed)
+        outcome = await sync_to_async(reserve)(
+            ask,
+            source_site_id=request.source_site_id,
+            config=config,
+            now=self._clock() if self._clock is not None else None,
+        )
+        if not outcome.admitted:
+            return BudgetDecision(False, outcome.reason)
+        return BudgetDecision(True, reservation_id=outcome.reservation_id)
 
 
 # Rejected alternative: an AllowAll binding in this module for tests. A
 # permissive class importable from production code is one wrong default away
 # from live spend; tests define their own (D12 names it test-only).
-BUDGET_ADMISSION: Final[BudgetAdmission] = DenyAllAdmission()
+BUDGET_ADMISSION: Final[BudgetAdmission] = LedgerAdmission()
 
 
 # ── Run specs: what an `apify` source asks its Actor to do ──────────────────
@@ -358,6 +423,7 @@ async def start_provider_run(
         )
         request = BudgetRequest(
             site_key=site_key,
+            source_site_id=config.source_site.pk,
             scope_key=validated.collection_scope,
             run_kind=run_kind,
             admission_class=admission_class,
@@ -365,8 +431,10 @@ async def start_provider_run(
             timeout_s=spec.timeout_s,
             max_items=validated.max_items,
             max_pages=validated.max_pages,
+            max_requests=validated.max_requests,
+            max_bytes=validated.max_bytes,
         )
-        decision = await sync_to_async((admission or BUDGET_ADMISSION).admit)(request)
+        decision = await (admission or BUDGET_ADMISSION).admit(request, client)
         if not decision.admitted:
             logger.info("apify start for %s denied: %s", site_key, decision.reason)
             return StartResult(StartStatus.DENIED, decision.reason)
@@ -374,21 +442,24 @@ async def start_provider_run(
         query_scope = QueryScope.model_validate(
             {name: getattr(validated, name) for name in QueryScope.model_fields}
         ).model_dump(mode="json")
-        row = await sync_to_async(ProviderRun.objects.create)(
-            provider_kind=ProviderKind.APIFY,
-            source_site=config.source_site,
-            actor_ref=actor_id,
-            contract_schema_version=RUN_SCHEMA_VERSION,
-            query_scope=query_scope,
-            scope_key=validated.collection_scope,
-            memory_mb=spec.memory_mb,
-            timeout_s=spec.timeout_s,
-            max_items=validated.max_items,
-            max_pages=validated.max_pages,
-            admission_class=admission_class,
-            run_kind=run_kind,
-            admitted_at=admitted_at,
-            storage_cleanup_due_at=due_at,
+        row = await sync_to_async(_create_run)(
+            {
+                "provider_kind": ProviderKind.APIFY,
+                "source_site": config.source_site,
+                "actor_ref": actor_id,
+                "contract_schema_version": RUN_SCHEMA_VERSION,
+                "query_scope": query_scope,
+                "scope_key": validated.collection_scope,
+                "memory_mb": spec.memory_mb,
+                "timeout_s": spec.timeout_s,
+                "max_items": validated.max_items,
+                "max_pages": validated.max_pages,
+                "admission_class": admission_class,
+                "run_kind": run_kind,
+                "admitted_at": admitted_at,
+                "storage_cleanup_due_at": due_at,
+            },
+            decision.reservation_id,
         )
         try:
             run = await client.start_run(
@@ -421,6 +492,34 @@ async def start_provider_run(
         else:
             await sync_to_async(_record_observation)(row.pk, aborted, timezone.now(), poll=False)
         return StartResult(StartStatus.MISMATCH_ABORTED, "; ".join(mismatches), row.pk)
+
+
+def _create_run(fields: dict[str, object], reservation_id: int | None) -> ProviderRun:
+    """Create the provider_run and attach it to its reservation in one commit.
+
+    One transaction, so a crash can never leave a run whose spend no ledger
+    row tracks: selector 2 reconciles only runs that have a reservation, and
+    an unattached run would be imported and cleaned up but never settled. A
+    crash before this commit leaves the admitted reservation unattached,
+    which fails closed: it counts at its estimate in every cycle and the
+    spend report lists it `no_provider_run`. Lock order (MS2-D-35): the
+    budget lock, then the new provider_run, then the reservation row.
+    """
+    with transaction.atomic():
+        if reservation_id is not None:
+            take_budget_lock()
+        row = ProviderRun.objects.create(**fields)  # pyright: ignore[reportArgumentType]
+        if reservation_id is not None:
+            attached = ApifySpendReservation.objects.filter(
+                pk=reservation_id,
+                status=ReservationStatus.RESERVED,
+                provider_run__isnull=True,
+            ).update(provider_run=row)
+            if attached != 1:
+                # Rolls the row back: a run is never started against a
+                # reservation that is not this start's own open one.
+                raise RuntimeError(f"reservation {reservation_id} is not open and unattached")
+    return row
 
 
 def _record_start_error(provider_run_id: int, exc: Exception) -> None:
@@ -850,8 +949,9 @@ async def apify_poll_tick(
     the settings, and `clock` (the ledger's time source for selectors 2 and 4
     and every usage read) to timezone.now; tests pass both. A unit whose call
     answers over its byte cap trips `api_response_over_cap` and backs off.
-    Before any selector, pending selector-4 markers left by an earlier process
-    are resolved to PROCESS_STARTED_AT.
+    Pending selector-4 markers left by an earlier process are NOT resolved
+    here but once at poller start (poller.service.run): a marker this
+    process stamped must stay pending while its read is in flight.
     """
     # Imported here, not at module top: storage_cleanup builds on this module's
     # observation writer, so a top-level import would be circular.
@@ -932,7 +1032,6 @@ async def apify_poll_tick(
         return unit
 
     try:
-        await sync_to_async(reconcile.resolve_stale_monitoring_markers)(PROCESS_STARTED_AT)
         for pk in await sync_to_async(select_active)(now()):
             if await run_unit(pk, poll(pk)) is not None:
                 report.polled.append(pk)

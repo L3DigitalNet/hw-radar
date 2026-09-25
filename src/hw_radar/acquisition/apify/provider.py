@@ -10,7 +10,8 @@ CollectionProvider seam as a local adapter (ADR 0021, MS2-D-10):
   stored on the provider_run (`run_output`, MS2-D-14), never as a RawItem, so a
   proven-empty sweep is an empty batch that passes the zero-record guard. The
   run is classified here, once, by classify_run, and the classification is
-  written to the provider_run.
+  written to the provider_run. The record's byte size is exposed as
+  `output_record_bytes` so the importer can judge the MS2-D-32 KV byte cap.
 - parse admits each row through import_row: contract-valid, the run's own site
   and admitted scope, and within the serialized-row byte cap.
 - delist_scope returns a complete scope, keyed by the run's admitted
@@ -228,6 +229,10 @@ class ApifyImportProvider:
             settings.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES, MAX_LISTING_ROW_BYTES
         )
         self._classification: RunClassification | None = None
+        # Size of the OUTPUT body as read, None until fetch or when absent.
+        # Cross-file contract: importer._stage1 compares it with
+        # HW_RADAR_APIFY_MAX_KV_BYTES and trips `kv_store_over_cap`.
+        self.output_record_bytes: int | None = None
 
     def _admit(self, raw: object) -> ParsedListing | RowRejection:
         return import_row(
@@ -257,6 +262,7 @@ class ApifyImportProvider:
             )
         ]
         record = await self._client.get_record(run.kv_store_id, OUTPUT_RECORD_KEY)
+        self.output_record_bytes = None if record is None else len(record.body)
         output, stored = _decode_output(None if record is None else record.body)
         usable = sum(isinstance(self._admit(row), ParsedListing) for row in rows)
         classification = classify_run(status, output, len(rows), usable, admitted=self._admitted)

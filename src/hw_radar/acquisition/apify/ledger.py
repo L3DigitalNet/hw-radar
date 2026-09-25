@@ -41,8 +41,9 @@ counters through `sync_to_async` steps and makes its HTTP calls between them.
 
 SCOPE: settlement, usage reads, and selector 4 live in
 `acquisition.apify.reconcile` (E4), which builds on the lock, the cycle
-predicate, and the latch here; binding this ledger into the start job is E5
-(`jobs.BUDGET_ADMISSION` stays `DenyAllAdmission`); the spend report is E6.
+predicate, and the latch here; the start job's binding of this ledger is
+`jobs.LedgerAdmission` (E5), which calls `account_read_useful`,
+`refresh_account_snapshot`, then `reserve`; the spend report is E6.
 This module never calls Apify except through `refresh_account_snapshot`.
 
 Requirements: PostgreSQL (`pg_advisory_xact_lock`), a Django context with the
@@ -86,7 +87,12 @@ from hw_radar.acquisition.apify.budget import (
     project_allocation,
     standing_account_read_debit,
 )
-from hw_radar.acquisition.apify.client import AccountLimits, AccountPlan, ApifyError
+from hw_radar.acquisition.apify.client import (
+    AccountLimits,
+    AccountPlan,
+    ApifyError,
+    ApifyResponseTooLargeError,
+)
 from hw_radar.catalog.models import (
     AdmissionClass,
     ApifyBudgetCycle,
@@ -112,6 +118,7 @@ __all__ = [
     "LedgerRefused",
     "RefreshOutcome",
     "ReservationOutcome",
+    "account_read_useful",
     "claim_origin",
     "clear_latch",
     "current_cycle",
@@ -477,6 +484,7 @@ class LatchReason(StrEnum):
     POST_ADMISSION_INVARIANT_BREACH = "post_admission_invariant_breach"
     UNEXPECTED_USAGE_COMPONENT = "unexpected_usage_component"
     DATASET_OVER_CAP = "dataset_over_cap"
+    KV_STORE_OVER_CAP = "kv_store_over_cap"  # an OUTPUT record above MAX_KV_BYTES
     START_OPTION_MISMATCH = "start_option_mismatch"
     DELETE_ATTEMPTS_EXHAUSTED = "delete_attempts_exhausted"
     ORPHANED_START = "orphaned_start"
@@ -692,6 +700,23 @@ def reserve(
                 estimator_version=cfg.estimator_version,
             )
         return _persist(request, decision, source_site_id, cfg, now, reason)
+
+
+def account_read_useful(request: AdmissionRequest, *, config: LedgerConfig, now: datetime) -> bool:
+    """Whether refreshing the account snapshot could change `request`'s decision.
+
+    Runs the pure policy against a snapshot-less state: it denies
+    `cycle_unknown` exactly when every earlier rule (kill switch, latch, R38,
+    settings, the estimate's prices and caps) passed, so only then is an
+    account read worth its counted, priced call. Advisory and lock-free: the
+    authoritative decision is `reserve`, under the lock, afterwards.
+    """
+    probe = decide_admission(
+        request,
+        config.budget,
+        LedgerState(now=now, latch_tripped=latch_tripped(), authority_held=True, snapshot=None),
+    )
+    return probe.reason is DenialReason.CYCLE_UNKNOWN
 
 
 def _persist(
@@ -910,8 +935,9 @@ async def refresh_account_snapshot(
 
     Every read is counted and committed before it is sent. Transport and API
     failures return READ_FAILED after counting (admission then denies with
-    account_state_unobservable or cycle_unknown); any other exception
-    propagates, still counted. No transaction is open across an await.
+    account_state_unobservable or cycle_unknown); an answer over its byte cap
+    also trips `api_response_over_cap`. Any other exception propagates, still
+    counted. No transaction is open across an await.
     """
     config = config or load_ledger_config()
     at = now or timezone.now()
@@ -920,6 +946,9 @@ async def refresh_account_snapshot(
         return plan.outcome
     try:
         limits = await reader.get_account_limits()
+    except ApifyResponseTooLargeError:
+        await _trip_over_cap(config, at)
+        return RefreshOutcome.READ_FAILED
     except _READ_ERRORS as exc:
         logger.warning("apify account limits read failed: %s", type(exc).__name__)
         return RefreshOutcome.READ_FAILED
@@ -931,11 +960,22 @@ async def refresh_account_snapshot(
         return outcome or RefreshOutcome.CYCLE_NOT_COVERING
     try:
         account = await reader.get_account_plan()
+    except ApifyResponseTooLargeError:
+        await _trip_over_cap(config, at)
+        return RefreshOutcome.READ_FAILED
     except _READ_ERRORS as exc:
         logger.warning("apify account plan read failed: %s", type(exc).__name__)
         return RefreshOutcome.READ_FAILED
     await sync_to_async(_record_snapshot)(cycle_id, limits, account, at)
     return outcome or RefreshOutcome.REFRESHED
+
+
+async def _trip_over_cap(config: LedgerConfig, at: datetime) -> None:
+    # MS2-D-32 *Response caps* (ED-01): valid content never exceeds a cap, so
+    # an over-cap account read trips the latch like any other over-cap call,
+    # instead of reading as a transient failure that the next start retries.
+    logger.error("apify account read answered over its byte cap")
+    await sync_to_async(trip_latch)(LatchReason.API_RESPONSE_OVER_CAP, config=config, now=at)
 
 
 def discovery_status(config: LedgerConfig | None = None) -> str | None:

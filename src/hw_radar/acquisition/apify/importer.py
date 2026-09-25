@@ -36,8 +36,10 @@ stage-1 RE-read (dataset_read_count already >= 1) is not attempted: the row
 backs off visibly (`stage_detail.blocked_by_overrun_latch`) until the latch
 clears (MS2-D-22 *Overrun blocks repair reads*); the first read of a run is
 already reserved and still proceeds. A dataset longer than the run's
-`max_items` trips the latch (`dataset_over_cap`) in its own budget-locked
-transaction, before the stage-1 transaction starts (MS2-D-26 *Serialization*).
+`max_items` trips the latch (`dataset_over_cap`), and an OUTPUT record larger
+than HW_RADAR_APIFY_MAX_KV_BYTES trips it (`kv_store_over_cap`, MS2-D-32), each
+in its own budget-locked transaction, before the stage-1 transaction starts
+(MS2-D-26 *Serialization*).
 
 SCOPE: selection, backoff scheduling and storage cleanup belong to the jobs
 (D5) and cleanup (D11, acquisition.apify.storage_cleanup). This module neither polls the run nor deletes storage;
@@ -315,6 +317,16 @@ async def _stage1(row: ProviderRun, *, client: ApifyClient, actor_name: str) -> 
     if row.dataset_item_count is not None and row.dataset_item_count > row.max_items:
         # Its own budget-locked transaction, before the stage transaction.
         await sync_to_async(trip_latch)(LatchReason.DATASET_OVER_CAP, provider_run_id=row.pk)
+    kv_cap: int | None = settings.HW_RADAR_APIFY_MAX_KV_BYTES
+    # An unset cap cannot be judged; the ledger never admits a run while it
+    # is unset (the estimate denies `unbounded_component`), so only a
+    # test-only admission reaches here without one.
+    output_bytes = provider.output_record_bytes
+    if kv_cap is not None and output_bytes is not None and output_bytes > kv_cap:
+        # The reservation priced storage and transfer for at most MAX_KV_BYTES
+        # of OUTPUT, so a larger record is spend no bound covers.
+        logger.error("provider_run %s OUTPUT is %s bytes > %s", row.pk, output_bytes, kv_cap)
+        await sync_to_async(trip_latch)(LatchReason.KV_STORE_OVER_CAP, provider_run_id=row.pk)
     # fetch() wrote the classification onto `row` (the same instance).
     if row.completeness == RunCompleteness.FAILED.value:
         raise _Rejected(RejectReason.FAILED_RUN, row.completeness_reason)

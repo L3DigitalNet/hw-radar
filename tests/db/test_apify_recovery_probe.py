@@ -6,9 +6,11 @@ importer through a real apify_poll_tick. Every Apify call is served by an
 httpx.MockTransport (`FakeApify`), so no test touches the network.
 
 Budget admission is bound to the test-only AllowAllAdmission below by
-monkeypatching the start job the poller calls; production keeps
-DenyAllAdmission, which test_denied_actor_probe_starts_nothing_and_stays_paused
-exercises unpatched.
+monkeypatching the start job the poller calls, except in the E8 tests, which
+bind the real jobs.LedgerAdmission with the ledger_support settings and settle
+the probe through the real reconcile unit (MS2-D-24 with the real ledger).
+test_denied_actor_probe_starts_nothing_and_stays_paused runs the production
+binding unpatched, whose unset prices deny before any call.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from pathlib import Path
 from typing import Any, Final
 
 import httpx
+import ledger_support
 import pytest
 from django.test import override_settings
 from django.utils import timezone
@@ -34,17 +37,22 @@ from hw_radar.acquisition.apify.client import ApifyClient
 from hw_radar.acquisition.apify.contract import SyntheticCollectorInput
 from hw_radar.acquisition.apify.jobs import (
     ActorRunSpec,
+    BudgetAdmission,
     BudgetDecision,
     BudgetRequest,
+    LedgerAdmission,
     TickReport,
     apify_poll_tick,
     start_provider_run,
 )
+from hw_radar.acquisition.apify.ledger import AccountReader
 from hw_radar.acquisition.contracts import NullResolver, ParsedListing, RawBatch, RawItem
 from hw_radar.acquisition.scheduling.apply import RunOutcome, apply_run_outcome
 from hw_radar.acquisition.scheduling.buckets import BucketRegistry
 from hw_radar.acquisition.scheduling.lifecycle import LifecycleEvent
 from hw_radar.catalog.models import (
+    ApifyBudgetCycle,
+    ApifySpendReservation,
     LifecycleState,
     ProviderKind,
     ProviderRun,
@@ -56,7 +64,12 @@ from hw_radar.catalog.models import (
     SourceSite,
     SourceTier,
 )
-from hw_radar.catalog.models.provider import AdmissionClass, ImportState
+from hw_radar.catalog.models.provider import (
+    AdmissionClass,
+    ImportState,
+    ReservationStatus,
+    StorageState,
+)
 from hw_radar.poller import service
 
 # transaction=True: the jobs write from sync_to_async threads.
@@ -84,12 +97,12 @@ def _run[T](coro: Coroutine[Any, Any, T]) -> T:
 
 
 class AllowAllAdmission:
-    """Test-only budget admission; production binds DenyAllAdmission."""
+    """Test-only budget admission; production binds jobs.LedgerAdmission."""
 
     def __init__(self) -> None:
         self.requests: list[BudgetRequest] = []
 
-    def admit(self, request: BudgetRequest) -> BudgetDecision:
+    async def admit(self, request: BudgetRequest, reader: AccountReader) -> BudgetDecision:
         self.requests.append(request)
         return BudgetDecision(True)
 
@@ -175,9 +188,9 @@ def _specs() -> dict[str, Any]:
 
 
 def _bind_start(
-    monkeypatch: pytest.MonkeyPatch, fake: FakeApify, admission: AllowAllAdmission | None
+    monkeypatch: pytest.MonkeyPatch, fake: FakeApify, admission: BudgetAdmission | None
 ) -> None:
-    """Point the poller's start job at the fake, with `admission` (None: production DenyAll)."""
+    """Point the poller's start job at the fake, with `admission` (None: the production binding)."""
     monkeypatch.setattr(
         service,
         "start_provider_run",
@@ -228,8 +241,15 @@ def _probe(registry: BucketRegistry | None = None) -> None:
     _run(service.recovery_probe_job(registry or _registry()))
 
 
-def _tick(fake: FakeApify) -> TickReport:
-    return _run(apify_poll_tick(resolver=NullResolver(), client_factory=fake.client))
+def _tick(fake: FakeApify, clock: ledger_support.Clock | None = None) -> TickReport:
+    return _run(
+        apify_poll_tick(
+            resolver=NullResolver(),
+            client_factory=fake.client,
+            ledger_config=ledger_support.CONFIG,
+            clock=clock,
+        )
+    )
 
 
 def _state(site_key: str = SITE) -> LifecycleState:
@@ -448,7 +468,7 @@ def test_denied_actor_probe_starts_nothing_and_stays_paused(
     paused_actor_source: SourceConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakeApify(_fixture("complete"))
-    # No admission bound: start_provider_run uses the production DenyAllAdmission.
+    # No admission bound: the production LedgerAdmission, whose unset prices deny.
     _bind_start(monkeypatch, fake, None)
 
     _probe()
@@ -457,6 +477,13 @@ def test_denied_actor_probe_starts_nothing_and_stays_paused(
     assert not ProviderRun.objects.exists()
     assert not ScraperRun.objects.exists()
     assert _state() is LifecycleState.PAUSED_PENDING_FIX
+    # E5: the probe denial is a ledger row, not only a log line (MS2-D-17).
+    [denial] = ApifySpendReservation.objects.all()
+    assert (denial.status, denial.admission_class, denial.denial_reason) == (
+        ReservationStatus.DENIED,
+        AdmissionClass.DISCOVERY,
+        "pricing_unverified",
+    )
 
 
 @LIVE
@@ -527,3 +554,153 @@ def test_local_provider_probe_path_unchanged(monkeypatch: pytest.MonkeyPatch) ->
     run = ScraperRun.objects.get(source_site__normalized_name="demo")
     assert run.run_kind == RunKind.PROBE
     assert not ProviderRun.objects.exists()
+
+
+# ── E8: the probe under the real ledger (MS2-D-24, -17, -41) ─────────────────
+
+
+class LedgerFakeApify(FakeApify):
+    """FakeApify plus what the real ledger path calls: account reads and deletes.
+
+    Account reads answer a cycle around the real now (the start job stamps
+    real time), runs report a small allowlisted usage so bound-mode settlement
+    has an eligible non-null read, and storage deletes succeed.
+    """
+
+    USAGE: Final = "0.001"
+
+    def __init__(self, fixture: dict[str, Any], cycle: ApifyBudgetCycle) -> None:
+        super().__init__(fixture)
+        self.cycle = cycle
+
+    def account_reads(self) -> int:
+        return sum(1 for r in self.requests if r.url.path.startswith("/v2/users/me"))
+
+    def _run_body(self, run_id: str, status: str) -> dict[str, Any]:
+        body = super()._run_body(run_id, status)
+        body["data"]["usageTotalUsd"] = float(self.USAGE)
+        return body
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/v2/users/me/limits":
+            self.requests.append(request)
+            z = ledger_support._z  # pyright: ignore[reportPrivateUsage]
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "monthlyUsageCycle": {
+                            "startAt": z(self.cycle.cycle_start),
+                            "endAt": z(self.cycle.cycle_end),
+                        },
+                        "limits": {"maxMonthlyUsageUsd": 19, "dataRetentionDays": 31},
+                        "current": {"monthlyUsageUsd": 0.09},
+                    }
+                },
+            )
+        if path == "/v2/users/me":
+            self.requests.append(request)
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "plan": {
+                            "id": "STARTER",
+                            "monthlyBasePriceUsd": 19,
+                            "monthlyUsageCreditsUsd": 19,
+                        }
+                    }
+                },
+            )
+        if request.method == "DELETE":
+            self.requests.append(request)
+            return httpx.Response(204)
+        return super().__call__(request)
+
+
+def _live_cycle(*, observed: bool) -> ApifyBudgetCycle:
+    """A billing cycle covering the real now, with this environment's authority.
+
+    observed=False leaves the account snapshot unobserved, so admission must
+    refresh it through the fake before it can admit.
+    """
+    now = timezone.now().replace(microsecond=0)
+    cycle = ledger_support.cycle(
+        now - timedelta(days=1), now + timedelta(days=20), observed_at=now if observed else None
+    )
+    ledger_support.claim(cycle.cycle_start)
+    return cycle
+
+
+@LIVE
+def test_budget_admitted_actor_probe_recovers_source_with_ledger(
+    paused_actor_source: SourceConfig,
+    monkeypatch: pytest.MonkeyPatch,
+    outcomes: list[LifecycleEvent],
+) -> None:
+    cycle = _live_cycle(observed=False)
+    fake = LedgerFakeApify(_fixture("complete"), cycle)
+    _bind_start(monkeypatch, fake, LedgerAdmission(config=ledger_support.CONFIG))
+
+    _probe()
+
+    # The stale snapshot was refreshed (two counted account reads) before the start.
+    starts = [i for i, r in enumerate(fake.requests) if r.method == "POST"]
+    assert fake.account_reads() == 2 and starts == [2]
+    cycle.refresh_from_db()
+    assert cycle.account_read_count == 2 and cycle.account_observed_at is not None
+    row = _probe_row()
+    resv = ApifySpendReservation.objects.get(provider_run=row)
+    assert (resv.status, resv.admission_class, resv.source_site) == (
+        ReservationStatus.RESERVED,
+        AdmissionClass.DISCOVERY,
+        paused_actor_source.source_site,
+    )
+
+    _tick(fake)  # polls the terminal run, then imports it
+    assert _state() is LifecycleState.ACTIVE
+    assert outcomes == [LifecycleEvent.PROBE_SUCCESS]
+    _tick(fake)  # deletes storage: the second settlement barrier
+    row.refresh_from_db()
+    assert (row.import_state, row.storage_state) == (ImportState.FINALIZED, StorageState.DELETED)
+    assert row.final_charge_op_at is not None
+    # Past the settle delay and the cycle-boundary guard: one eligible read settles.
+    settle_at = ledger_support.Clock(row.final_charge_op_at + 2 * ledger_support.HOUR)
+    report = _tick(fake, settle_at)
+
+    assert report.reconciled == [row.pk]
+    resv.refresh_from_db()
+    assert resv.status == ReservationStatus.RECONCILED
+    assert resv.settlement_basis == "bound"
+    assert resv.actual_usd is not None and resv.estimate_usd is not None
+    assert resv.actual_usd <= resv.estimate_usd
+    assert ledger_support.open_latches() == []
+
+
+@LIVE
+def test_probe_denied_when_discovery_exhausted(
+    paused_actor_source: SourceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cycle = _live_cycle(observed=True)
+    budget = ledger_support.BUDGET
+    discovery_cap = ledger_support.ALLOCATION - (budget.watch_refresh_reserve_usd or Decimal(0))
+    # Leaves $0.0001 of the discovery class: no probe fits, while the
+    # watch_refresh reserve above it is untouched (discovery degrades first).
+    ledger_support.open_row(
+        discovery_cap - ledger_support.STANDING - Decimal("0.0001"), cycle.cycle_start
+    )
+    fake = LedgerFakeApify(_fixture("complete"), cycle)
+    _bind_start(monkeypatch, fake, LedgerAdmission(config=ledger_support.CONFIG))
+
+    _probe()
+
+    assert fake.requests == []  # fresh snapshot: no account read, and no start
+    assert not ProviderRun.objects.exists()
+    denial = ApifySpendReservation.objects.get(status=ReservationStatus.DENIED)
+    assert (denial.admission_class, denial.denial_reason, denial.source_site) == (
+        AdmissionClass.DISCOVERY,
+        "class_cap",
+        paused_actor_source.source_site,
+    )
+    assert _state() is LifecycleState.PAUSED_PENDING_FIX

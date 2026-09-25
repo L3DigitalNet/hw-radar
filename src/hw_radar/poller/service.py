@@ -35,7 +35,9 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
+from hw_radar.acquisition.apify import jobs as apify_jobs
 from hw_radar.acquisition.apify.jobs import APIFY_POLL_SECONDS, apify_poll_tick, start_provider_run
+from hw_radar.acquisition.apify.reconcile import resolve_stale_monitoring_markers
 from hw_radar.acquisition.contracts import adapter_retention
 from hw_radar.acquisition.heartbeat import HeartbeatProbe, run_heartbeat
 from hw_radar.acquisition.pipeline import run_source
@@ -484,14 +486,35 @@ def build_scheduler(
     return scheduler
 
 
+def resolve_stale_ledger_markers() -> int:
+    """Resolve selector-4 pending markers an earlier poller process left (MS2-D-34).
+
+    Called once by run() before the scheduler starts, so no apify-poll tick of
+    this process can have stamped a marker yet: every marker older than
+    jobs.PROCESS_STARTED_AT belongs to a process that is gone. Rejected
+    alternative: resolving at every tick, which the E4 hand-off did; it is
+    correct only while this process's own markers are newer than its start,
+    and it spends a budget-locked transaction per tick for a once-per-process
+    event. Returns the count.
+    """
+    return resolve_stale_monitoring_markers(apify_jobs.PROCESS_STARTED_AT)
+
+
 async def run(configs: Sequence[SourceConfig] | None = None, *, checkpoint: bool = True) -> None:
     """checkpoint=False + configs=[] is the unit-test mode: no ORM call on the
-    startup/shutdown path itself (no bucket load/save, no config query, and
-    load_schedules over an empty sequence queries nothing either). The
-    registered service jobs (FX refresh, checkpoints, probes) do touch the DB —
-    but only when they fire, which a short-lived unit run never reaches
-    (tests/unit/test_poller.py drives run(configs=[], checkpoint=False))."""
+    startup/shutdown path itself (no bucket load/save, no stale ledger-marker
+    resolution, no config query, and load_schedules over an empty sequence
+    queries nothing either). The registered service jobs (FX refresh,
+    checkpoints, probes) do touch the DB — but only when they fire, which a
+    short-lived unit run never reaches (tests/unit/test_poller.py drives
+    run(configs=[], checkpoint=False))."""
     install_asyncio_reactor()  # before APScheduler starts; Scrapy shares this loop
+    if checkpoint:
+        # Before scheduler.start(): the first apify-poll tick must already see
+        # every dead process's marker resolved (resolve_stale_ledger_markers).
+        resolved = await sync_to_async(resolve_stale_ledger_markers)()
+        if resolved:
+            logger.info("resolved %s stale apify monitoring marker(s)", resolved)
     registry = (
         await sync_to_async(load_buckets)(now_s=time.monotonic())
         if checkpoint
