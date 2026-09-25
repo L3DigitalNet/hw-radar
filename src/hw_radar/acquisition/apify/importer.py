@@ -33,9 +33,9 @@ it honours next_attempt_at only by writing it on retry exhaustion. The overrun
 latch (MS2-D-22 *Overrun blocks repair reads*) is Slice E's and is not
 consulted here yet.
 
-Requirements: PostgreSQL (acquisition.stages) and a Django context. The
-read caps are read from settings when defined (HW_RADAR_APIFY_MAX_DATASET_READS,
-HW_RADAR_APIFY_MAX_KV_READS) and default to MS2-D-32's assumed 3 otherwise.
+Requirements: PostgreSQL (acquisition.stages), a Django context, and the
+read caps settings.HW_RADAR_APIFY_MAX_DATASET_READS and
+HW_RADAR_APIFY_MAX_KV_READS (MS2-D-32).
 """
 
 from __future__ import annotations
@@ -99,8 +99,6 @@ from hw_radar.eligibility import ListingEvaluator, WatchEvaluator
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_DATASET_READS: Final = 3  # MS2-D-32 assumption
-DEFAULT_MAX_KV_READS: Final = 3  # MS2-D-32 assumption
 # Backoff written on in-memory retry exhaustion; D5's selector honours it.
 RETRY_EXHAUSTED_BACKOFF: Final = timedelta(minutes=5)
 
@@ -143,11 +141,6 @@ class _Rejected(Exception):
 
 class _StateMoved(Exception):
     """Internal: the compare-and-set found another executor already advanced the row."""
-
-
-def _max_reads(name: str, default: int) -> int:
-    value = getattr(settings, name, default)
-    return value if isinstance(value, int) else default
 
 
 async def import_provider_run(
@@ -250,8 +243,8 @@ def _count_reads(provider_run_id: int) -> None:
     """
     with transaction.atomic():
         row = _lock(provider_run_id, ImportState.PENDING)
-        max_dataset = _max_reads("HW_RADAR_APIFY_MAX_DATASET_READS", DEFAULT_MAX_DATASET_READS)
-        max_kv = _max_reads("HW_RADAR_APIFY_MAX_KV_READS", DEFAULT_MAX_KV_READS)
+        max_dataset: int = settings.HW_RADAR_APIFY_MAX_DATASET_READS
+        max_kv: int = settings.HW_RADAR_APIFY_MAX_KV_READS
         if row.dataset_read_count >= max_dataset or row.kv_read_count >= max_kv:
             raise _Rejected(
                 RejectReason.READ_CAP_EXHAUSTED,

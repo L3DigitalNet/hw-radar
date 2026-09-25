@@ -159,26 +159,6 @@ def effective_absence(listing: Listing) -> datetime | None:
     return max(stamps) if stamps else None
 
 
-def mark_absent(listing: Listing, reason: DelistReason, *, when: datetime) -> bool:
-    """Delist `listing` and raise its absence watermark to `when`; False if already delisted.
-
-    The watermark is raised in the same transaction as the mark (the caller's),
-    never lowered. It is written here rather than inside Listing.mark_delisted
-    because the ordering-guarded paths (the delist stage and the delisted
-    creation anchor) are its only readers today; a delist through any other
-    path is still covered by delisted_at in effective_absence.
-    """
-    # Rejected: moving this into Listing.mark_delisted. That is the MS2-D-35
-    # target shape, but D10's scope does not own the catalog model methods;
-    # until it moves, every guarded delist must come through this function.
-    if not listing.mark_delisted(reason, when=when):
-        return False
-    if listing.last_absence_at is None or listing.last_absence_at < when:
-        listing.last_absence_at = when
-        listing.save(update_fields=["last_absence_at"])
-    return True
-
-
 @dataclass(frozen=True, slots=True)
 class Observation:
     """What observe_listing did with one record.
@@ -237,7 +217,7 @@ def observe_listing(
         created = True
         if not eligible:
             assert scope_complete_sweep_at is not None  # implied by not eligible
-            mark_absent(listing, DelistReason.ABSENT_FROM_SWEEP, when=scope_complete_sweep_at)
+            listing.mark_delisted(DelistReason.ABSENT_FROM_SWEEP, when=scope_complete_sweep_at)
             absence_after = scope_complete_sweep_at
     else:
         listing = existing

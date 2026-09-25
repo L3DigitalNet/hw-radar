@@ -18,6 +18,9 @@ Environment contract (see .env.example for dev values):
   HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES
                             optional; byte cap of every other Apify response body
                             (control calls and KV records; default 262144)
+  HW_RADAR_APIFY_MAX_DATASET_READS / HW_RADAR_APIFY_MAX_KV_READS
+                            optional; per-run caps on full dataset reads and OUTPUT
+                            record reads (default 3 each, MS2-D-32 *Operation caps*)
 Production values arrive via the bao-agent tmpfs render (systemd
 EnvironmentFile=/run/bao-agent/hw-radar.env) - never a plaintext file at rest.
 """
@@ -169,6 +172,12 @@ HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES = int(
 HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES = int(
     os.environ.get("HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES", "262144")
 )
+# MS2-D-32 *Operation caps* (3 each, an assumption): the most full dataset reads
+# and OUTPUT record reads one provider_run may spend. The importer counts each
+# read before sending it, so a crash loop cannot re-read a paid dataset without
+# bound; at the cap the import is rejected with read_cap_exhausted.
+HW_RADAR_APIFY_MAX_DATASET_READS = int(os.environ.get("HW_RADAR_APIFY_MAX_DATASET_READS", "3"))
+HW_RADAR_APIFY_MAX_KV_READS = int(os.environ.get("HW_RADAR_APIFY_MAX_KV_READS", "3"))
 
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"

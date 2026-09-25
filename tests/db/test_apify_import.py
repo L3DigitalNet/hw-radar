@@ -26,6 +26,7 @@ from typing import Any, Final, cast
 
 import httpx
 import pytest
+from django.conf import settings
 from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
@@ -871,7 +872,7 @@ def test_read_cap_exhausted_rejects_import_and_cleans_up(
 ) -> None:
     site, row, fixture = crash_setup
     ProviderRun.objects.filter(pk=row.pk).update(
-        dataset_read_count=importer.DEFAULT_MAX_DATASET_READS
+        dataset_read_count=settings.HW_RADAR_APIFY_MAX_DATASET_READS
     )
     fake = _fake(fixture)
 
@@ -879,7 +880,7 @@ def test_read_cap_exhausted_rejects_import_and_cleans_up(
 
     row.refresh_from_db()
     assert row.stage_detail["reject_reason"] == "read_cap_exhausted"
-    assert row.dataset_read_count == importer.DEFAULT_MAX_DATASET_READS
+    assert row.dataset_read_count == settings.HW_RADAR_APIFY_MAX_DATASET_READS
     assert fake.dataset_requests == []
     assert _counts(site) == (0, 0, 0)
     run = ScraperRun.objects.get(source_site=site)
@@ -1091,3 +1092,78 @@ def test_resolver_errors_are_counted_and_skip_evaluation(
     run = ScraperRun.objects.get(source_site=site)
     assert run.detail_json["resolver_errors"] == len(fixture["datasetItems"])
     assert evaluator.calls == []
+
+
+# ── Dataset page size (R10-08) ────────────────────────────────────────────────
+
+_ASTRAL: Final = "\U0001f600"  # 12 bytes under ensure_ascii=True: the dearest code point
+
+
+def _max_size_row(template: dict[str, Any], index: int) -> dict[str, Any]:
+    """A contract-valid row with every free-text field at maxLength in astral code points.
+
+    Fields with a pattern (keys, price, scope, timestamps) keep the template's
+    valid values; everything the schema bounds only by length is filled to the
+    bound, so the row's escaped serialization approaches MAX_LISTING_ROW_BYTES
+    while import_row still admits it.
+    """
+    row = dict(template)
+    suffix = f"-{index:04d}"
+    row["sourceListingKey"] = _ASTRAL * (255 - len(suffix)) + suffix
+    row["url"] = "https://" + _ASTRAL * (1000 - len("https://"))
+    row["title"] = _ASTRAL * 500
+    row["sellerName"] = _ASTRAL * 200
+    row["conditionLabel"] = _ASTRAL * 255
+    row["mpn"] = _ASTRAL * 100
+    row["categoryHint"] = "drive"
+    return row
+
+
+def test_max_size_valid_batch_imports_without_tripping_response_cap(
+    synthetic_site: SourceSite,
+) -> None:
+    fixture = copy.deepcopy(_fixture("complete"))
+    rows = [_max_size_row(fixture["datasetItems"][0], i) for i in range(500)]
+    limit = page_limit(settings.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES, MAX_LISTING_ROW_BYTES)
+    pages = -(-len(rows) // limit)
+    scope = fixture["admitted"]["queryScope"]
+    scope.update(maxItems=500, maxPages=50)
+    fixture["output"]["queryScope"] = dict(scope)
+    fixture["output"]["completeness"].update(
+        pagesDeclared=pages, pagesFetched=pages, itemsDeclared=500, itemsEmitted=500
+    )
+    row = _provider_run(synthetic_site, fixture)
+    page_bytes: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/v2/datasets/{DATASET}/items":
+            offset = int(request.url.params["offset"])
+            count = int(request.url.params["limit"])
+            # Escaped and indented: the most bytes these rows can occupy on the
+            # wire, which is what the page_limit derivation must cover.
+            body = json.dumps(rows[offset : offset + count], ensure_ascii=True, indent=2)
+            page_bytes.append(len(body))
+            return httpx.Response(
+                200,
+                content=body.encode("ascii"),
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Apify-Pagination-Total": str(len(rows)),
+                },
+            )
+        return FakeApify([], fixture["output"])(request)
+
+    client = ApifyClient(TOKEN, transport=httpx.MockTransport(handler))
+    state = _run(
+        import_provider_run(row.pk, client=client, actor_name=ACTOR, resolver=NullResolver())
+    )
+
+    row.refresh_from_db()
+    assert state is ImportState.FINALIZED, row.stage_detail
+    assert row.completeness == RunCompleteness.COMPLETE
+    assert Listing.objects.filter(source_site=synthetic_site).count() == 500
+    assert len(page_bytes) == pages
+    assert max(page_bytes) <= settings.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES
+    # The rows really are near the worst case, not a trivially small batch.
+    assert max(page_bytes) > settings.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES // 2
+    assert row.dataset_read_count == 1

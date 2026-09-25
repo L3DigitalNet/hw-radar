@@ -7,31 +7,43 @@ one such interleaving at explicit event times through the extracted stages
 
 from __future__ import annotations
 
+import asyncio
+import json
 import threading
 import time
 from collections.abc import Callable
-from typing import Any
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Final
 
+import httpx
 import pytest
 from django.db import connection
 from django.utils import timezone
 from ordering_support import HOUR, T0, listing, make_site, observe, record, sweep
 
 from hw_radar.acquisition import stages
+from hw_radar.acquisition.apify.client import ApifyClient
+from hw_radar.acquisition.apify.importer import import_provider_run
+from hw_radar.acquisition.contracts import NullResolver
 from hw_radar.acquisition.scheduling.apply import RunOutcome, apply_run_outcome
 from hw_radar.acquisition.scheduling.lifecycle import LifecycleEvent
 from hw_radar.catalog.models import (
     DelistReason,
     OfferSnapshot,
+    ProviderRun,
     RetentionClass,
     SchedulingLane,
     SourceConfig,
     SourceLaneState,
+    SourceSite,
 )
+from hw_radar.catalog.models.provider import AdmissionClass, ImportState
 
 pytestmark = pytest.mark.django_db
 
 S = "d10order:gpu:q1"
+ACTOR = "hw-radar-synthetic-collector"
 T1, T2 = T0 + HOUR, T0 + 2 * HOUR
 
 
@@ -104,7 +116,7 @@ def test_delayed_observation_after_newer_delist_restores_no_content_and_keeps_ex
     else:
         x = listing(site, "x")
         assert x.mark_delisted(DelistReason.ABSENT_STALE, when=T2)
-        type(x).objects.filter(pk=x.pk).update(last_absence_at=T2)
+    assert listing(site, "x").last_absence_at == T2
     before = listing(site, "x")
 
     observe(site, T1, [record("x", title="late", scope=S)], retention_class)
@@ -207,6 +219,23 @@ def test_delayed_remote_import_after_switch_back_to_local_preserves_newer_conten
     )
     if retention_class is RetentionClass.EBAY_LISTING_OBSERVATION:
         assert y.is_content_redacted()
+
+
+def test_absence_watermark_survives_a_relist_on_every_delist_path() -> None:
+    # Listing.mark_delisted raises last_absence_at itself, so a delist made
+    # outside the pipeline (an operator, a future path) still bounds a delayed
+    # observation after mark_relisted has cleared delisted_at.
+    site = make_site()
+    observe(site, T0, [record("x", scope=S)])
+    x = listing(site, "x")
+    assert x.mark_delisted(DelistReason.ABSENT_STALE, when=T2)
+    assert x.mark_relisted()
+
+    observe(site, T1, [record("x", title="late", scope=S)])
+
+    x = listing(site, "x")
+    assert x.last_absence_at == T2
+    assert x.title_raw == "Drive"
 
 
 # ── Concurrency under the MS2-D-35 lock order (revision 4 and 10) ─────────────
@@ -344,37 +373,118 @@ def test_run_outcome_and_stage1_interleave_without_deadlock(
     assert listing(site, "x").delisted_at is None
 
 
+_FIXTURE_DIR: Final = Path(__file__).resolve().parents[1] / "fixtures" / "apify_contract" / "v1"
+
+
+def _import_fixture(scope: str, keys: list[str], run_id: str) -> dict[str, Any]:
+    """The Actor's complete fixture, re-keyed to `keys` and re-scoped to `scope`."""
+    fixture = json.loads((_FIXTURE_DIR / "complete.json").read_text(encoding="utf-8"))
+    template = fixture["datasetItems"][0]
+    fixture["datasetItems"] = [
+        {**template, "sourceListingKey": key, "collectionScope": scope} for key in keys
+    ]
+    for query in (fixture["admitted"]["queryScope"], fixture["output"]["queryScope"]):
+        query["collectionScope"] = scope
+    fixture["output"]["completeness"].update(itemsDeclared=len(keys), itemsEmitted=len(keys))
+    fixture["runId"] = run_id
+    return fixture
+
+
+def _admitted_run(site: SourceSite, fixture: dict[str, Any], started: datetime) -> ProviderRun:
+    query = fixture["admitted"]["queryScope"]
+    now = timezone.now()
+    return ProviderRun.objects.create(
+        source_site=site,
+        external_run_id=fixture["runId"],
+        import_idempotency_key=f"apify:{fixture['runId']}",
+        actor_ref=fixture["admitted"]["actorName"],
+        contract_schema_version="hw-radar-run/v1",
+        query_scope=query,
+        scope_key=query["collectionScope"],
+        memory_mb=256,
+        timeout_s=120,
+        max_items=query["maxItems"],
+        max_pages=query["maxPages"],
+        admission_class=AdmissionClass.WATCH_REFRESH,
+        admitted_at=started - HOUR,
+        remote_status=fixture["remoteStatus"],
+        started_at=started,
+        dataset_id="ds-overlap",
+        kv_store_id="kv-overlap",
+        storage_cleanup_due_at=now + 24 * HOUR,
+    )
+
+
+def _serve(fixture: dict[str, Any]) -> Callable[[httpx.Request], httpx.Response]:
+    rows = fixture["datasetItems"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/datasets/ds-overlap/items":
+            offset, limit = int(request.url.params["offset"]), int(request.url.params["limit"])
+            return httpx.Response(
+                200,
+                json=rows[offset : offset + limit],
+                headers={"X-Apify-Pagination-Total": str(len(rows))},
+            )
+        if request.url.path == "/v2/key-value-stores/kv-overlap/records/OUTPUT":
+            return httpx.Response(200, json=fixture["output"])
+        return httpx.Response(500, json={"error": {"type": "unexpected", "message": "path"}})
+
+    return handler
+
+
 @pytest.mark.django_db(transaction=True, serialized_rollback=True)
 def test_overlapping_scopes_sharing_listings_do_not_deadlock_or_consume_read_cap() -> None:
-    site = make_site()
-    keys = [f"k{i:02d}" for i in range(20)]
+    # The synthetic site is the one site the importer's retention registry
+    # admits; it gets a SourceConfig here so the NULL scope has its lane row.
+    site = make_site("synthetic")
+    keys = [f"syn-overlap-{i:02d}" for i in range(20)]
     observe(site, T0, [record(k) for k in keys])
-    other = "d10order:gpu:q2"
-    t1 = T0 + HOUR
-    # Two scoped stage-1 transactions on disjoint scopes and one local NULL-scope
-    # persist, all touching the same listings, submitted in different key orders.
-    batches = [
-        [record(k, scope=S) for k in keys],
-        [record(k, scope=other) for k in reversed(keys)],
-        [record(k) for k in keys[::2] + keys[1::2]],
+    scope_a, scope_b = "synthetic:hdd:catalog", "synthetic:hdd:other"
+    imports = [
+        (_import_fixture(scope_a, keys, "run-overlap-a"), T0 + HOUR),
+        (_import_fixture(scope_b, list(reversed(keys)), "run-overlap-b"), T0 + 2 * HOUR),
     ]
-    barrier = threading.Barrier(len(batches))
+    rows = [_admitted_run(site, fixture, started) for fixture, started in imports]
+    barrier = threading.Barrier(len(rows) + 1)
 
-    def run(batch: list[Any]) -> Callable[[], object]:
+    def run_import(row: ProviderRun, fixture: dict[str, Any]) -> Callable[[], object]:
         def work() -> object:
+            client = ApifyClient(
+                "apify_api_overlap", transport=httpx.MockTransport(_serve(fixture))
+            )
             barrier.wait(10)
-            return observe(site, t1, batch)
+            return asyncio.run(
+                import_provider_run(
+                    row.pk, client=client, actor_name=ACTOR, resolver=NullResolver()
+                )
+            )
 
         return work
 
-    started = [_in_thread(run(batch)) for batch in batches]
-    for thread, errors in started:
-        thread.join(30)
+    def local_persist() -> object:
+        barrier.wait(10)
+        # A local NULL-scope persist overlapping both scoped stage-1 transactions,
+        # in yet another key order.
+        return observe(site, T0 + 3 * HOUR, [record(k) for k in keys[::2] + keys[1::2]])
+
+    threads = [
+        _in_thread(run_import(row, fixture))
+        for row, (fixture, _) in zip(rows, imports, strict=True)
+    ]
+    threads.append(_in_thread(local_persist))
+    for thread, errors in threads:
+        thread.join(60)
         # Every conflict was either ordered by the lock order or absorbed by the
         # in-memory retry; nothing escaped (a stage-1 escape would cost a read).
         assert not thread.is_alive()
         assert not errors, errors
-    assert OfferSnapshot.objects.filter(listing__source_site=site, observed_at=t1).count() == 20
+    for row in rows:
+        row.refresh_from_db()
+        assert row.import_state == ImportState.FINALIZED, row.stage_detail
+        assert row.dataset_read_count == 1
+        assert "retry_exhausted" not in row.stage_detail
+    assert OfferSnapshot.objects.filter(listing__source_site=site).count() == 4 * len(keys)
 
 
 @pytest.mark.django_db(transaction=True, serialized_rollback=True)

@@ -39,7 +39,6 @@ from django.db.models import Q
 from hw_radar.acquisition.contracts import DelistScope, NormalizedListing, RawBatch
 from hw_radar.acquisition.persist import (
     ObservationRetention,
-    mark_absent,
     observe_listing,
     store_raw,
 )
@@ -454,7 +453,7 @@ def apply_delist(site: SourceSite, scope: DelistScope, continuous_since: datetim
         candidates = candidates.filter(last_seen__lt=stale_cutoff)
     delisted = 0
     for listing in candidates.order_by("pk"):
-        if mark_absent(listing, reason, when=scope.observed_at):
+        if listing.mark_delisted(reason, when=scope.observed_at):
             delisted += 1
     return delisted
 

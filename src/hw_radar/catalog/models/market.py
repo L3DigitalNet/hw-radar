@@ -371,6 +371,9 @@ class Listing(RetentionGoverned):
         merchant content in the same transaction (see REDACTED_CONTENT_FIELDS).
         The three writes are atomic so a crash cannot leave a listing marked
         terminal while still holding content the mark says we have retired.
+
+        Also raises last_absence_at to the delist instant (MS2-D-35); the
+        acquisition ordering guards read it through persist.effective_absence.
         """
         if self.delisted_at is not None:
             return False
@@ -379,6 +382,13 @@ class Listing(RetentionGoverned):
             self.delisted_at = stamp
             self.delist_reason = reason
             fields = ["delisted_at", "delist_reason"]
+            # MS2-D-35 absence watermark: raised here, never lowered, and never
+            # cleared by mark_relisted, so the ordering guards still see this
+            # delist after a relist clears delisted_at. Raising it on every delist
+            # path is why it lives in this method rather than in one caller.
+            if self.last_absence_at is None or self.last_absence_at < stamp:
+                self.last_absence_at = stamp
+                fields.append("last_absence_at")
             bounded = self.retention_class in {c.value for c in BOUNDED_RETENTION_CLASSES}
             # A bounded row always has a non-NULL expires_at (retention_ttl_coherent),
             # so this comparison is safe; only ever pull the TTL forward, never extend.
