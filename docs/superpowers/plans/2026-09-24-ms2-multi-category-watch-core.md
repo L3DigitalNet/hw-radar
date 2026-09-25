@@ -7033,6 +7033,11 @@ follow-up R12-01).**
   with `harvest_corpus`. Its hint round trip landed in B6 (MS2-D-27), so the
   harvested entries replay through their own category rules. F4 changes no
   tooling. Labeling and ratification are owner-in-the-loop, as in MS-1e.
+  - **Harvest landed 2026-09-25:** `harvest_corpus --source ebay` wrote 1,888
+    unlabeled entries (GPU 851, RAM 991, CPU 16, drive 30) to the git-ignored
+    `.harvest/f4-ebay/`. eBay is the only source with category sweeps. CPU is thin
+    because the pilot sweep queries one model; widen `CATEGORY_SWEEPS` before
+    labeling if the owner wants a broader CPU corpus.
 - **F5 — Actor proof.** Revision 5 (owner-clarified (s2, 2026-09-24); OQ24
   split) replaces revision 4's single owner-gated merchant proof with two tasks.
   Revision 4's step "open the Actor PR in the separate Actor repository" is

@@ -110,6 +110,8 @@ After each flip:
 Enable order: **ServerPartDeals → goHardDrive → WD → Seagate → eBay.**
 ServerPartDeals and Seagate are blocked by OQ31 until the owner decides (see below).
 eBay is last and, per below, stays blocked after the other four are live.
+Because eBay is the only source with GPU/RAM/CPU sweeps, this order blocks every category watch
+while OQ31 is open; revising it is an owner decision recorded with OQ31.
 
 ### eBay go-live block (CR-004) — status update 2026-08-16
 

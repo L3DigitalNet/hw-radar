@@ -21,7 +21,7 @@
   five-source floor), and the ADR-0019 decision remain. Packet:
   `docs/evidence/2026-09-25-ms1e-audit-packet.md`.
 - **MS-2 plan** (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`) is at
-  revision 11 plus landing notes; review lineage in `docs/handoff/specs-plans.md`.
+  revision 12 plus landing notes; review lineage in `docs/handoff/specs-plans.md`.
 - **Slices A–C:** seams, first-class GPU/RAM/CPU categories (0018-0019, first-party seeds CPU 9 /
   GPU 8 / RAM 2), eligibility + shortlist read model (0020, `EVALUATOR_VERSION` `ms2c.2`).
   **Deployed 2026-09-25** (bug 001 fixed); evidence in `docs/handoff/deployed.md`.
@@ -38,12 +38,11 @@
   +$0.00527 account usage for the whole proof. Evidence: `docs/evidence/2026-09-25-f5a-synthetic-proof.md`.
 - **F-01 (owner-approved):** `HW_RADAR_APIFY_MAX_KV_WRITES` is 3; admission denies values below the
   two-write floor (`f8b8067`).
-- **F1–F3 on `dev` (2026-09-25, not deployed):** eBay GPU/RAM/CPU category sweeps with per-scope
-  absence. Only single-page sweeps can prove complete. Category IDs and the 5,000/day Browse quota
-  were re-verified live. F2 made no change: ServerPartDeals' terms prohibit automated collection.
-  `pilot_report` added. A live pilot into a scratch DB found 0% condition coverage and unseeded
-  category catalogs. It also found and fixed two connector defects (goHardDrive URL/selector, and
-  the Scrapy DNS thread pool). Evidence: `docs/evidence/2026-09-25-f1-f3-pilot.md`.
+- **F1–F4 on `dev` (2026-09-25, not deployed):** eBay GPU/RAM/CPU category sweeps with per-scope
+  absence; only single-page sweeps prove complete; category IDs and the 5,000/day quota re-verified
+  live. F2: no change (ServerPartDeals' terms prohibit it). `pilot_report` added; the scratch-DB pilot
+  found 0% condition coverage, unseeded category catalogs, and two connector defects (fixed). F4:
+  1,888 unlabeled eBay entries in git-ignored staging. Evidence: `docs/evidence/2026-09-25-f1-f3-pilot.md`.
 - **Production still cannot start or pay for an Actor run:** no Actor id, prices, account settings,
   ledger authority, or token rendered; kill switch off. The proof environment keeps the cycle's
   ledger authority until its correction monitoring closes (2026-10-02 ~21:09Z) and a handoff runs.

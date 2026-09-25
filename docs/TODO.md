@@ -85,12 +85,22 @@ Instructions for AI agents:
   (`test_provider_switch_preserves_identity_history_and_watch_state`, AC-4).
 - [ ] MS-1e drive-matcher ratification: harvest and draft labels are done (2026-09-25,
   `docs/evidence/2026-09-25-ms1e-audit-packet.md`; provisional FAIL, 17 of 100 required
-  auto-accepts). Waiting on the owner: audit the 36 listed ids, decide the labeling rule (R2) and
-  OQ32. Then run the full verification gate and flip ADR-0019 only on a composite PASS.
+  auto-accepts). Waiting on the owner: audit the 36 listed ids; decide the labeling rule (R2),
+  OQ32, whether the `ebay-0021` ("comparable to") and `ghd-0006` (Constellation read as Exos) traps
+  get a veto or grammar fix with a `matcher_version` bump, how to close the WD part-number-in-SKU
+  gap, and which catalog the in-repo gate evaluates against (fixture vs production refdata give
+  opposite answers). Then run the full verification gate and flip ADR-0019 only on a composite PASS.
 - [ ] Add category-specific validation corpora/gates before auto-accepting GPU/RAM/CPU matches;
-  drive-corpus precision does not validate other categories.
+  drive-corpus precision does not validate other categories. F4 harvest done 2026-09-25: eBay,
+  1,888 unlabeled entries (GPU 851, RAM 991, CPU 16, drive 30) in the git-ignored
+  `.harvest/f4-ebay/` on the workstation; regenerate with `manage.py harvest_corpus --source ebay
+  --out .harvest/f4-ebay`. Labeling and ratification are owner work (R4); CPU coverage is thin
+  because the pilot sweep queries only "EPYC 7302".
 - [ ] Deliberately enable each source × category combination only after its operational,
-  retention/ToS, completeness, match-quality, and cost gates pass.
+  retention/ToS, completeness, match-quality, and cost gates pass. Before the first flip, an
+  operator must check the SA-004 list in `docs/handoff/deployed.md` against the live system (still
+  unchecked). The documented enable order puts eBay last, and eBay is the only category source,
+  so a GPU/RAM/CPU watch also needs the owner to revise that order (recorded with OQ31).
 - [ ] Re-verify eBay category IDs (27386, 170083, 11210, 164, 56088) through the Taxonomy API
   quarterly and on eBay category-change notices (last 2026-09-25, tree 0, version 134).
 - [ ] Add the remaining SanDisk/WD real-corpus alias verification; blocked on the owner-gated

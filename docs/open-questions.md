@@ -86,7 +86,9 @@ connectors, whose current Terms prohibit the automated collection they perform.
   MS-1e on 2026-09-25.
 - Consequences if they stay unusable: the SA-004 enable order in `docs/handoff/deployed.md` starts
   with ServerPartDeals, and the MS-1e ratification gate requires a family-grain hit from each of
-  five named sources, including both (see OQ32).
+  five named sources, including both (see OQ32). The same order enables eBay last, after the other
+  four, yet eBay is the only source with GPU/RAM/CPU sweeps. With ServerPartDeals and Seagate
+  blocked, a category source cannot go live unless the owner also revises that order.
 - Options: (a) retire both connectors (remove from the registry and enable order; keep code history);
   (b) keep them disabled pending written permission from each merchant; (c) owner accepts the risk
   for a private, low-volume personal tool (not recommended: the clauses are explicit).
