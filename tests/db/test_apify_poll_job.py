@@ -555,6 +555,96 @@ def test_start_refusals_spend_nothing(config: SourceConfig, case: str, reason: s
     assert not ProviderRun.objects.exists()
 
 
+_UNDECIDED_IMPORT: Final = [
+    state for state in ImportState if state not in (ImportState.FINALIZED, ImportState.REJECTED)
+]
+
+
+@LIVE
+@pytest.mark.parametrize("state", _UNDECIDED_IMPORT, ids=str)
+def test_full_start_refused_while_same_scope_run_outstanding(
+    config: SourceConfig, state: ImportState
+) -> None:
+    earlier = _row(config.source_site, import_state=state)
+    fake = FakeApify()
+
+    # The production ledger binding, not AllowAll: it records a denial row for
+    # every request it sees and would read the account, so an empty ledger and
+    # an empty request log prove the refusal came before budget admission.
+    result = _run(start_provider_run(config, run_specs=_specs(), client_factory=fake.client))
+
+    assert (result.status, result.reason) == (StartStatus.REFUSED, "scope_run_outstanding")
+    assert fake.requests == []
+    assert not ApifySpendReservation.objects.exists()
+    assert list(ProviderRun.objects.values_list("pk", flat=True)) == [earlier.pk]
+
+
+@LIVE
+def test_full_start_refused_while_same_scope_start_response_is_lost(config: SourceConfig) -> None:
+    # A lost start response may still have started a billable run; the row
+    # stays outstanding (fail closed) until the overdue unit settles it.
+    _row(config.source_site, run_id=None)
+    admission = AllowAll()
+    fake = FakeApify()
+
+    result = _start(config, fake, admission=admission)
+
+    assert (result.status, result.reason) == (StartStatus.REFUSED, "scope_run_outstanding")
+    assert admission.requests == []
+    assert fake.requests == []
+
+
+@LIVE
+@pytest.mark.parametrize("state", [ImportState.FINALIZED, ImportState.REJECTED], ids=str)
+def test_full_start_allowed_once_same_scope_run_is_decided(
+    config: SourceConfig, state: ImportState
+) -> None:
+    # Storage still retained (cleanup pending): a decided import no longer blocks a new
+    # sweep of its scope, whatever its remote storage is doing.
+    _row(config.source_site, import_state=state, storage_state=StorageState.RETAINED)
+
+    result = _start(config, FakeApify())
+
+    assert result.status is StartStatus.STARTED
+
+
+@LIVE
+@pytest.mark.parametrize("other", ["scope", "site", "probe"])
+def test_outstanding_run_blocks_only_its_own_site_scope_and_full_kind(
+    config: SourceConfig, other: str
+) -> None:
+    if other == "scope":
+        _row(config.source_site, scope_key="synthetic:gpu:catalog")
+    elif other == "site":
+        elsewhere = SourceSite.objects.create(name="Elsewhere", normalized_name="elsewhere")
+        _row(elsewhere)
+    else:
+        _row(config.source_site, run_kind=RunKind.PROBE)
+
+    result = _start(config, FakeApify())
+
+    assert result.status is StartStatus.STARTED
+
+
+@LIVE
+def test_probe_start_is_not_gated_by_outstanding_full_run(config: SourceConfig) -> None:
+    # D12's one-outstanding-probe rule lives in poller.service and is
+    # unchanged; the start job itself never refuses a PROBE for a FULL row.
+    _row(config.source_site)
+
+    result = _run(
+        start_provider_run(
+            config,
+            run_kind=RunKind.PROBE,
+            admission=AllowAll(),
+            run_specs=_specs(),
+            client_factory=FakeApify().client,
+        )
+    )
+
+    assert result.status is StartStatus.STARTED
+
+
 def test_poll_source_starts_apify_run_instead_of_local_adapter(
     config: SourceConfig, monkeypatch: pytest.MonkeyPatch
 ) -> None:

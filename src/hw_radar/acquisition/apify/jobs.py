@@ -7,7 +7,8 @@ Apify schedules or webhooks):
   run_source for a source whose collection_provider is `apify`, after the same
   check_admission gate. It refuses, with no spend and no row, anything MS2-D-33
   forbids (a bounded-retention site, a timeout that does not fit the storage
-  deadline) and anything the kill switch or budget admission denies; then it
+  deadline), a FULL start while an earlier FULL run of the same scope is still
+  outstanding, and anything the kill switch or budget admission denies; then it
   creates the provider_run row with `admitted_at` and the absolute storage
   deadline BEFORE the start request, sends exactly one start request, records
   the response, and verifies it (MS2-D-26 options check, MS2-D-38 version line).
@@ -299,6 +300,7 @@ class StartRefusal(StrEnum):
     APIFY_DISABLED = "apify_disabled"
     ACTOR_UNCONFIGURED = "actor_unconfigured"
     CLIENT_UNAVAILABLE = "client_unavailable"
+    SCOPE_RUN_OUTSTANDING = "scope_run_outstanding"
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,6 +412,10 @@ async def start_provider_run(
     build_tag: str = settings.HW_RADAR_APIFY_ACTOR_BUILD
     if not actor_id:
         return StartResult(StartStatus.REFUSED, StartRefusal.ACTOR_UNCONFIGURED)
+    if run_kind is RunKind.FULL and await sync_to_async(_has_outstanding_full_run)(
+        config, validated.collection_scope
+    ):
+        return StartResult(StartStatus.REFUSED, StartRefusal.SCOPE_RUN_OUTSTANDING)
     # Built before budget admission: a missing token must refuse before E
     # reserves anything, not strand a reservation behind a row that can never start.
     try:
@@ -492,6 +498,35 @@ async def start_provider_run(
         else:
             await sync_to_async(_record_observation)(row.pk, aborted, timezone.now(), poll=False)
         return StartResult(StartStatus.MISMATCH_ABORTED, "; ".join(mismatches), row.pk)
+
+
+def _has_outstanding_full_run(config: SourceConfig, scope_key: str) -> bool:
+    """Return whether a FULL run of this source and scope has an undecided import.
+
+    Two concurrent FULL runs of one scope would pay twice for one sweep and
+    race each other's continuity and delist stages; the MS2-D-30/-36 ordering
+    guards keep that correct but not cheap, so the second start is refused
+    before budget admission, with no ledger row and no account read.
+
+    Outstanding means import_state is neither finalized nor rejected, the same
+    test as poller.service._has_outstanding_probe, including its fail-closed
+    lost-response case: an unstarted row stays outstanding until the overdue
+    unit settles it. Storage state is deliberately not consulted: pending
+    cleanup of a decided run cannot affect a new import, and its liability is
+    already on the ledger. PROBE rows never count here, and FULL rows never
+    count against a probe (D12 owns that rule).
+
+    The check-then-start is not locked: it relies on the per-source `poll-{key}`
+    job being the only FULL Actor starter (the heartbeat lane never starts an
+    Actor run) and on the scheduler's max_instances=1 for that job.
+    """
+    return (
+        ProviderRun.objects.filter(
+            source_site=config.source_site, scope_key=scope_key, run_kind=RunKind.FULL
+        )
+        .exclude(import_state__in=_TERMINAL_IMPORT)
+        .exists()
+    )
 
 
 def _create_run(fields: dict[str, object], reservation_id: int | None) -> ProviderRun:

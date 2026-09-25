@@ -71,10 +71,8 @@ Instructions for AI agents:
   reservation before any build). Remaining hand-offs to F5a (E4 landed the
   `final_charge_op_at` stamp and the D-side latch trips; E5 bound the ledger as
   `BUDGET_ADMISSION` and records probe denials as ledger rows): F5a registers the synthetic site's `ActorRunSpec` in
-  `jobs.RUN_SPECS` (empty in production, so every `apify` source is refused `no_run_spec`). Open:
-  the start job does not yet refuse a new FULL start while a previous run of the same scope is
-  outstanding (only PROBE runs have the one-outstanding rule, D12). Apify push/build/run: none
-  has occurred yet.
+  `jobs.RUN_SPECS` (empty in production, so every `apify` source is refused `no_run_spec`). Apify
+  push/build/run: none has occurred yet.
 - [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
   initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential

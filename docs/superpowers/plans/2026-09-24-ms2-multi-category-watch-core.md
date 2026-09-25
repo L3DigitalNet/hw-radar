@@ -4717,6 +4717,15 @@ the then-current code. D-prep (D1, D3) is not gated.
     `UNKNOWN`) before the abort; D10's other reject classes were checked
     against ADR-0017 and kept. The cleanup and overdue units are logging
     hooks until D11 binds them.
+  - Follow-up 2026-09-25: the plan sets no rule for concurrent FULL runs
+    of one scope (MS2-D-30/-36 only make them safe), so the start job now
+    refuses a FULL start with `scope_run_outstanding` while a FULL
+    `provider_run` of the same `source_site` and `scope_key` has an import
+    that is neither finalized nor rejected. The refusal comes before budget
+    admission (no ledger row, no account read, no spend), next to the
+    MS2-D-33 refusals. Storage state is not consulted. PROBE runs keep
+    D12's per-source rule. Test:
+    `test_apify_poll_job.py::test_full_start_refused_while_same_scope_run_outstanding`.
 - **D6 — Idempotency (AC-6).**
   - `test_duplicate_completion_is_noop`: a second import of the same run adds no
     `ScraperRun`, `OfferSnapshot`, or `RawPayload` rows.
