@@ -428,6 +428,24 @@ def ensure_cycle(config: LedgerConfig, now: datetime) -> ApifyBudgetCycle | None
     return cycle
 
 
+def cycle_unavailable_detail(config: LedgerConfig, now: datetime) -> str:
+    """Name why `ensure_cycle` returned None for `now` (read-only).
+
+    Only meaningful right after `ensure_cycle` returned None under the same
+    lock: the anchor is unset or invalid, `now` precedes it, or the derived
+    cycle conflicts with a recorded one (cases 2 and 3).
+    """
+    anchor = config.budget.billing_cycle_anchor
+    if anchor is None:
+        return "HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR is unset or invalid"
+    if billing_cycle_bounds(anchor, now) is None:
+        return "now is before HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR"
+    return (
+        "HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR conflicts with a recorded cycle;"
+        " the owner corrects the anchor (see the error log)"
+    )
+
+
 def _cycle_conflict(start: datetime, detail: str) -> None:
     logger.error(
         "apify billing cycle anchor conflicts with a recorded cycle (derived start %s): %s;"
@@ -747,6 +765,7 @@ def reserve(
             snapshot=_snapshot(cycle, cfg) if cycle is not None else None,
             current=current,
             next_cycle=after,
+            cycle_detail=cycle_unavailable_detail(config, now) if cycle is None else None,
         )
         decision = decide_admission(request, cfg, state)
         return _persist(request, decision, source_site_id, cfg, now, reason)
@@ -862,7 +881,7 @@ def claim_origin(
         at = now or timezone.now()
         cycle = ensure_cycle(config, at)
         if cycle is None:
-            raise LedgerRefused("cycle_unknown", "no billing cycle derivable from the anchor")
+            raise LedgerRefused("cycle_unknown", cycle_unavailable_detail(config, at))
         if ApifyLedgerAuthority.objects.filter(cycle_start=cycle.cycle_start).exists():
             raise LedgerRefused("authority_exists", "this cycle already has an authority row")
         return ApifyLedgerAuthority.objects.create(
@@ -990,7 +1009,7 @@ def export_handoff(
         at = now or timezone.now()
         cycle = ensure_cycle(config, at)
         if cycle is None:
-            raise LedgerRefused("cycle_unknown", "no billing cycle derivable from the anchor")
+            raise LedgerRefused("cycle_unknown", cycle_unavailable_detail(config, at))
         authority = ApifyLedgerAuthority.objects.filter(cycle_start=cycle.cycle_start).first()
         if authority is None:
             raise LedgerRefused("no_authority", "this environment holds no authority this cycle")

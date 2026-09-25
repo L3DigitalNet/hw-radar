@@ -248,7 +248,10 @@ def test_anchor_moved_backward_into_recorded_cycle_denies_cycle_unknown() -> Non
     # An anchor of 1 Sep derives [1 Sep, 30 Sep], and the recorded 5 Sep row
     # starts inside it: history would be rewritten, so nothing is created.
     back = config(budget={"billing_cycle_anchor": C1_START.replace(day=1)})
-    assert _reserve(cfg=back).reason == DenialReason.CYCLE_UNKNOWN
+    outcome = _reserve(cfg=back)
+    assert outcome.reason == DenialReason.CYCLE_UNKNOWN
+    # The denial names the conflict, not a generic "no cycle" (verifier, s5).
+    assert "conflicts with a recorded cycle" in outcome.detail
     assert list(ApifyBudgetCycle.objects.values_list("pk", "cycle_start", "cycle_end")) == before
     c1.refresh_from_db()
     assert c1.cycle_end == C1_END

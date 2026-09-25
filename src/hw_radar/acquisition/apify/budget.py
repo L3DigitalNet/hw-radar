@@ -796,6 +796,10 @@ class LedgerState:
     # Only the external-liability invariant is checked against it, with the
     # configured P, because the next cycle's own class debits start at zero.
     next_cycle: CycleDebits | None = None
+    # Why the ledger has no cycle, when it has none (MS2-D-48): an unset
+    # anchor, a `now` before it, or a conflict with a recorded cycle all deny
+    # `cycle_unknown`, and the detail tells the operator which one to fix.
+    cycle_detail: str | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -892,7 +896,9 @@ def decide_admission(
     snap = ledger.snapshot
     if snap is None or snap.cycle_start is None or snap.cycle_end is None:
         return _deny(
-            DenialReason.CYCLE_UNKNOWN, "no billing cycle derivable from the anchor", estimate
+            DenialReason.CYCLE_UNKNOWN,
+            ledger.cycle_detail or "no billing cycle derivable from the anchor",
+            estimate,
         )
     if not snap.cycle_start <= ledger.now <= snap.cycle_end:
         return _deny(DenialReason.CYCLE_UNKNOWN, "now is outside the recorded cycle", estimate)
