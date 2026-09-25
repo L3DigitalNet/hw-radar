@@ -45,7 +45,6 @@ from hw_radar.acquisition.apify.jobs import (
     start_provider_run,
     storage_cleanup_deadline,
 )
-from hw_radar.acquisition.apify.ledger import AccountReader
 from hw_radar.acquisition.contracts import AdapterRetention, NullResolver
 from hw_radar.acquisition.retention_policy import SOURCE_RETENTION
 from hw_radar.catalog.models import (
@@ -178,7 +177,7 @@ def _tick(fake: Apify) -> TickReport:
 class AllowAll:
     """Test-only budget admission; production binds jobs.LedgerAdmission."""
 
-    async def admit(self, request: BudgetRequest, reader: AccountReader) -> BudgetDecision:
+    async def admit(self, request: BudgetRequest) -> BudgetDecision:
         return BudgetDecision(True)
 
 

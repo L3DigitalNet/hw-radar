@@ -1,21 +1,19 @@
-"""Apify spend ledger service (plan E3; MS2-D-17, -32, -34, -40, -45, -46).
+"""Apify spend ledger service (plan E3; MS2-D-17, -32, -34, -40, -45, -46, -48).
 
 The ledger turns rows into admission decisions. E2's `decide_admission` is the
 policy; this module owns everything that needs the database:
 
-- `reserve` / `reserve_operator`: under the budget advisory lock, sum the
-  current (and next) billing cycle's debits from ledger rows by the MS2-D-34
-  cycle predicate, ask the policy, and persist the admitted reservation or the
-  denial row in the same transaction. Concurrent reservations therefore
-  serialize: two callers can never both see the same remaining amount.
-- `refresh_account_snapshot`: the MS2-D-40 account snapshot and MS2-D-32 cycle
-  discovery. Every account read is counted and committed BEFORE it is sent (on
-  the cycle row, or on the open `ApifyCycleDiscovery` row when no cycle covers
-  `now`), so a crash after the commit still leaves the read counted.
+- `reserve` / `reserve_operator`: under the budget advisory lock, materialize
+  the configured billing cycle (`ensure_cycle`), sum its (and the next
+  cycle's) debits from ledger rows by the MS2-D-34 cycle predicate, ask the
+  policy, and persist the admitted reservation or the denial row in the same
+  transaction. Concurrent reservations therefore serialize: two callers can
+  never both see the same remaining amount.
+- `ensure_cycle`: MS2-D-48 *Materialization*. The billing cycle is derived
+  from the operator-verified anchor setting, never read from Apify: the
+  runtime reads no account state at all (the runtime token cannot, R25).
 - `claim_origin`, `export_handoff`, `import_handoff`: the one-authority-per-
   cycle handoff of MS2-D-45, drained and destination-bound.
-- `reset_discovery` and `discovery_status`: the owner's
-  `apify_budget_reset --discovery` and the report's exhausted flag.
 
 Cycle predicate (MS2-D-34, revision 5 and 11). With `g` the cycle-boundary
 guard, a row counts in billing cycle Y when its interval intersects Y:
@@ -23,16 +21,11 @@ guard, a row counts in billing cycle Y when its interval intersects Y:
   unreconciled (reserved, usage_*)  estimate + monitoring  [reserved_at - g, +inf)
   reconciled, settled amount        actual_usd             [reserved_at - g, last_charge_at + g]
   reconciled, monitoring allowance  monitoring_bound_usd   [reconciled_at - g, end + g]
-  cycle discovery allowance         MAX_DISCOVERY_READS x api_call_bound
-                                                           [opened_at - g, closed_at + g]
 
 where the monitoring `end` is +inf while a further selector-4 call is still
-possible, and a discovery row's `closed_at` is +inf while it is open. Released
-and denied rows count nothing. Nothing here ever ages a row out by elapsed
-time: an unreconciled row counts in every cycle from its admission onward.
-
-Transactions never span an await: the async snapshot refresh commits its
-counters through `sync_to_async` steps and makes its HTTP calls between them.
+possible. Released and denied rows count nothing. Nothing here ever ages a row
+out by elapsed time: an unreconciled row counts in every cycle from its
+admission onward.
 
 - The overrun latch (MS2-D-26): `trip_latch` records a trip in its own
   budget-locked transaction, `clear_latch` is the owner's
@@ -42,9 +35,10 @@ counters through `sync_to_async` steps and makes its HTTP calls between them.
 SCOPE: settlement, usage reads, and selector 4 live in
 `acquisition.apify.reconcile` (E4), which builds on the lock, the cycle
 predicate, and the latch here; the start job's binding of this ledger is
-`jobs.LedgerAdmission` (E5), which calls `account_read_useful`,
-`refresh_account_snapshot`, then `reserve`; the spend report is E6.
-This module never calls Apify except through `refresh_account_snapshot`.
+`jobs.LedgerAdmission` (E5), which calls only `reserve`; the spend report is
+E6. This module never calls Apify. The retired account-snapshot refresh and
+cycle discovery (MS2-D-40, -32) left `ApifyCycleDiscovery` and the cycle
+row's `account_*` columns in the schema, unwritten (MS2-D-48 *Schema*).
 
 Requirements: PostgreSQL (`pg_advisory_xact_lock`), a Django context with the
 catalog app, and the HW_RADAR_APIFY_* settings read by `load_ledger_config`.
@@ -60,10 +54,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal, InvalidOperation
 from enum import StrEnum
-from typing import Final, Protocol, cast
+from typing import Final, cast
 
-import httpx
-from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import connection, transaction
 from django.db.models import F, Q
@@ -78,61 +70,46 @@ from hw_radar.acquisition.apify.budget import (
     BudgetSettings,
     CostEstimate,
     CycleDebits,
-    DenialReason,
     LedgerState,
     OperatorKind,
-    api_call_bound,
+    billing_cycle_bounds,
     decide_admission,
     load_budget_settings,
     project_allocation,
-    standing_account_read_debit,
-)
-from hw_radar.acquisition.apify.client import (
-    AccountLimits,
-    AccountPlan,
-    ApifyError,
-    ApifyResponseTooLargeError,
 )
 from hw_radar.catalog.models import (
     AdmissionClass,
     ApifyBudgetCycle,
     ApifyBudgetLatch,
-    ApifyCycleDiscovery,
     ApifyLedgerAuthority,
     ApifySpendReservation,
     ApifyUsageRead,
     ReservationStatus,
 )
-from hw_radar.catalog.models.provider import CycleDiscoveryCloseReason, LedgerAuthorityKind
+from hw_radar.catalog.models.provider import LedgerAuthorityKind
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "BUDGET_LOCK_KEY",
-    "DISCOVERY_EXHAUSTED",
     "HANDOFF_RECORD_VERSION",
-    "AccountReader",
     "HandoffExport",
     "LatchReason",
     "LedgerConfig",
     "LedgerRefused",
-    "RefreshOutcome",
     "ReservationOutcome",
-    "account_read_useful",
     "claim_origin",
     "clear_latch",
     "current_cycle",
     "cycle_debits",
-    "discovery_status",
+    "ensure_cycle",
     "export_handoff",
     "import_handoff",
     "latch_tripped",
     "load_ledger_config",
     "record_digest",
-    "refresh_account_snapshot",
     "reserve",
     "reserve_operator",
-    "reset_discovery",
     "take_budget_lock",
     "trip_latch",
     "trip_latch_locked",
@@ -140,15 +117,13 @@ __all__ = [
 
 # The one budget advisory lock (MS2-D-41 *Reserve*, MS2-D-45 *Serialization*).
 # Every ledger write that changes what admission may see takes it first:
-# reserve, the handoff export and import, cycle-row and discovery writes, and
+# reserve, the handoff export and import, cycle-row writes (ensure_cycle), and
 # (E4) reconciliation, corrections, and latch trips. Cross-slice contract: E4
 # must take this same key, via take_budget_lock, before any provider_run row
 # lock (MS2-D-35 lock order). The value is arbitrary but fixed; changing it
 # while two versions run would let them admit concurrently.
 BUDGET_LOCK_KEY: Final = 0x4857_5241_4441_5231  # "HWRADAR1"
 
-# The report string for an exhausted discovery row (MS2-D-32 *Cycle discovery*).
-DISCOVERY_EXHAUSTED: Final = "cycle_discovery_exhausted"
 HANDOFF_RECORD_VERSION: Final = 1
 
 _OPEN_STATUSES: Final = (
@@ -169,7 +144,7 @@ _NEVER: Final = datetime(9000, 1, 1, tzinfo=UTC)
 # record and the report must still never under-count.
 _UNBOUNDED_GUARD: Final = timedelta(days=3650)
 # A clamped cycle ends this long before its successor starts, matching Apify's
-# own `...T23:59:59.999Z` end stamps.
+# own `...T23:59:59.999Z` end stamps (and budget.billing_cycle_bounds' ends).
 _CYCLE_END_EPSILON: Final = timedelta(milliseconds=1)
 
 
@@ -204,9 +179,6 @@ class LedgerConfig:
 
     budget: BudgetSettings
     ledger_id: str
-    usage_inclusion_lag_s: int | None
-    max_discovery_reads: int | None
-    discovery_read_interval_s: int | None
     usage_settle_delay_s: int | None = 10
     usage_stable_reads: int | None = 2
     usage_stable_interval_s: int | None = 60
@@ -221,9 +193,6 @@ def load_ledger_config() -> LedgerConfig:
     return LedgerConfig(
         budget=load_budget_settings(),
         ledger_id=s.HW_RADAR_APIFY_LEDGER_ID,
-        usage_inclusion_lag_s=s.HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S,
-        max_discovery_reads=s.HW_RADAR_APIFY_MAX_DISCOVERY_READS,
-        discovery_read_interval_s=s.HW_RADAR_APIFY_DISCOVERY_READ_INTERVAL_S,
         usage_settle_delay_s=s.HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S,
         usage_stable_reads=s.HW_RADAR_APIFY_USAGE_STABLE_READS,
         usage_stable_interval_s=s.HW_RADAR_APIFY_USAGE_STABLE_INTERVAL_S,
@@ -239,19 +208,15 @@ def _guard(config: LedgerConfig) -> timedelta:
     return _UNBOUNDED_GUARD if guard_s is None or guard_s < 0 else timedelta(seconds=guard_s)
 
 
-def _discovery_allowance(config: LedgerConfig) -> Decimal:
-    """`MAX_DISCOVERY_READS x api_call_bound`; raises BudgetDenied when unpriceable."""
-    reads = config.max_discovery_reads
-    if reads is None or reads < 0:
-        raise BudgetDenied(DenialReason.UNBOUNDED_COMPONENT, "MAX_DISCOVERY_READS is unset")
-    return _usd(reads * api_call_bound(config.budget))
-
-
 # ── Cycle lookup and debits (MS2-D-34, -40) ─────────────────────────────────
 
 
 def current_cycle(now: datetime) -> ApifyBudgetCycle | None:
-    """The observed billing cycle covering `now`, or None (admission: cycle_unknown)."""
+    """The recorded billing cycle covering `now`, or None; read-only, creates nothing.
+
+    For read-only callers (the report). Admission and the authority commands
+    use ensure_cycle, which also materializes the configured cycle.
+    """
     return (
         ApifyBudgetCycle.objects.filter(cycle_start__lte=now, cycle_end__gte=now)
         .order_by("-cycle_start")
@@ -273,9 +238,7 @@ class _Tally:
     operator_settled: Decimal = Decimal(0)
     operator_open: Decimal = Decimal(0)
     operator_monitoring: Decimal = Decimal(0)
-    discovery: Decimal = Decimal(0)
     carried: Decimal = Decimal(0)
-    hr_included: Decimal = Decimal(0)
     # Reconciled rows touching the cycle that carry a correction obligation.
     obligations: list[ApifySpendReservation] = field(default_factory=list)
 
@@ -288,8 +251,6 @@ class _Tally:
                 self.operator_settled + self.operator_open + self.operator_monitoring
             ),
             carried_handoff_usd=self.carried,
-            discovery_allowance_usd=self.discovery,
-            hr_included_usd=self.hr_included,
         )
 
 
@@ -320,14 +281,9 @@ def _tally(
     y_end: datetime,
     config: LedgerConfig,
     *,
-    observed_at: datetime | None = None,
     include_carried: bool = True,
 ) -> _Tally:
-    """Sum every debit whose interval touches cycle [y_start, y_end].
-
-    Raises BudgetDenied when the discovery allowance cannot be priced; callers
-    decide whether that denies (reserve) or refuses (export).
-    """
+    """Sum every debit whose interval touches cycle [y_start, y_end]."""
     # Cross-file contract: report._place re-implements this per-row cycle
     # membership for attribution; change both together (pinned by
     # test_apify_spend_report.py::test_cycle_totals_match_ledger_cycle_debits).
@@ -346,12 +302,6 @@ def _tally(
     rows = ApifySpendReservation.objects.filter(
         (Q(status__in=_OPEN_STATUSES) | touching_reconciled) & Q(reserved_at__lte=y_end + g)
     ).select_related("provider_run")
-    lag = config.usage_inclusion_lag_s
-    watermark = (
-        observed_at - timedelta(seconds=lag)
-        if observed_at is not None and lag is not None and lag >= 0
-        else None
-    )
     for row in rows:
         operator = row.admission_class == AdmissionClass.OPERATOR.value
         start = row.reserved_at - g
@@ -370,8 +320,6 @@ def _tally(
                 tally.operator_settled += settled
             else:
                 tally.runtime_settled += settled
-            if watermark is not None and row.last_charge_at + g < watermark:
-                tally.hr_included += settled
         monitoring_end = (
             _NEVER
             if _monitoring_open(row, config)
@@ -388,13 +336,6 @@ def _tally(
         elif _has_obligation(row) and _touches(start, row.last_charge_at + g, y_start, y_end):
             tally.obligations.append(row)
 
-    discoveries = ApifyCycleDiscovery.objects.filter(opened_at__lte=y_end + g).filter(
-        Q(closed_at__isnull=True) | Q(closed_at__gte=y_start - g)
-    )
-    if discoveries.exists():
-        allowance = _discovery_allowance(config)
-        tally.discovery = allowance * discoveries.count()
-
     if include_carried:
         authority = ApifyLedgerAuthority.objects.filter(cycle_start=y_start).first()
         if authority is not None:
@@ -407,29 +348,87 @@ def cycle_debits(
 ) -> tuple[CycleDebits, CycleDebits]:
     """Return (this cycle's debits, the next cycle's) as reserve would see them.
 
-    The next cycle is not observable yet, so it is modeled as starting just
+    The next cycle is not recorded yet, so it is modeled as starting just
     after `cycle.cycle_end` and running forever: exactly the rows that can
     still charge after this cycle ends. Report and test helper; reserve calls
     the same code under the lock.
     """
     config = config or load_ledger_config()
-    current = _tally(
-        cycle.cycle_start, cycle.cycle_end, config, observed_at=cycle.account_observed_at
-    )
+    current = _tally(cycle.cycle_start, cycle.cycle_end, config)
     after = _tally(cycle.cycle_end + _CYCLE_END_EPSILON, _NEVER, config, include_carried=False)
     return current.debits(), after.debits()
 
 
-def _snapshot(cycle: ApifyBudgetCycle) -> AccountSnapshot:
+def _snapshot(cycle: ApifyBudgetCycle, cfg: BudgetSettings) -> AccountSnapshot:
+    """The recorded cycle's bounds plus the configured account settings (MS2-D-48)."""
     return AccountSnapshot(
         cycle_start=cycle.cycle_start,
         cycle_end=cycle.cycle_end,
-        observed_at=cycle.account_observed_at,
-        prepaid_credit_usd=cycle.account_prepaid_credit_usd,
-        base_price_usd=cycle.account_base_price_usd,
-        account_usage_usd=cycle.account_usage_usd,
-        data_retention_days=cycle.account_data_retention_days,
-        account_limit_usd=cycle.account_limit_usd,
+        account_limit_usd=cfg.account_limit_usd,
+        base_price_usd=cfg.account_base_price_usd,
+        data_retention_days=cfg.account_data_retention_days,
+        verified_on=cfg.account_verified_on,
+    )
+
+
+def ensure_cycle(config: LedgerConfig, now: datetime) -> ApifyBudgetCycle | None:
+    """Return the recorded row of the configured cycle covering `now`, creating it if needed.
+
+    MS2-D-48 *Materialization*; the caller holds the budget lock. Derives the
+    cycle from HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR and returns None, creating
+    nothing, when the anchor is unset or after `now`, or when the derived
+    cycle conflicts with a recorded one. The caller then denies (or refuses)
+    `cycle_unknown`. Otherwise it clamps any older row overlapping the derived
+    cycle, creates the row (account_* columns null, account_read_count 0), and
+    continues authority across the rollover (MS2-D-45).
+    """
+    # Same guard as take_budget_lock: outside a transaction there is no lock,
+    # and two callers could each create or clamp a cycle row concurrently.
+    if not connection.in_atomic_block:
+        raise RuntimeError("ensure_cycle needs an open transaction holding the budget lock")
+    anchor = config.budget.billing_cycle_anchor
+    bounds = billing_cycle_bounds(anchor, now) if anchor is not None else None
+    if bounds is None:
+        return None
+    start, end = bounds
+    existing = ApifyBudgetCycle.objects.filter(cycle_start=start).first()
+    if existing is not None:
+        if existing.cycle_end == end:
+            return existing
+        # Case 2: an earlier (forward) anchor change clamped this row.
+        return _cycle_conflict(start, f"recorded cycle {existing.pk} ends {existing.cycle_end}")
+    # Case 3: the anchor moved backward into recorded history. Hardware Radar
+    # never rewrites recorded cycles itself; only the owner resolves this, by
+    # correcting the anchor.
+    inside = ApifyBudgetCycle.objects.filter(cycle_start__gt=start, cycle_start__lte=end).first()
+    if inside is not None:
+        return _cycle_conflict(start, f"recorded cycle {inside.pk} starts inside it")
+    try:
+        allocation: Decimal | None = project_allocation(config.budget)
+    except BudgetDenied:
+        allocation = None
+    # Case 4: a forward anchor change (a plan change) starts the new cycle
+    # before an older row's end. Clamp so two rows never cover one instant.
+    ApifyBudgetCycle.objects.filter(cycle_start__lt=start, cycle_end__gte=start).update(
+        cycle_end=start - _CYCLE_END_EPSILON
+    )
+    cycle = ApifyBudgetCycle.objects.create(
+        cycle_start=start,
+        cycle_end=end,
+        allocation_usd=allocation,
+        opened_at=now,
+        account_read_count=0,
+    )
+    _ensure_continued_authority(cycle, config, now)
+    return cycle
+
+
+def _cycle_conflict(start: datetime, detail: str) -> None:
+    logger.error(
+        "apify billing cycle anchor conflicts with a recorded cycle (derived start %s): %s;"
+        " paid admission denies cycle_unknown until the owner corrects the anchor",
+        start.isoformat(),
+        detail,
     )
 
 
@@ -489,6 +488,8 @@ class LatchReason(StrEnum):
     DELETE_ATTEMPTS_EXHAUSTED = "delete_attempts_exhausted"
     ORPHANED_START = "orphaned_start"
     API_RESPONSE_OVER_CAP = "api_response_over_cap"
+    # MS2-D-48 *Hard-limit refusal*: Apify answered a run start with HTTP 402.
+    ACCOUNT_LIMIT_REFUSED = "account_limit_refused"
 
 
 def latch_tripped() -> bool:
@@ -663,8 +664,7 @@ def reserve(
         now = now or timezone.now()
         _clear_on_estimator_bump(cfg.estimator_version, now)
         latch = latch_tripped()
-        cycle = current_cycle(now)
-        debit_error: BudgetDenied | None = None
+        cycle = ensure_cycle(config, now)
         current = CycleDebits()
         after: CycleDebits | None = None
         # With no cycle, authority is undeterminable (it is per cycle), and
@@ -673,12 +673,7 @@ def reserve(
         held = cycle is None
         if cycle is not None:
             held = _authority_held(cycle, config, now)
-            try:
-                current, after = cycle_debits(cycle, config)
-            except BudgetDenied as denied:
-                # Admission will deny on the same missing price or cap via
-                # the estimate; debit_error guarantees it cannot admit anyway.
-                debit_error = denied
+            current, after = cycle_debits(cycle, config)
         # next_cycle is always set: a new row is unreconciled until E4 settles
         # it, and an unreconciled row counts in every cycle from its admission
         # onward, so every request's charge interval can reach the next cycle.
@@ -686,39 +681,12 @@ def reserve(
             now=now,
             latch_tripped=latch,
             authority_held=held,
-            snapshot=_snapshot(cycle) if cycle is not None else None,
+            snapshot=_snapshot(cycle, cfg) if cycle is not None else None,
             current=current,
             next_cycle=after,
         )
         decision = decide_admission(request, cfg, state)
-        if decision.admitted and debit_error is not None:
-            decision = AdmissionDecision(
-                False, debit_error.reason, debit_error.detail, decision.estimate
-            )
-        if decision.trip_latch:
-            ApifyBudgetLatch.objects.create(
-                tripped_at=now,
-                reason=str(decision.reason),
-                estimator_version=cfg.estimator_version,
-            )
         return _persist(request, decision, source_site_id, cfg, now, reason)
-
-
-def account_read_useful(request: AdmissionRequest, *, config: LedgerConfig, now: datetime) -> bool:
-    """Whether refreshing the account snapshot could change `request`'s decision.
-
-    Runs the pure policy against a snapshot-less state: it denies
-    `cycle_unknown` exactly when every earlier rule (kill switch, latch, R38,
-    settings, the estimate's prices and caps) passed, so only then is an
-    account read worth its counted, priced call. Advisory and lock-free: the
-    authoritative decision is `reserve`, under the lock, afterwards.
-    """
-    probe = decide_admission(
-        request,
-        config.budget,
-        LedgerState(now=now, latch_tripped=latch_tripped(), authority_held=True, snapshot=None),
-    )
-    return probe.reason is DenialReason.CYCLE_UNKNOWN
 
 
 def _persist(
@@ -782,245 +750,11 @@ def reserve_operator(
     )
 
 
-# ── Account snapshot and cycle discovery (MS2-D-32, -40) ────────────────────
-
-
-class AccountReader(Protocol):
-    """The two account reads a snapshot needs (ApifyClient satisfies it)."""
-
-    async def get_account_limits(self) -> AccountLimits: ...
-
-    async def get_account_plan(self) -> AccountPlan: ...
-
-
-class RefreshOutcome(StrEnum):
-    FRESH = "fresh"  # no read needed
-    REFRESHED = "refreshed"
-    DISCOVERED = "discovered"  # a new cycle row was opened
-    READ_CAP_EXHAUSTED = "account_read_cap_exhausted"
-    DISCOVERY_EXHAUSTED = DISCOVERY_EXHAUSTED
-    DISCOVERY_TOO_SOON = "discovery_read_interval"
-    READ_FAILED = "read_failed"
-    CYCLE_NOT_COVERING = "cycle_not_covering_now"
-
-
-_READ_ERRORS: Final = (httpx.HTTPError, ApifyError)
-
-
-@dataclass(frozen=True, slots=True)
-class _Plan:
-    """Which counter the next read was committed against."""
-
-    outcome: RefreshOutcome | None
-    cycle_id: int | None = None
-    discovery_id: int | None = None
-
-
-def _plan_limits_read(config: LedgerConfig, now: datetime) -> _Plan:
-    with transaction.atomic():
-        take_budget_lock()
-        cycle = current_cycle(now)
-        if cycle is not None:
-            max_age = config.budget.account_snapshot_max_age_s
-            observed = cycle.account_observed_at
-            if (
-                observed is not None
-                and max_age is not None
-                and now - observed <= timedelta(seconds=max_age)
-            ):
-                return _Plan(RefreshOutcome.FRESH, cycle_id=cycle.pk)
-            if not _count_cycle_read(cycle, config):
-                return _Plan(RefreshOutcome.READ_CAP_EXHAUSTED, cycle_id=cycle.pk)
-            return _Plan(None, cycle_id=cycle.pk)
-        discovery = ApifyCycleDiscovery.objects.filter(closed_at__isnull=True).first()
-        if discovery is None:
-            discovery = ApifyCycleDiscovery.objects.create(opened_at=now)
-        cap = config.max_discovery_reads
-        if cap is None or discovery.read_count >= cap:
-            return _Plan(RefreshOutcome.DISCOVERY_EXHAUSTED, discovery_id=discovery.pk)
-        interval = config.discovery_read_interval_s
-        if interval is None:
-            # An unset spacing bounds nothing; treat it like the cap.
-            return _Plan(RefreshOutcome.DISCOVERY_EXHAUSTED, discovery_id=discovery.pk)
-        if discovery.last_read_at is not None and now - discovery.last_read_at < timedelta(
-            seconds=interval
-        ):
-            return _Plan(RefreshOutcome.DISCOVERY_TOO_SOON, discovery_id=discovery.pk)
-        # Counted and committed before the read is sent: a crash between this
-        # commit and the call still leaves it counted (MS2-D-32).
-        discovery.read_count = F("read_count") + 1
-        discovery.last_read_at = now
-        discovery.save(update_fields=["read_count", "last_read_at"])
-        return _Plan(None, discovery_id=discovery.pk)
-
-
-def _count_cycle_read(cycle: ApifyBudgetCycle, config: LedgerConfig) -> bool:
-    """Count one account read on `cycle` if the per-cycle cap allows it."""
-    cap = config.budget.max_account_reads_per_cycle
-    updated = ApifyBudgetCycle.objects.filter(
-        pk=cycle.pk, account_read_count__lt=cap if cap is not None else 0
-    ).update(account_read_count=F("account_read_count") + 1)
-    return updated == 1
-
-
-def _record_cycle(
-    limits: AccountLimits, plan: _Plan, config: LedgerConfig, now: datetime
-) -> tuple[RefreshOutcome | None, int | None]:
-    """Upsert the reported cycle, close discovery, count the plan read.
-
-    Returns (terminal outcome or None, the cycle row id to finish on).
-    """
-    with transaction.atomic():
-        take_budget_lock()
-        if not limits.cycle_start <= now <= limits.cycle_end:
-            # The read still counted where it was committed; the discovery
-            # row stays open for the next spaced read.
-            return RefreshOutcome.CYCLE_NOT_COVERING, None
-        cycle = ApifyBudgetCycle.objects.filter(cycle_start=limits.cycle_start).first()
-        opened = cycle is None
-        if cycle is None:
-            try:
-                allocation: Decimal | None = project_allocation(config.budget)
-            except BudgetDenied:
-                allocation = None
-            # A plan change can start a new cycle before the old row's end:
-            # clamp every overlapping older row so two rows never cover `now`.
-            ApifyBudgetCycle.objects.filter(
-                cycle_start__lt=limits.cycle_start, cycle_end__gte=limits.cycle_start
-            ).update(cycle_end=limits.cycle_start - _CYCLE_END_EPSILON)
-            cycle = ApifyBudgetCycle.objects.create(
-                cycle_start=limits.cycle_start,
-                cycle_end=limits.cycle_end,
-                allocation_usd=allocation,
-                opened_at=now,
-                # The read that found this cycle counts here too (MS2-D-32
-                # *Account reads*: over-counting is the safe direction).
-                account_read_count=1,
-            )
-        else:
-            # Same start, possibly a new end (a cycle shortened by a plan change).
-            cycle.cycle_end = limits.cycle_end
-        cycle.account_data_retention_days = limits.data_retention_days
-        cycle.save(update_fields=["cycle_end", "account_data_retention_days"])
-        if plan.discovery_id is not None:
-            ApifyCycleDiscovery.objects.filter(pk=plan.discovery_id, closed_at__isnull=True).update(
-                closed_at=now,
-                cycle_start=limits.cycle_start,
-                close_reason=CycleDiscoveryCloseReason.DISCOVERED,
-            )
-        _ensure_continued_authority(cycle, config, now)
-        if not _count_cycle_read(cycle, config):
-            return RefreshOutcome.READ_CAP_EXHAUSTED, cycle.pk
-        return (RefreshOutcome.DISCOVERED if opened else None), cycle.pk
-
-
-def _record_snapshot(
-    cycle_id: int, limits: AccountLimits, account: AccountPlan, now: datetime
-) -> None:
-    with transaction.atomic():
-        take_budget_lock()
-        # account_observed_at moves only here, after BOTH reads succeeded: a
-        # half-refreshed snapshot must stay stale so admission denies.
-        ApifyBudgetCycle.objects.filter(pk=cycle_id).update(
-            account_limit_usd=limits.max_monthly_usage_usd,
-            account_usage_usd=limits.monthly_usage_usd,
-            account_prepaid_credit_usd=account.monthly_usage_credits_usd,
-            account_base_price_usd=account.monthly_base_price_usd,
-            account_observed_at=now,
-        )
-
-
-async def refresh_account_snapshot(
-    reader: AccountReader, *, config: LedgerConfig | None = None, now: datetime | None = None
-) -> RefreshOutcome:
-    """Refresh the account snapshot if stale, discovering the cycle if none covers now.
-
-    Every read is counted and committed before it is sent. Transport and API
-    failures return READ_FAILED after counting (admission then denies with
-    account_state_unobservable or cycle_unknown); an answer over its byte cap
-    also trips `api_response_over_cap`. Any other exception propagates, still
-    counted. No transaction is open across an await.
-    """
-    config = config or load_ledger_config()
-    at = now or timezone.now()
-    plan = await sync_to_async(_plan_limits_read)(config, at)
-    if plan.outcome is not None:
-        return plan.outcome
-    try:
-        limits = await reader.get_account_limits()
-    except ApifyResponseTooLargeError:
-        await _trip_over_cap(config, at)
-        return RefreshOutcome.READ_FAILED
-    except _READ_ERRORS as exc:
-        logger.warning("apify account limits read failed: %s", type(exc).__name__)
-        return RefreshOutcome.READ_FAILED
-    outcome, cycle_id = await sync_to_async(_record_cycle)(limits, plan, config, at)
-    if cycle_id is None or outcome in (
-        RefreshOutcome.READ_CAP_EXHAUSTED,
-        RefreshOutcome.CYCLE_NOT_COVERING,
-    ):
-        return outcome or RefreshOutcome.CYCLE_NOT_COVERING
-    try:
-        account = await reader.get_account_plan()
-    except ApifyResponseTooLargeError:
-        await _trip_over_cap(config, at)
-        return RefreshOutcome.READ_FAILED
-    except _READ_ERRORS as exc:
-        logger.warning("apify account plan read failed: %s", type(exc).__name__)
-        return RefreshOutcome.READ_FAILED
-    await sync_to_async(_record_snapshot)(cycle_id, limits, account, at)
-    return outcome or RefreshOutcome.REFRESHED
-
-
-async def _trip_over_cap(config: LedgerConfig, at: datetime) -> None:
-    # MS2-D-32 *Response caps* (ED-01): valid content never exceeds a cap, so
-    # an over-cap account read trips the latch like any other over-cap call,
-    # instead of reading as a transient failure that the next start retries.
-    logger.error("apify account read answered over its byte cap")
-    await sync_to_async(trip_latch)(LatchReason.API_RESPONSE_OVER_CAP, config=config, now=at)
-
-
-def discovery_status(config: LedgerConfig | None = None) -> str | None:
-    """`cycle_discovery_exhausted` while the open discovery row is at its cap, else None."""
-    config = config or load_ledger_config()
-    open_row = ApifyCycleDiscovery.objects.filter(closed_at__isnull=True).first()
-    if open_row is None:
-        return None
-    cap = config.max_discovery_reads
-    return DISCOVERY_EXHAUSTED if cap is None or open_row.read_count >= cap else None
-
-
-def reset_discovery(
-    *, reason: str, config: LedgerConfig | None = None, now: datetime | None = None
-) -> int:
-    """Close the exhausted discovery row and open a fresh one (owner command).
-
-    Refused unless the open row is exhausted: every row adds its full read
-    allowance to the cycles its interval touches, so a reset is a spend
-    decision, not housekeeping. The owner's reason is stored on the closed
-    row. Returns the new row's id.
-    """
-    config = config or load_ledger_config()
-    if not reason.strip():
-        raise LedgerRefused("reason_missing", "a discovery reset needs a reason")
-    with transaction.atomic():
-        take_budget_lock()
-        at = now or timezone.now()
-        open_row = ApifyCycleDiscovery.objects.filter(closed_at__isnull=True).first()
-        if open_row is None or discovery_status(config) != DISCOVERY_EXHAUSTED:
-            raise LedgerRefused("discovery_not_exhausted", "no exhausted discovery row is open")
-        open_row.closed_at = at
-        open_row.close_reason = CycleDiscoveryCloseReason.OWNER_RESET
-        open_row.reason = reason.strip()
-        open_row.save(update_fields=["closed_at", "close_reason", "reason"])
-        return ApifyCycleDiscovery.objects.create(opened_at=at).pk
-
-
 # ── Handoff (MS2-D-45) ───────────────────────────────────────────────────────
 
 
 class LedgerRefused(Exception):
-    """An authority, handoff, or owner discovery reset was refused; `code` names why."""
+    """An authority or handoff command was refused; `code` names why."""
 
     def __init__(self, code: str, detail: str) -> None:
         super().__init__(f"{code}: {detail}")
@@ -1049,9 +783,11 @@ def claim_origin(
 ) -> ApifyLedgerAuthority:
     """Create the owner-attested `origin` authority for the current cycle (R35).
 
-    Refused without a ledger id, without an observed cycle covering now, or
-    when this environment already has any authority row for the cycle
-    (including a handed-off one: an exporter can never admit again).
+    Materializes the configured cycle (ensure_cycle), so bootstrap needs no
+    earlier denied start. Refused without a ledger id, `cycle_unknown` when no
+    cycle can be derived (anchor unset, invalid, in the future, or
+    conflicting), or when this environment already has any authority row for
+    the cycle (including a handed-off one: an exporter can never admit again).
     """
     config = config or load_ledger_config()
     if not config.ledger_id:
@@ -1061,9 +797,9 @@ def claim_origin(
     with transaction.atomic():
         take_budget_lock()
         at = now or timezone.now()
-        cycle = current_cycle(at)
+        cycle = ensure_cycle(config, at)
         if cycle is None:
-            raise LedgerRefused("cycle_unknown", "no observed billing cycle covers now")
+            raise LedgerRefused("cycle_unknown", "no billing cycle derivable from the anchor")
         if ApifyLedgerAuthority.objects.filter(cycle_start=cycle.cycle_start).exists():
             raise LedgerRefused("authority_exists", "this cycle already has an authority row")
         return ApifyLedgerAuthority.objects.create(
@@ -1128,13 +864,14 @@ def _build_record(
     now: datetime,
 ) -> dict[str, object]:
     tally = _tally(cycle.cycle_start, cycle.cycle_end, config)
-    standing = standing_account_read_debit(config.budget)
+    # Version 1 is kept although the discovery-allowance and standing
+    # read-debit lines retired with runtime account state are gone
+    # (MS2-D-48): an older record that still carries them is accepted, and
+    # its total over-counts, which fails closed.
     lines = {
         "settled_runtime_usd": tally.runtime_settled,
         "settled_operator_usd": tally.operator_settled,
         "monitoring_allowance_usd": tally.runtime_monitoring + tally.operator_monitoring,
-        "discovery_allowance_usd": tally.discovery,
-        "standing_account_read_usd": standing,
         # A handoff destination exporting onward passes its own carried
         # consumption along, or the third environment would lose it.
         "carried_in_usd": tally.carried,
@@ -1188,9 +925,9 @@ def export_handoff(
     with transaction.atomic():
         take_budget_lock()
         at = now or timezone.now()
-        cycle = current_cycle(at)
+        cycle = ensure_cycle(config, at)
         if cycle is None:
-            raise LedgerRefused("cycle_unknown", "no observed billing cycle covers now")
+            raise LedgerRefused("cycle_unknown", "no billing cycle derivable from the anchor")
         authority = ApifyLedgerAuthority.objects.filter(cycle_start=cycle.cycle_start).first()
         if authority is None:
             raise LedgerRefused("no_authority", "this environment holds no authority this cycle")
@@ -1209,10 +946,7 @@ def export_handoff(
         refusal = _drain_refusal()
         if refusal is not None:
             raise refusal
-        try:
-            record = _build_record(cycle, authority, destination, config, at)
-        except BudgetDenied as denied:
-            raise LedgerRefused(str(denied.reason), denied.detail) from denied
+        record = _build_record(cycle, authority, destination, config, at)
         digest = record_digest(record)
         authority.handed_off_at = at
         authority.handed_off_to = destination
@@ -1317,7 +1051,9 @@ def import_handoff(
     with transaction.atomic():
         take_budget_lock()
         at = now or timezone.now()
-        cycle = current_cycle(at)
+        # Two environments must configure the same anchor: a destination
+        # whose anchor derives another cycle refuses the record here.
+        cycle = ensure_cycle(config, at)
         if cycle is None or cycle.cycle_start != record_cycle:
             raise LedgerRefused("wrong_cycle", "the record is not for the current cycle")
         existing = ApifyLedgerAuthority.objects.filter(cycle_start=cycle.cycle_start).first()

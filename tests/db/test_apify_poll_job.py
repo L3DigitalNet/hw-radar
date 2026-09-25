@@ -49,7 +49,7 @@ from hw_radar.acquisition.apify.jobs import (
     start_mismatches,
     start_provider_run,
 )
-from hw_radar.acquisition.apify.ledger import AccountReader, reserve_operator
+from hw_radar.acquisition.apify.ledger import reserve_operator
 from hw_radar.acquisition.contracts import NullResolver
 from hw_radar.acquisition.scheduling.buckets import BucketRegistry
 from hw_radar.acquisition.sources import ADAPTERS
@@ -123,7 +123,7 @@ class AllowAll:
     def __init__(self) -> None:
         self.requests: list[BudgetRequest] = []
 
-    async def admit(self, request: BudgetRequest, reader: AccountReader) -> BudgetDecision:
+    async def admit(self, request: BudgetRequest) -> BudgetDecision:
         self.requests.append(request)
         return BudgetDecision(True)
 

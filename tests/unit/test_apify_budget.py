@@ -1,4 +1,4 @@
-"""Plan E2: the pure Apify budget policy (MS2-D-17, -26, -32, -40, -41, -46).
+"""Plan E2: the pure Apify budget policy (MS2-D-17, -26, -32, -40, -41, -46, -48).
 
 Every test builds BudgetSettings and LedgerState by hand; nothing here touches
 the database. The fixture prices are NOT Apify's live prices (the plan keeps no
@@ -48,7 +48,6 @@ from hw_radar.acquisition.apify.budget import (
     project_allocation,
     request_wire_overhead,
     settle_envelope,
-    standing_account_read_debit,
     storage_hours,
     trailing_window_warning,
 )
@@ -99,8 +98,6 @@ CFG: Final = BudgetSettings(
     api_call_overhead_bytes=262144,
     max_api_response_bytes=262144,
     max_dataset_page_bytes=1_048_576,
-    max_account_reads_per_cycle=3000,
-    account_snapshot_max_age_s=900,
     cycle_boundary_guard_s=3600,
     # The verified account state of 2026-09-25 (MS2-D-48): the observed cycle
     # start, the $19 limit (= the prepaid credit), Starter base, retention 31.
@@ -112,17 +109,15 @@ CFG: Final = BudgetSettings(
 )
 
 NOW: Final = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
-# The verified account state of 2026-09-24 (MS2-D-40): an anniversary cycle,
-# Starter $19 base and $19 prepaid credit, retention 31 days.
+# The recorded cycle CFG's anchor derives for NOW (MS2-D-48), with CFG's
+# configured account settings as ledger._snapshot copies them.
 SNAPSHOT: Final = AccountSnapshot(
     cycle_start=datetime(2026, 9, 5, tzinfo=UTC),
     cycle_end=datetime(2026, 10, 4, 23, 59, 59, 999000, tzinfo=UTC),
-    observed_at=NOW - timedelta(seconds=60),
-    prepaid_credit_usd=D("19"),
-    base_price_usd=D("19"),
-    account_usage_usd=D("0.09"),
+    account_limit_usd=D("19.00"),
+    base_price_usd=D("19.00"),
     data_retention_days=31,
-    account_limit_usd=D("19"),
+    verified_on=date(2026, 9, 5),
 )
 LEDGER: Final = LedgerState(now=NOW, latch_tripped=False, authority_held=True, snapshot=SNAPSHOT)
 SHAPE: Final = RunShape(
@@ -172,36 +167,35 @@ def estimate_of(request: AdmissionRequest, settings: BudgetSettings = CFG) -> Co
     return estimate_operator_cost(request.operator_kind, settings)
 
 
-def usable(settings: BudgetSettings = CFG, snapshot: AccountSnapshot = SNAPSHOT) -> Decimal:
-    """P = prepaid credit - account margin."""
-    assert snapshot.prepaid_credit_usd is not None
-    return snapshot.prepaid_credit_usd - budget.account_margin_usd(
-        settings, snapshot.prepaid_credit_usd
-    )
+def usable(settings: BudgetSettings = CFG) -> Decimal:
+    """P = configured account limit - account margin."""
+    limit = settings.account_limit_usd
+    assert limit is not None
+    return limit - budget.account_margin_usd(settings, limit)
 
 
-def at_snapshot_edge(
+# A $15 configured limit: P = 13.50 and P - E = 8.50, below A = 11.00, so the
+# external-liability check (not the class cap) is the edge. At the verified
+# $19 limit, P - E = 12.10 and the $12 target binds first (MS2-D-48), so no
+# current-cycle debit could reach that check.
+SMALL: Final = cfg(account_limit_usd=D("15"))
+
+
+def at_external_edge(
     request_: AdmissionRequest = WATCH,
     *,
     over: Decimal = ZERO,
-    settings: BudgetSettings = CFG,
-    **snapshot_changes: Any,
+    settings: BudgetSettings = SMALL,
 ) -> LedgerState:
-    """A ledger where check 1 (the account snapshot) has exactly `new - over` left.
+    """A ledger where `HR_cycle + new + E` is exactly P, plus `over`.
 
-    Hardware Radar holds $6.00 of runtime debits, so the account usage that
-    fills P leaves other workloads' observed consumption (usage - HR_cycle,
-    about $3.94) inside the declared $5.00 external bound: check 1 binds, not
-    external_liability_exceeded, and not the class cap.
+    The debits are runtime ones, so for a runtime request the class cap has
+    room to spare, and an operator request's allowance is untouched.
     """
-    runtime = D("6.00")
     new = estimate_of(request_, settings).admission_usd
-    hr = runtime + standing_account_read_debit(settings)
-    usage = usable(settings) - hr - new + over
-    return ledger(
-        snapshot=snap(account_usage_usd=usage, **snapshot_changes),
-        current=CycleDebits(runtime_committed_usd=runtime),
-    )
+    assert settings.external_liability_usd is not None
+    runtime = usable(settings) - settings.external_liability_usd - new + over
+    return ledger(current=CycleDebits(runtime_committed_usd=runtime))
 
 
 def assert_denied(decision: AdmissionDecision, reason: DenialReason) -> None:
@@ -262,7 +256,7 @@ def test_bound_mode_settlement_of_recorded_parts_never_exceeds_the_estimate() ->
 
 def test_exact_boundary_admitted_and_epsilon_over_denied() -> None:
     new = estimate_of(WATCH).admission_usd
-    cap = project_allocation(CFG) - standing_account_read_debit(CFG)
+    cap = project_allocation(CFG)
     at_cap = ledger(current=CycleDebits(runtime_committed_usd=cap - new))
     assert decide(state=at_cap).admitted
     over = ledger(current=CycleDebits(runtime_committed_usd=cap - new + TICK))
@@ -270,43 +264,48 @@ def test_exact_boundary_admitted_and_epsilon_over_denied() -> None:
 
 
 def test_reservation_exactly_equal_to_remaining_is_admitted() -> None:
-    # The account snapshot binds here (usage leaves less than A): the
-    # reservation equals exactly what check 1 has left.
-    assert decide(state=at_snapshot_edge()).admitted
+    # The configured limit binds here (P - E is below A): the reservation
+    # equals exactly what the external-liability check has left.
+    assert decide(settings=SMALL, state=at_external_edge()).admitted
 
 
 def test_one_cent_over_remaining_is_denied() -> None:
-    assert_denied(decide(state=at_snapshot_edge(over=CENT)), R.ACCOUNT_HEADROOM)
+    assert_denied(decide(settings=SMALL, state=at_external_edge(over=CENT)), R.ACCOUNT_HEADROOM)
 
 
-def test_cycle_bounds_come_from_account_limits_not_calendar() -> None:
+def test_cycle_bounds_come_from_configured_anchor_not_calendar() -> None:
+    anchor = CFG.billing_cycle_anchor
+    assert anchor is not None
     # 2 October is a new calendar month but still inside the anniversary cycle
-    # that ends on 4 October, so admission proceeds on that cycle's figures.
+    # the anchor derives (5 Sep -> 4 Oct), so admission proceeds on it.
     october = datetime(2026, 10, 2, tzinfo=UTC)
-    fresh = snap(observed_at=october)
-    assert decide(state=ledger(now=october, snapshot=fresh)).admitted
-    # Past the observed cycle_end and before a new cycle is observed: unknown.
+    assert budget.billing_cycle_bounds(anchor, october) == (
+        SNAPSHOT.cycle_start,
+        SNAPSHOT.cycle_end,
+    )
+    assert decide(state=ledger(now=october)).admitted
+    # Past the recorded cycle_end the anchor derives the next anniversary
+    # cycle (5 Oct, never 1 Oct); against the old row's bounds, now is outside.
     after = datetime(2026, 10, 5, 0, 0, 1, tzinfo=UTC)
-    stale_cycle = snap(observed_at=after)
-    assert_denied(decide(state=ledger(now=after, snapshot=stale_cycle)), R.CYCLE_UNKNOWN)
+    next_bounds = budget.billing_cycle_bounds(anchor, after)
+    assert next_bounds is not None and next_bounds[0] == datetime(2026, 10, 5, tzinfo=UTC)
+    assert_denied(decide(state=ledger(now=after)), R.CYCLE_UNKNOWN)
     assert_denied(decide(state=ledger(snapshot=None)), R.CYCLE_UNKNOWN)
     assert_denied(decide(state=ledger(snapshot=snap(cycle_start=None))), R.CYCLE_UNKNOWN)
 
 
 def test_account_headroom_below_project_target_binds() -> None:
-    # Account usage of $11 (HR's $6.54 plus $4.46 of other workloads, inside
-    # their $5 bound) leaves P - usage - HR_cycle about $0.10, while A = 11.00
-    # still has $4.46 of room: the account's remaining allowance binds.
-    state = ledger(
-        snapshot=snap(account_usage_usd=D("11")),
-        current=CycleDebits(runtime_committed_usd=D("6.00")),
-    )
-    assert_denied(decide(state=state), R.ACCOUNT_HEADROOM)
+    # A $15 configured limit leaves P - E = 8.50 for Hardware Radar, while
+    # A = 11.00 still has room above 8.45 of runtime debits: the account's
+    # configured limit binds, not the project allocation.
+    state = ledger(current=CycleDebits(runtime_committed_usd=D("8.45")))
+    assert_denied(decide(settings=SMALL, state=state), R.ACCOUNT_HEADROOM)
+    assert decide(state=state).admitted  # the verified $19 limit has room
     assert project_allocation(CFG) == D("11.00")
 
 
 def test_project_target_below_account_headroom_binds() -> None:
-    # The account has ample prepaid room, but Hardware Radar's own runtime
+    # The configured limit has ample room, but Hardware Radar's own runtime
     # debits already fill A: the class cap, not the account, refuses.
     full = ledger(current=CycleDebits(runtime_committed_usd=D("10.99")))
     assert_denied(decide(state=full), R.CLASS_CAP)
@@ -314,39 +313,122 @@ def test_project_target_below_account_headroom_binds() -> None:
 
 
 def test_admission_never_relies_on_overage() -> None:
-    # A limit raised above the prepaid credit adds no admissible headroom.
-    for limit in (D("19"), D("100"), None):
-        state = at_snapshot_edge(over=CENT, account_limit_usd=limit)
-        assert_denied(decide(state=state), R.ACCOUNT_HEADROOM)
-        assert decide(state=at_snapshot_edge(account_limit_usd=limit)).admitted
+    # The configured limit is the lesser of the usage limit and the prepaid
+    # credit (MS2-D-48), and P is read from that setting alone: a snapshot
+    # carrying a larger limit adds no admissible headroom.
+    over = at_external_edge(over=CENT)
+    assert_denied(decide(settings=SMALL, state=over), R.ACCOUNT_HEADROOM)
+    bigger = dataclasses.replace(over, snapshot=snap(account_limit_usd=D("100")))
+    assert_denied(decide(settings=SMALL, state=bigger), R.ACCOUNT_HEADROOM)
 
 
 @pytest.mark.parametrize(
     "request_", EVERY_CLASS, ids=lambda r: str(r.operator_kind or r.budget_class)
 )
 def test_plan_base_price_above_cash_ceiling_denies_all(request_: AdmissionRequest) -> None:
-    pricey = ledger(snapshot=snap(base_price_usd=D("20.01")))
-    assert_denied(decide(request_, state=pricey), R.CASH_CEILING_EXCEEDED_BY_PLAN)
-    assert decide(request_, state=ledger(snapshot=snap(base_price_usd=D("20.00")))).admitted
+    pricey = cfg(account_base_price_usd=D("20.01"))
+    assert_denied(decide(request_, settings=pricey), R.CASH_CEILING_EXCEEDED_BY_PLAN)
+    assert decide(request_, settings=cfg(account_base_price_usd=D("20.00"))).admitted
+
+
+# Contract cases 2-5 of budget.account_setting_problem (R12-04), each unset
+# and each invalid way the pure policy can see it.
+_UNOBSERVABLE_CASES: Final = [
+    ({"account_limit_usd": None}, "ACCOUNT_LIMIT_USD"),
+    ({"account_limit_usd": D("0")}, "ACCOUNT_LIMIT_USD"),
+    ({"account_limit_usd": D("NaN")}, "ACCOUNT_LIMIT_USD"),
+    ({"account_limit_usd": D("Infinity")}, "ACCOUNT_LIMIT_USD"),
+    ({"account_base_price_usd": None}, "ACCOUNT_BASE_PRICE_USD"),
+    ({"account_base_price_usd": D("-0.01")}, "ACCOUNT_BASE_PRICE_USD"),
+    ({"account_base_price_usd": D("NaN")}, "ACCOUNT_BASE_PRICE_USD"),
+    ({"account_data_retention_days": None}, "ACCOUNT_DATA_RETENTION_DAYS"),
+    ({"account_data_retention_days": 0}, "ACCOUNT_DATA_RETENTION_DAYS"),
+    ({"account_verified_on": None}, "ACCOUNT_VERIFIED_ON"),
+    ({"account_verified_on": NOW.date() + timedelta(days=1)}, "ACCOUNT_VERIFIED_ON"),
+    ({"account_verified_on": date(2026, 9, 4)}, "ACCOUNT_VERIFIED_ON"),  # before the anchor
+]
 
 
 @pytest.mark.parametrize(
-    "state",
-    [
-        ledger(snapshot=snap(observed_at=NOW - timedelta(seconds=901))),
-        ledger(snapshot=snap(observed_at=None)),
-        ledger(snapshot=snap(prepaid_credit_usd=None)),
-        ledger(snapshot=snap(base_price_usd=None)),
-        ledger(snapshot=snap(account_usage_usd=None)),
-    ],
-    ids=["stale", "never-observed", "no-credit", "no-base-price", "no-usage"],
+    ("changes", "setting"), _UNOBSERVABLE_CASES, ids=lambda v: str(v) if isinstance(v, str) else ""
 )
-def test_stale_or_unreadable_account_snapshot_denies(state: LedgerState) -> None:
-    assert_denied(decide(state=state), R.ACCOUNT_STATE_UNOBSERVABLE)
+def test_unset_or_invalid_account_setting_denies_account_state_unobservable(
+    changes: dict[str, Any], setting: str
+) -> None:
+    for request_ in EVERY_CLASS:
+        decision = decide(request_, cfg(**changes))
+        assert_denied(decision, R.ACCOUNT_STATE_UNOBSERVABLE)
+        assert setting in decision.detail
 
 
-def test_snapshot_exactly_at_max_age_is_fresh() -> None:
-    assert decide(state=ledger(snapshot=snap(observed_at=NOW - timedelta(seconds=900)))).admitted
+def test_unset_or_invalid_anchor_denies_cycle_unknown() -> None:
+    # Unset: no cycle can be derived, so the ledger records none (snapshot None).
+    unset = cfg(billing_cycle_anchor=None)
+    assert_denied(decide(settings=unset, state=ledger(snapshot=None)), R.CYCLE_UNKNOWN)
+    # With a recorded row but the anchor since unset, the contract still
+    # names the anchor's reason: cycle_unknown, never account_state_unobservable.
+    assert_denied(decide(settings=unset), R.CYCLE_UNKNOWN)
+    # A `now` before the anchor derives no cycle either.
+    tomorrow = datetime(2026, 9, 21, tzinfo=UTC)
+    assert budget.billing_cycle_bounds(tomorrow, NOW) is None
+    later = cfg(billing_cycle_anchor=tomorrow)
+    assert_denied(decide(settings=later, state=ledger(snapshot=None)), R.CYCLE_UNKNOWN)
+
+
+def test_admission_admits_with_configured_cycle_and_limit() -> None:
+    assert usable() == D("17.10")  # $19.00 limit less the 10% margin
+    decision = decide()
+    assert decision.admitted and decision.estimate is not None
+    new = decision.estimate.admission_usd
+    # HR_cycle + new + E exactly P in the next cycle: admitted; a tick over
+    # is denied, although the class caps and the target all have room.
+    edge = D("17.10") - new - D("5.00")
+    assert decide(state=ledger(next_cycle=CycleDebits(runtime_committed_usd=edge))).admitted
+    over = ledger(next_cycle=CycleDebits(runtime_committed_usd=edge + TICK))
+    assert_denied(decide(state=over), R.ACCOUNT_HEADROOM)
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        ({}, None),
+        (
+            {"billing_cycle_anchor": None},
+            budget.AccountSettingProblem("BILLING_CYCLE_ANCHOR", R.CYCLE_UNKNOWN),
+        ),
+        *[
+            (c, budget.AccountSettingProblem(name, R.ACCOUNT_STATE_UNOBSERVABLE))
+            for c, name in _UNOBSERVABLE_CASES
+        ],
+        (
+            {"account_margin_usd": D("NaN")},
+            budget.AccountSettingProblem("ACCOUNT_MARGIN_USD", R.BUDGET_SETTING_INVALID),
+        ),
+        (
+            {"account_margin_usd": D("-1")},
+            budget.AccountSettingProblem("ACCOUNT_MARGIN_USD", R.BUDGET_SETTING_INVALID),
+        ),
+        # Order: the first failing check wins (the anchor before the limit).
+        (
+            {"billing_cycle_anchor": None, "account_limit_usd": None},
+            budget.AccountSettingProblem("BILLING_CYCLE_ANCHOR", R.CYCLE_UNKNOWN),
+        ),
+        (
+            {"account_limit_usd": None, "account_margin_usd": D("NaN")},
+            budget.AccountSettingProblem("ACCOUNT_LIMIT_USD", R.ACCOUNT_STATE_UNOBSERVABLE),
+        ),
+    ],
+)
+def test_account_setting_problem_contract(
+    changes: dict[str, Any], expected: budget.AccountSettingProblem | None
+) -> None:
+    assert budget.account_setting_problem(cfg(**changes), NOW) == expected
+
+
+def test_verified_on_today_and_on_the_anchor_day_are_valid() -> None:
+    # The two inclusive edges of the ACCOUNT_VERIFIED_ON contract.
+    for day in (NOW.date(), date(2026, 9, 5)):
+        assert budget.account_setting_problem(cfg(account_verified_on=day), NOW) is None
 
 
 def test_target_setting_above_twelve_rejected() -> None:
@@ -403,82 +485,54 @@ def test_default_external_liability_admits_only_when_invariant_holds(
     monkeypatch.delenv("HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD", raising=False)
     parsed = _settings_with(monkeypatch).HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD
     assert parsed == D("5.00")
-    settings = cfg(external_liability_usd=parsed)
-    # Isolate check 2 (R34): with $19 credit and $1.90 margin the $12 target
-    # binds first, so this fixture has $15 credit: P = 13.50, P - 5 = 8.50 < A.
-    small = snap(prepaid_credit_usd=D("15"), account_usage_usd=D("0"))
-    p = usable(settings, small)
+    # Isolate check 2 (R34): with the $19 limit and $1.90 margin the $12
+    # target binds first, so this fixture configures $15: P = 13.50, P - 5 =
+    # 8.50 < A.
+    settings = cfg(external_liability_usd=parsed, account_limit_usd=D("15"))
+    p = usable(settings)
     new = estimate_of(WATCH, settings).admission_usd
-    standing = standing_account_read_debit(settings)
-    committed = p - D("5.00") - new - standing  # HR_cycle + estimate + 5.00 = P
-    assert committed + standing + new < project_allocation(settings)  # check 1 and A slack
-    exact = ledger(snapshot=small, current=CycleDebits(runtime_committed_usd=committed))
+    committed = p - D("5.00") - new  # HR_cycle + estimate + 5.00 = P
+    assert committed + new < project_allocation(settings)  # A slack
+    exact = ledger(current=CycleDebits(runtime_committed_usd=committed))
     assert decide(settings=settings, state=exact).admitted
-    over = ledger(snapshot=small, current=CycleDebits(runtime_committed_usd=committed + CENT))
+    over = ledger(current=CycleDebits(runtime_committed_usd=committed + CENT))
     assert_denied(decide(settings=settings, state=over), R.ACCOUNT_HEADROOM)
-    stale = ledger(
-        snapshot=dataclasses.replace(small, observed_at=NOW - timedelta(hours=1)),
-        current=CycleDebits(runtime_committed_usd=committed),
-    )
-    assert_denied(decide(settings=settings, state=stale), R.ACCOUNT_STATE_UNOBSERVABLE)
 
 
 def test_external_liability_consumes_share_before_target() -> None:
-    # $14 credit: P = 12.60, share P - 5 = 7.60, well below A = 11.00. Runtime
-    # debits of 7.00 leave the target room but not the share.
-    small = snap(prepaid_credit_usd=D("14"), account_usage_usd=D("0"))
-    state = ledger(snapshot=small, current=CycleDebits(runtime_committed_usd=D("7.00")))
-    assert_denied(decide(state=state), R.ACCOUNT_HEADROOM)
-    assert decide(state=ledger(current=CycleDebits(runtime_committed_usd=D("7.00")))).admitted
+    # $14 limit: P = 12.60, share P - 5 = 7.60, well below A = 11.00. Runtime
+    # debits of 7.55 leave the target room but not the share.
+    state = ledger(current=CycleDebits(runtime_committed_usd=D("7.55")))
+    assert_denied(decide(settings=cfg(account_limit_usd=D("14")), state=state), R.ACCOUNT_HEADROOM)
+    assert decide(state=state).admitted
 
 
-def test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_prepaid() -> (
+def test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_configured_limit() -> (
     None
 ):
     # Admit at the edge of check 2, then let other workloads consume their
     # whole declared bound before the run completes: the account's total
-    # consumption still fits the prepaid credit.
-    # $15 credit (P = 13.50) so check 2, not the $11 allocation, is the edge.
-    small = snap(prepaid_credit_usd=D("15"), account_usage_usd=D("0"))
-    p = usable(CFG, small)
-    new = estimate_of(WATCH).admission_usd
-    standing = standing_account_read_debit(CFG)
+    # consumption still fits the configured limit.
+    # A $15 limit (P = 13.50) so check 2, not the $11 allocation, is the edge.
+    p = usable(SMALL)
+    new = estimate_of(WATCH, SMALL).admission_usd
     external = D("5.00")
-    committed = p - external - new - standing
-    state = ledger(snapshot=small, current=CycleDebits(runtime_committed_usd=committed))
-    assert decide(state=state).admitted
-    over = ledger(snapshot=small, current=CycleDebits(runtime_committed_usd=committed + TICK))
-    assert_denied(decide(state=over), R.ACCOUNT_HEADROOM)
-    hr_worst_case = committed + standing + new
+    committed = p - external - new
+    state = ledger(current=CycleDebits(runtime_committed_usd=committed))
+    assert decide(settings=SMALL, state=state).admitted
+    over = ledger(current=CycleDebits(runtime_committed_usd=committed + TICK))
+    assert_denied(decide(settings=SMALL, state=over), R.ACCOUNT_HEADROOM)
+    hr_worst_case = committed + new
     assert hr_worst_case + external <= p <= D("15")
-
-
-def test_observed_external_consumption_above_bound_denies_and_trips_latch() -> None:
-    # usage - HR_cycle is a lower bound on other workloads' consumption.
-    hr = standing_account_read_debit(CFG) + D("1.00")
-    usage = hr + D("5.00") + TICK
-    state = ledger(
-        snapshot=snap(account_usage_usd=usage), current=CycleDebits(runtime_committed_usd=D("1.00"))
-    )
-    decision = decide(state=state)
-    assert_denied(decision, R.EXTERNAL_LIABILITY_EXCEEDED)
-    assert decision.trip_latch
-    at_bound = ledger(
-        snapshot=snap(account_usage_usd=hr + D("5.00")),
-        current=CycleDebits(runtime_committed_usd=D("1.00")),
-    )
-    assert decide(state=at_bound).admitted
 
 
 def test_straddling_reservation_checked_against_both_cycles_external_bound() -> None:
     new = estimate_of(WATCH).admission_usd
-    standing = standing_account_read_debit(CFG)
-    room = usable() - D("5.00") - new - standing
+    room = usable() - D("5.00") - new
     fits_next = CycleDebits(runtime_committed_usd=room)
     over_next = CycleDebits(runtime_committed_usd=room, carried_handoff_usd=CENT)
-    base = snap(account_usage_usd=D("0"))
-    assert decide(state=ledger(snapshot=base, next_cycle=fits_next)).admitted
-    assert_denied(decide(state=ledger(snapshot=base, next_cycle=over_next)), R.ACCOUNT_HEADROOM)
+    assert decide(state=ledger(next_cycle=fits_next)).admitted
+    assert_denied(decide(state=ledger(next_cycle=over_next)), R.ACCOUNT_HEADROOM)
 
 
 # ── Operator class (MS2-D-46) ───────────────────────────────────────────────
@@ -488,26 +542,23 @@ def test_operator_reservation_counts_against_operator_class_and_account_checks()
     # Runtime debits never consume the operator allowance ...
     busy_runtime = ledger(current=CycleDebits(runtime_committed_usd=D("11.00")))
     assert decide(BUILD, state=busy_runtime).admitted
-    # ... but an operator row still passes both account checks.
-    assert_denied(decide(BUILD, state=at_snapshot_edge(BUILD, over=CENT)), R.ACCOUNT_HEADROOM)
-    assert decide(BUILD, state=at_snapshot_edge(BUILD)).admitted
-    # And operator debits count in HR_cycle for a runtime request's check 2.
-    small = snap(prepaid_credit_usd=D("14"), account_usage_usd=D("0"))
-    room = (
-        usable(CFG, small)
-        - D("5.00")
-        - standing_account_read_debit(CFG)
-        - estimate_of(WATCH).admission_usd
+    # ... but an operator row still passes the external-liability check.
+    edge = at_external_edge(BUILD)
+    assert decide(BUILD, settings=SMALL, state=edge).admitted
+    assert_denied(
+        decide(BUILD, settings=SMALL, state=at_external_edge(BUILD, over=CENT)), R.ACCOUNT_HEADROOM
     )
-    ok = ledger(snapshot=small, current=CycleDebits(runtime_committed_usd=room - D("0.50")))
-    assert decide(state=ok).admitted
+    # And operator debits count in HR_cycle for a runtime request's check 2.
+    small = cfg(account_limit_usd=D("14"))
+    room = usable(small) - D("5.00") - estimate_of(WATCH).admission_usd
+    ok = ledger(current=CycleDebits(runtime_committed_usd=room - D("0.50")))
+    assert decide(settings=small, state=ok).admitted
     with_operator = ledger(
-        snapshot=small,
         current=CycleDebits(
             runtime_committed_usd=room - D("0.50"), operator_committed_usd=D("0.51")
         ),
     )
-    assert_denied(decide(state=with_operator), R.ACCOUNT_HEADROOM)
+    assert_denied(decide(settings=small, state=with_operator), R.ACCOUNT_HEADROOM)
 
 
 def test_operator_allowance_exhausted_refuses_reservation() -> None:
@@ -637,7 +688,6 @@ def test_api_calls_priced_at_bound_without_billing_verification() -> None:
     [
         "max_run_polls",
         "max_correction_reads",
-        "max_account_reads_per_cycle",
         "api_call_overhead_bytes",
         "max_api_response_bytes",
         "max_dataset_page_bytes",
@@ -658,18 +708,6 @@ def test_unset_margin_denies_with_unbounded_component() -> None:
     assert_denied(decide(INSPECT, cfg(margin=D("NaN"))), R.UNBOUNDED_COMPONENT)
 
 
-def test_account_read_bound_is_standing_cycle_debit() -> None:
-    standing = standing_account_read_debit(CFG)
-    assert standing >= 3000 * api_call_bound(CFG)
-    assert D("0.54") <= standing <= D("0.55")  # the plan's ~$0.54 at the defaults
-    new = estimate_of(WATCH).admission_usd
-    # An empty ledger still carries the standing debit against A.
-    fits = ledger(current=CycleDebits(runtime_committed_usd=D("11.00") - standing - new))
-    assert decide(state=fits).admitted
-    over = ledger(current=CycleDebits(runtime_committed_usd=D("11.00") - standing - new + TICK))
-    assert_denied(decide(state=over), R.CLASS_CAP)
-
-
 def test_storage_lifetime_below_data_retention_days_denies() -> None:
     # R38 accepted (the fixture's default), so only the lifetime decides.
     assert CFG.call_billing_residual_accepted is not None
@@ -680,8 +718,9 @@ def test_storage_lifetime_below_data_retention_days_denies() -> None:
 
 
 def test_missing_data_retention_days_denies() -> None:
-    state = ledger(snapshot=snap(data_retention_days=None))
-    assert_denied(decide(state=state), R.UNBOUNDED_COMPONENT)
+    decision = decide(settings=cfg(account_data_retention_days=None))
+    assert_denied(decision, R.ACCOUNT_STATE_UNOBSERVABLE)
+    assert "ACCOUNT_DATA_RETENTION_DAYS" in decision.detail
 
 
 # ── Revision 11 (R10-01, -02, -06, -07, -08) ────────────────────────────────
@@ -712,7 +751,6 @@ def test_per_call_bounds_derived_from_settings_by_endpoint() -> None:
         "delete_kv_store",
         "kv_record_read",
         "build_read",
-        "account_read",
     ):
         assert getattr(bounds, endpoint) == call, endpoint
     assert api_call_bound(settings) == call
@@ -797,21 +835,12 @@ def test_discovery_denied_above_reserve_while_watch_refresh_admitted() -> None:
 
 
 def test_outstanding_reservations_are_counted() -> None:
-    # Carried handoff consumption and discovery allowances count like rows.
+    # Carried handoff consumption counts like rows.
     for debits in (
         CycleDebits(runtime_committed_usd=D("10.99")),
         CycleDebits(carried_handoff_usd=D("10.99")),
-        CycleDebits(discovery_allowance_usd=D("10.99")),
     ):
         assert_denied(decide(state=ledger(current=debits)), R.CLASS_CAP)
-
-
-def test_inclusion_watermark_reduces_only_the_snapshot_check() -> None:
-    state = at_snapshot_edge(over=CENT)
-    assert_denied(decide(state=state), R.ACCOUNT_HEADROOM)
-    # Spend the snapshot is known to contain is not debited twice by check 1.
-    included = dataclasses.replace(state.current, hr_included_usd=D("1.00"))
-    assert decide(state=dataclasses.replace(state, current=included)).admitted
 
 
 @pytest.mark.parametrize(
@@ -844,7 +873,6 @@ def test_missing_ledger_authority_denies() -> None:
         {"watch_refresh_reserve_usd": None},
         {"cash_ceiling_usd": None},
         {"account_margin_usd": D("NaN")},
-        {"account_snapshot_max_age_s": None},
     ],
     ids=lambda c: next(iter(c)),
 )
@@ -853,8 +881,13 @@ def test_invalid_allocation_setting_denies(changes: dict[str, Any]) -> None:
 
 
 def test_configured_account_margin_replaces_the_ten_percent_default() -> None:
-    assert budget.account_margin_usd(CFG, D("19")) == D("1.9")
-    assert budget.account_margin_usd(cfg(account_margin_usd=D("0")), D("19")) == 0
+    # Absent: 10% of the configured account limit, so P = 17.10 at $19.
+    assert budget.account_margin_usd(CFG, D("19.00")) == D("1.9")
+    assert usable() == D("17.10")
+    # Present: replaces the default outright, so P is the whole $19 limit.
+    zero = cfg(account_margin_usd=D("0"))
+    assert budget.account_margin_usd(zero, D("19.00")) == 0
+    assert usable(zero) == D("19.00")
 
 
 @pytest.mark.parametrize(

@@ -1,12 +1,12 @@
 """MS-2 Slice E5: the start job admitted by the real spend ledger, and budget_paused.
 
 jobs.LedgerAdmission is bound with the ledger_support settings (round test
-prices, never Apify's live ones) and a billing cycle around the real now,
-because the start job stamps provider rows with real time. Apify is served
-by test_apify_recovery_probe's LedgerFakeApify over httpx.MockTransport, so no
-test touches the network. Also here: the E4 residuals folded into E5, namely
-the KV byte-cap trip (r1) and the stale selector-4 marker left to poller start
-(r2), plus the over-cap account read.
+prices, never Apify's live ones) and the configured LIVE_ANCHOR cycle around
+the real now, because the start job stamps provider rows with real time.
+Apify is served by test_apify_recovery_probe's LedgerFakeApify over
+httpx.MockTransport, so no test touches the network. Also here: the E4
+residuals folded into E5, namely the KV byte-cap trip (r1) and the stale
+selector-4 marker left to poller start (r2).
 """
 
 from __future__ import annotations
@@ -34,12 +34,7 @@ from test_apify_recovery_probe import (
 from hw_radar.acquisition import persist
 from hw_radar.acquisition.apify import jobs
 from hw_radar.acquisition.apify.budget import DenialReason
-from hw_radar.acquisition.apify.client import (
-    AccountLimits,
-    AccountPlan,
-    ApifyClient,
-    ApifyResponseTooLargeError,
-)
+from hw_radar.acquisition.apify.client import ApifyClient
 from hw_radar.acquisition.apify.jobs import (
     LedgerAdmission,
     StartResult,
@@ -48,12 +43,7 @@ from hw_radar.acquisition.apify.jobs import (
     apify_poll_tick,
     start_provider_run,
 )
-from hw_radar.acquisition.apify.ledger import (
-    LatchReason,
-    RefreshOutcome,
-    refresh_account_snapshot,
-    trip_latch,
-)
+from hw_radar.acquisition.apify.ledger import LatchReason, trip_latch
 from hw_radar.acquisition.apify.reconcile import begin_monitoring_read
 from hw_radar.acquisition.contracts import NormalizedListing, NullResolver
 from hw_radar.catalog.models import (
@@ -109,7 +99,7 @@ def _start(config: SourceConfig, fake: LedgerFakeApify) -> StartResult:
     return _run(
         start_provider_run(
             config,
-            admission=LedgerAdmission(config=ledger_support.CONFIG),
+            admission=LedgerAdmission(config=ledger_support.LIVE_CONFIG),
             run_specs=_specs(),
             client_factory=fake.client,
         )
@@ -126,7 +116,7 @@ def _tick(fake: LedgerFakeApify) -> TickReport:
 
 def _exhaust_watch_refresh(at: Any) -> ApifySpendReservation:
     """An open row leaving $0.0001 of the watch_refresh class: no run fits."""
-    room = ledger_support.ALLOCATION - ledger_support.STANDING - Decimal("0.0001")
+    room = ledger_support.ALLOCATION - Decimal("0.0001")
     return ledger_support.open_row(room, at)
 
 
@@ -172,14 +162,14 @@ def _watched_listing(site: SourceSite) -> tuple[Watch, Listing]:
 
 @LIVE
 def test_denied_start_records_denial_and_starts_nothing(actor_source: SourceConfig) -> None:
-    cycle = _live_cycle(observed=True)
+    cycle = _live_cycle()
     _exhaust_watch_refresh(cycle.cycle_start)
-    fake = LedgerFakeApify(_fixture("complete"), cycle)
+    fake = LedgerFakeApify(_fixture("complete"))
 
     result = _start(actor_source, fake)
 
     assert (result.status, result.reason) == (StartStatus.DENIED, "class_cap")
-    assert fake.requests == []  # no start request, and no account read (snapshot fresh)
+    assert fake.requests == []  # no start request, and no account read
     assert not ProviderRun.objects.exists()
     denial = ApifySpendReservation.objects.get(status=ReservationStatus.DENIED)
     assert (denial.admission_class, denial.denial_reason, denial.source_site) == (
@@ -194,9 +184,9 @@ def test_denied_start_records_denial_and_starts_nothing(actor_source: SourceConf
 def test_denied_start_shows_budget_paused_with_reason_in_shortlist(
     actor_source: SourceConfig,
 ) -> None:
-    cycle = _live_cycle(observed=True)
+    cycle = _live_cycle()
     filler = _exhaust_watch_refresh(cycle.cycle_start)
-    fake = LedgerFakeApify(_fixture("complete"), cycle)
+    fake = LedgerFakeApify(_fixture("complete"))
     watch, listing = _watched_listing(actor_source.source_site)
     [before] = shortlist(watch.pk)
     assert (before.freshness, before.budget_paused_reason) == (Freshness.FRESH, None)
@@ -297,70 +287,13 @@ def test_open_latch_pauses_only_actor_sources(actor_source: SourceConfig) -> Non
     assert OVERRUN_LATCH_REASON == DenialReason.OVERRUN_LATCH
 
 
-# ── E5: the snapshot refresh before reserve ─────────────────────────────────
-
-
-@LIVE
-def test_stale_snapshot_is_refreshed_then_start_admitted(actor_source: SourceConfig) -> None:
-    cycle = _live_cycle(observed=False)
-    fake = LedgerFakeApify(_fixture("complete"), cycle)
-
-    result = _start(actor_source, fake)
-
-    assert result.status is StartStatus.STARTED
-    paths = [r.url.path for r in fake.requests]
-    assert paths[:2] == ["/v2/users/me/limits", "/v2/users/me"]
-    assert fake.starts() == 1
-    cycle.refresh_from_db()
-    assert cycle.account_read_count == 2
-
-
-@LIVE
-def test_settings_denial_skips_the_account_read(actor_source: SourceConfig) -> None:
-    # A stale snapshot, but an unset price denies first: no account read is spent.
-    cycle = _live_cycle(observed=False)
-    fake = LedgerFakeApify(_fixture("complete"), cycle)
-    unpriced = ledger_support.config(budget={"margin": None})
-
-    result = _run(
-        start_provider_run(
-            actor_source,
-            admission=LedgerAdmission(config=unpriced),
-            run_specs=_specs(),
-            client_factory=fake.client,
-        )
-    )
-
-    assert (result.status, result.reason) == (StartStatus.DENIED, "unbounded_component")
-    assert fake.requests == []
-    cycle.refresh_from_db()
-    assert cycle.account_read_count == 0
-
-
-class _OverCapReader:
-    async def get_account_limits(self) -> AccountLimits:
-        raise ApifyResponseTooLargeError(262144, "/v2/users/me/limits")
-
-    async def get_account_plan(self) -> AccountPlan:
-        raise AssertionError("never reached")
-
-
-def test_over_cap_account_read_trips_latch() -> None:
-    _live_cycle(observed=False)
-
-    outcome = _run(refresh_account_snapshot(_OverCapReader(), config=ledger_support.CONFIG))
-
-    assert outcome is RefreshOutcome.READ_FAILED
-    assert ledger_support.open_latches() == [LatchReason.API_RESPONSE_OVER_CAP]
-
-
 # ── r1: the KV byte cap (MS2-D-32) ──────────────────────────────────────────
 
 
 @LIVE
 def test_output_record_over_kv_byte_cap_trips_latch(actor_source: SourceConfig) -> None:
-    cycle = _live_cycle(observed=True)
-    fake = LedgerFakeApify(_fixture("complete"), cycle)
+    _live_cycle()
+    fake = LedgerFakeApify(_fixture("complete"))
     started = _run(
         start_provider_run(
             actor_source,
@@ -379,8 +312,8 @@ def test_output_record_over_kv_byte_cap_trips_latch(actor_source: SourceConfig) 
 
 @LIVE
 def test_output_record_within_kv_byte_cap_trips_nothing(actor_source: SourceConfig) -> None:
-    cycle = _live_cycle(observed=True)
-    fake = LedgerFakeApify(_fixture("complete"), cycle)
+    _live_cycle()
+    fake = LedgerFakeApify(_fixture("complete"))
     _run(
         start_provider_run(
             actor_source,

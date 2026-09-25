@@ -62,7 +62,6 @@ from hw_radar.acquisition.apify.jobs import (
     start_provider_run,
 )
 from hw_radar.acquisition.apify.ledger import (
-    AccountReader,
     LatchReason,
     LedgerRefused,
     clear_latch,
@@ -301,7 +300,7 @@ class ReleasedUnderStart:
     def __init__(self) -> None:
         self.reservation_id: int | None = None
 
-    async def admit(self, request: BudgetRequest, reader: AccountReader) -> BudgetDecision:
+    async def admit(self, request: BudgetRequest) -> BudgetDecision:
         def reserve_then_release() -> int:
             now = timezone.now()
             row = open_row(D("0.40"), now - 2 * GRACE)

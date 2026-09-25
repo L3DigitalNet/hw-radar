@@ -82,11 +82,11 @@ from hw_radar.acquisition.apify.budget import (
     BudgetDenied,
     DenialReason,
     account_margin_usd,
+    account_setting_problem,
     api_call_bound,
     dataset_page_bound,
     pages_per_read,
     project_allocation,
-    standing_account_read_debit,
 )
 from hw_radar.acquisition.apify.client import (
     MAX_API_REQUEST_BODY_BYTES,
@@ -959,27 +959,42 @@ def _apply_correction(
     logger.warning("reservation %s corrected upward by %s", resv.pk, delta)
     if actual > (resv.estimate_usd or Decimal(0)):
         _trip(LatchReason.OVERRUN, run_id, config, now)
-    breaches = invariant_breaches(resv, config)
+    breaches = invariant_breaches(resv, config, now)
     if breaches:
         logger.error("reservation %s correction breaches %s", resv.pk, breaches)
         _trip(LatchReason.POST_ADMISSION_INVARIANT_BREACH, run_id, config, now)
 
 
-def invariant_breaches(resv: ApifySpendReservation, config: LedgerConfig) -> list[str]:
+def invariant_breaches(
+    resv: ApifySpendReservation, config: LedgerConfig, now: datetime
+) -> list[str]:
     """Every MS2-D-40 invariant the committed totals now exceed, per touched cycle.
 
-    For each observed cycle the row's charge interval touches (the billing
-    clock, MS2-D-39), with no new estimate: the row's class cap, the runtime
-    allocation A, the operator allowance, the target, and both account checks
-    against that cycle's latest snapshot. A figure that cannot be computed (an
-    unset setting) is reported as a breach: the check fails closed.
+    First the MS2-D-48 account-setting contract (budget.account_setting_problem,
+    shared with admission), evaluated at the correction's own `now`: an invalid
+    setting yields exactly `unverifiable: <setting>` and skips every account
+    check, because P cannot be computed. Then, for each recorded cycle the
+    row's charge interval touches (the billing clock, MS2-D-39), with no new
+    estimate: the row's class cap, the runtime allocation A, the operator
+    allowance, the target, and, when the settings are valid, the
+    external-liability check `HR_cycle + E <= P` with P from the configured
+    account limit. A figure that cannot be computed (an unset setting) is
+    reported as a breach: the check fails closed.
     """
     assert resv.last_charge_at is not None
     cfg = config.budget
+    found: list[str] = []
+    usable: Decimal | None = None
+    problem = account_setting_problem(cfg, now)
+    if problem is not None:
+        found.append(f"unverifiable: {problem.setting}")
+    else:
+        limit = cfg.account_limit_usd
+        assert limit is not None  # the contract passed
+        usable = limit - account_margin_usd(cfg, limit)
     try:
         g = _guard(config)
         allocation = project_allocation(cfg)
-        standing = standing_account_read_debit(cfg)
         allowance = cfg.operator_allowance_usd
         target = cfg.cycle_target_usd
         external = cfg.external_liability_usd
@@ -987,24 +1002,14 @@ def invariant_breaches(resv: ApifySpendReservation, config: LedgerConfig) -> lis
         if allowance is None or target is None or external is None or reserve is None:
             raise BudgetDenied(DenialReason.BUDGET_SETTING_INVALID, "a budget setting is unset")
     except BudgetDenied as denied:
-        return [f"unverifiable: {denied.detail}"]
-    found: list[str] = []
+        return sorted({*found, f"unverifiable: {denied.detail}"})
     cycles = ApifyBudgetCycle.objects.filter(
         cycle_start__lte=resv.last_charge_at + g, cycle_end__gte=resv.reserved_at - g
     ).order_by("cycle_start")
     for cycle in cycles:
-        try:
-            debits, _ = cycle_debits(cycle, config)
-        except BudgetDenied as denied:
-            found.append(f"{cycle.cycle_start:%Y-%m-%d} unverifiable: {denied.detail}")
-            continue
+        debits, _ = cycle_debits(cycle, config)
         label = f"{cycle.cycle_start:%Y-%m-%d}"
-        runtime = (
-            debits.runtime_committed_usd
-            + debits.carried_handoff_usd
-            + debits.discovery_allowance_usd
-            + standing
-        )
+        runtime = debits.runtime_committed_usd + debits.carried_handoff_usd
         hr_cycle = runtime + debits.operator_committed_usd
         if resv.admission_class == AdmissionClass.OPERATOR.value:
             if debits.operator_committed_usd > allowance:
@@ -1023,18 +1028,7 @@ def invariant_breaches(resv: ApifySpendReservation, config: LedgerConfig) -> lis
             found.append(f"{label} operator allowance")
         if hr_cycle > target:
             found.append(f"{label} target")
-        prepaid = cycle.account_prepaid_credit_usd
-        if prepaid is None or cycle.account_usage_usd is None:
-            found.append(f"{label} account snapshot unobserved")
-            continue
-        try:
-            usable = prepaid - account_margin_usd(cfg, prepaid)
-        except BudgetDenied as denied:
-            found.append(f"{label} unverifiable: {denied.detail}")
-            continue
-        if cycle.account_usage_usd + hr_cycle - debits.hr_included_usd > usable:
-            found.append(f"{label} snapshot check")
-        if hr_cycle + external > usable:
+        if usable is not None and hr_cycle + external > usable:
             found.append(f"{label} external-liability check")
     return sorted(set(found))
 

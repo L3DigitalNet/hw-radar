@@ -12,7 +12,7 @@ import json
 import threading
 from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
@@ -23,8 +23,8 @@ from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.db import connection
 from django.test import override_settings
-from django.utils import timezone
 from ledger_support import (
+    C1_END,
     C1_START,
     C2_END,
     C2_START,
@@ -33,14 +33,15 @@ from ledger_support import (
     HOUR,
     LEDGER_A,
     LEDGER_B,
+    LIVE_ANCHOR,
     NOW,
     RUN_DEBIT,
-    STANDING,
     WATCH,
     claim,
     close_monitoring,
     config,
     cycle,
+    live_cycle_start,
     open_row,
     provider_run,
     reconcile,
@@ -63,7 +64,6 @@ from hw_radar.acquisition.apify.ledger import (
 )
 from hw_radar.catalog.models import (
     ApifyBudgetCycle,
-    ApifyCycleDiscovery,
     ApifyLedgerAuthority,
     ApifySpendReservation,
     ReservationStatus,
@@ -135,7 +135,7 @@ def test_admission_denied_without_cycle_authority() -> None:
 @pytest.mark.django_db
 def test_authority_continues_at_cycle_rollover() -> None:
     cycle()
-    cycle(C2_START, C2_END, observed_at=C2_START + HOUR)
+    cycle(C2_START, C2_END)
     claim()
     assert _admit(at=C2_START + HOUR)
     continued = ApifyLedgerAuthority.objects.get(cycle_start=C2_START)
@@ -145,7 +145,7 @@ def test_authority_continues_at_cycle_rollover() -> None:
 @pytest.mark.django_db
 def test_handed_off_authority_does_not_continue_at_rollover() -> None:
     cycle()
-    cycle(C2_START, C2_END, observed_at=C2_START + HOUR)
+    cycle(C2_START, C2_END)
     claim()
     _export()
     assert _denial(at=C2_START + HOUR) == DenialReason.LEDGER_AUTHORITY_MISSING
@@ -230,7 +230,7 @@ def test_handoff_export_refused_after_deadline_until_closing_read_commits() -> N
     assert import_handoff(exported.record, config=ENV_B, now=day8)
     carried = ApifyLedgerAuthority.objects.get().carried_consumption_usd
     assert carried == D(str(exported.record["carried_consumption_usd"]))
-    assert carried >= D("1.00") + STANDING
+    assert carried >= D("1.00")
 
 
 @pytest.mark.django_db
@@ -375,29 +375,26 @@ def test_import_refuses_record_for_another_cycle() -> None:
     ApifySpendReservation.objects.all().delete()
     with connection.cursor() as cursor:
         cursor.execute("TRUNCATE apify_budget_cycle, apify_ledger_authority CASCADE")
-    cycle(C2_START, C2_END, observed_at=C2_START + HOUR)
+    cycle(C2_START, C2_END)
     with pytest.raises(LedgerRefused, match="wrong_cycle"):
         import_handoff(exported.record, config=ENV_B, now=C2_START + HOUR)
 
 
 @pytest.mark.django_db
-def test_same_cycle_handoff_carries_account_read_and_monitoring_debits() -> None:
+def test_same_cycle_handoff_carries_monitoring_debits_without_account_read_lines() -> None:
     cycle()
     claim()
-    ApifyCycleDiscovery.objects.create(
-        opened_at=C1_START - HOUR,
-        read_count=1,
-        last_read_at=C1_START - HOUR,
-        closed_at=C1_START,
-        cycle_start=C1_START,
-        close_reason="discovered",
-    )
     row = _settled("0.30")
     ApifySpendReservation.objects.filter(pk=row.pk).update(monitoring_bound_usd=D("0.0022"))
     exported = _export()
     lines = _section(exported.record, "lines")
-    assert D(str(lines["standing_account_read_usd"])) == STANDING
-    assert D(str(lines["discovery_allowance_usd"])) > 0
+    # MS2-D-48: the discovery and standing read-debit lines have no source.
+    assert set(lines) == {
+        "settled_runtime_usd",
+        "settled_operator_usd",
+        "monitoring_allowance_usd",
+        "carried_in_usd",
+    }
     assert D(str(lines["monitoring_allowance_usd"])) == D("0.0022")
     _become_other_environment()
     import_handoff(exported.record, config=ENV_B, now=NOW)
@@ -405,11 +402,46 @@ def test_same_cycle_handoff_carries_account_read_and_monitoring_debits() -> None
     total = D(str(exported.record["carried_consumption_usd"]))
     assert debits.carried_handoff_usd == total
     assert total == sum((D(str(v)) for v in lines.values()), D(0))
-    # The destination's own standing debit is added by admission on top of
-    # the carried one: B's room is A - carried - its own standing.
-    room = D("11.00") - total - STANDING
+    # B's room is A - carried: a row leaving one tick less than a run denies.
+    room = D("11.00") - total
     open_row(room - RUN_DEBIT + D("0.0001"), NOW)
     assert _denial(ENV_B) == DenialReason.CLASS_CAP
+
+
+@pytest.mark.django_db
+def test_claim_origin_materializes_configured_cycle_without_a_denied_start() -> None:
+    assert not ApifyBudgetCycle.objects.exists()
+    authority = claim_origin("owner: no other environment admitted", config=CONFIG, now=NOW)
+    c1 = ApifyBudgetCycle.objects.get()
+    assert (c1.cycle_start, c1.cycle_end) == (C1_START, C1_END)
+    assert authority.cycle_start == C1_START
+    assert not ApifySpendReservation.objects.exists()  # no denied start was needed
+    assert _admit()
+    # With the anchor unset, the claim is refused cycle_unknown and creates nothing.
+    ApifyLedgerAuthority.objects.all().delete()
+    ApifySpendReservation.objects.all().delete()
+    ApifyBudgetCycle.objects.all().delete()
+    with pytest.raises(LedgerRefused, match="cycle_unknown"):
+        claim_origin("owner", config=config(budget={"billing_cycle_anchor": None}), now=NOW)
+    assert not ApifyBudgetCycle.objects.exists()
+
+
+@pytest.mark.django_db
+def test_handoff_record_is_cycle_scoped_under_configured_anchor() -> None:
+    claim_origin("owner", config=CONFIG, now=NOW)
+    exported = _export()
+    # Authority is keyed by the derived cycle start, and the record names it.
+    assert ApifyLedgerAuthority.objects.get().cycle_start == C1_START
+    assert exported.record["cycle_start"] == C1_START.isoformat()
+    _become_other_environment()
+    # A destination configured with another anchor derives another cycle.
+    other_anchor = config(
+        ledger_id=LEDGER_B, budget={"billing_cycle_anchor": datetime(2026, 9, 10, tzinfo=UTC)}
+    )
+    with pytest.raises(LedgerRefused, match="wrong_cycle"):
+        import_handoff(exported.record, config=other_anchor, now=NOW)
+    assert not ApifyLedgerAuthority.objects.exists()
+    assert import_handoff(exported.record, config=ENV_B, now=NOW)
 
 
 # ── Serialization with admission (two threads) ──
@@ -454,8 +486,14 @@ def test_admission_racing_handoff_export_serializes() -> None:
         assert denied is not None and denied.denial_reason == "ledger_authority_missing"
 
 
-# Settings-level prices for the commands, which read Django settings.
+# Settings-level prices and the live configured account state for the
+# commands, which read Django settings and the real clock.
 PRICED = {
+    "HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR": LIVE_ANCHOR,
+    "HW_RADAR_APIFY_ACCOUNT_LIMIT_USD": D("19.00"),
+    "HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD": D("19.00"),
+    "HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS": 31,
+    "HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON": LIVE_ANCHOR.date(),
     "HW_RADAR_APIFY_USD_PER_CU": D("0.20"),
     "HW_RADAR_APIFY_DATASET_READS_USD_PER_1000": D("0.0004"),
     "HW_RADAR_APIFY_DATASET_WRITES_USD_PER_1000": D("0.005"),
@@ -474,10 +512,6 @@ PRICED = {
 
 @pytest.mark.django_db
 def test_claim_and_handoff_commands_round_trip(tmp_path: Path) -> None:
-    cycle(observed_at=timezone.now())
-    ApifyBudgetCycle.objects.update(
-        cycle_start=timezone.now() - DAY, cycle_end=timezone.now() + DAY
-    )
     out = StringIO()
     with override_settings(**PRICED, HW_RADAR_APIFY_LEDGER_ID=LEDGER_A):
         call_command("apify_ledger_claim", "--origin", "--reason", "fresh cycle", stdout=out)
@@ -490,14 +524,11 @@ def test_claim_and_handoff_commands_round_trip(tmp_path: Path) -> None:
     assert "claimed origin" in out.getvalue()
     assert ApifyLedgerAuthority.objects.get().attested_by.endswith(": fresh cycle")
     _become_other_environment()
-    ApifyBudgetCycle.objects.update(
-        cycle_start=timezone.now() - DAY, cycle_end=timezone.now() + DAY
-    )
+    ApifyBudgetCycle.objects.all().delete()  # the destination derives its own row
     out = StringIO()
-    with override_settings(HW_RADAR_APIFY_LEDGER_ID=LEDGER_B):
-        # The exporter's cycle row moved with it; import needs the same start.
+    with override_settings(**PRICED, HW_RADAR_APIFY_LEDGER_ID=LEDGER_B):
         exported = json.loads(record.read_text(encoding="utf-8"))
-        ApifyBudgetCycle.objects.update(cycle_start=datetime.fromisoformat(exported["cycle_start"]))
+        assert exported["cycle_start"] == live_cycle_start().isoformat()
         call_command("apify_ledger_handoff", "--import", str(record), stdout=out)
         call_command("apify_ledger_handoff", "--import", str(record), stdout=out)
         bad = tmp_path / "bad.json"
@@ -509,14 +540,10 @@ def test_claim_and_handoff_commands_round_trip(tmp_path: Path) -> None:
 
 @pytest.mark.django_db
 def test_operator_reserve_command_reserves_or_refuses() -> None:
-    cycle(observed_at=timezone.now())
-    ApifyBudgetCycle.objects.update(
-        cycle_start=timezone.now() - DAY, cycle_end=timezone.now() + DAY
-    )
     with override_settings(**PRICED, HW_RADAR_APIFY_ENABLED=True):
         with pytest.raises(CommandError, match="ledger_authority_missing"):
             call_command("apify_operator_reserve", "--kind", "build", "--reason", "rebuild")
-        claim(ApifyBudgetCycle.objects.get().cycle_start)
+        claim(live_cycle_start())
         out = StringIO()
         call_command("apify_operator_reserve", "--kind", "build", "--reason", "rebuild", stdout=out)
     assert "reserved build" in out.getvalue()

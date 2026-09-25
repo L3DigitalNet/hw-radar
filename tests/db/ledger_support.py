@@ -2,9 +2,9 @@
 
 The budget settings are test_apify_budget.py's figures (round prices, NOT
 Apify's live ones): one SHAPE run reserves $0.0767 plus a $0.0022 monitoring
-allowance ($0.0789 debited), and the standing account-read debit is $0.5433.
-With the verified-shape snapshot ($19 prepaid, 10% margin, $5 external bound)
-P is $17.10 and the runtime allocation A is $11.00. Tests size filler rows
+allowance ($0.0789 debited). With the configured account state of MS2-D-48
+(anchor C1_START, $19 limit, 10% margin, $5 external bound) P is $17.10 and
+the runtime allocation A is $11.00. Tests size filler rows
 from these figures through the helpers, never from literals, so a price
 change moves every boundary together.
 
@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Final
@@ -31,9 +30,9 @@ from hw_radar.acquisition.apify.budget import (
     CostEstimate,
     RunShape,
     UnitPrices,
+    billing_cycle_bounds,
     estimate_run_cost,
     project_allocation,
-    standing_account_read_debit,
 )
 from hw_radar.acquisition.apify.client import ApifyClient, ApifyRun, RunOptions
 from hw_radar.acquisition.apify.ledger import LedgerConfig
@@ -68,9 +67,6 @@ C2_END: Final = datetime(2026, 11, 4, 23, 59, 59, 999000, tzinfo=UTC)
 C3_START: Final = datetime(2026, 11, 5, tzinfo=UTC)
 C3_END: Final = datetime(2026, 12, 4, 23, 59, 59, 999000, tzinfo=UTC)
 NOW: Final = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
-# The verified 2026-09-24 account state (MS2-D-40): $19 prepaid, ~$0.09 used.
-VERIFIED_PREPAID: Final = D("19")
-VERIFIED_USAGE: Final = D("0.09")
 
 BUDGET: Final = BudgetSettings(
     enabled=True,
@@ -110,8 +106,6 @@ BUDGET: Final = BudgetSettings(
     api_call_overhead_bytes=262144,
     max_api_response_bytes=262144,
     max_dataset_page_bytes=1_048_576,
-    max_account_reads_per_cycle=3000,
-    account_snapshot_max_age_s=900,
     cycle_boundary_guard_s=int(GUARD.total_seconds()),
     billing_cycle_anchor=C1_START,
     account_limit_usd=D("19.00"),
@@ -119,21 +113,39 @@ BUDGET: Final = BudgetSettings(
     account_data_retention_days=31,
     account_verified_on=C1_START.date(),
 )
-CONFIG: Final = LedgerConfig(
-    budget=BUDGET,
-    ledger_id=LEDGER_A,
-    usage_inclusion_lag_s=None,
-    max_discovery_reads=24,
-    discovery_read_interval_s=300,
-)
+CONFIG: Final = LedgerConfig(budget=BUDGET, ledger_id=LEDGER_A)
 SHAPE: Final = RunShape(
     memory_mb=1024, timeout_s=600, max_items=100, max_requests=20, max_bytes=5_000_000
 )
 WATCH: Final = AdmissionRequest(budget_class=BudgetClass.WATCH_REFRESH, run=SHAPE)
 RUN_ESTIMATE: Final = estimate_run_cost(SHAPE, BUDGET)
 RUN_DEBIT: Final = RUN_ESTIMATE.admission_usd  # estimate + monitoring allowance
-STANDING: Final = standing_account_read_debit(BUDGET)
 ALLOCATION: Final = project_allocation(BUDGET)
+
+
+# Tests driven by the real clock (the start job and the commands stamp real
+# time) configure the anchor as the first of the current UTC month, so the
+# configured cycle always covers their now, whatever the date the suite runs.
+_TODAY: Final = datetime.now(UTC)
+LIVE_ANCHOR: Final = datetime(_TODAY.year, _TODAY.month, 1, tzinfo=UTC)
+LIVE_BUDGET: Final = dataclasses.replace(
+    BUDGET, billing_cycle_anchor=LIVE_ANCHOR, account_verified_on=LIVE_ANCHOR.date()
+)
+LIVE_CONFIG: Final = dataclasses.replace(CONFIG, budget=LIVE_BUDGET)
+
+
+def live_cycle_start() -> datetime:
+    """The start of the cycle LIVE_ANCHOR derives for the real clock."""
+    bounds = billing_cycle_bounds(LIVE_ANCHOR, datetime.now(UTC))
+    assert bounds is not None
+    return bounds[0]
+
+
+def live_cycle() -> ApifyBudgetCycle:
+    """The recorded LIVE_ANCHOR cycle covering the real now, as ensure_cycle writes it."""
+    bounds = billing_cycle_bounds(LIVE_ANCHOR, datetime.now(UTC))
+    assert bounds is not None
+    return cycle(*bounds)
 
 
 def config(*, budget: dict[str, Any] | None = None, **changes: Any) -> LedgerConfig:
@@ -147,25 +159,10 @@ def site(key: str = "e3ledger") -> SourceSite:
     )[0]
 
 
-def cycle(
-    start: datetime = C1_START,
-    end: datetime = C1_END,
-    *,
-    observed_at: datetime | None = NOW,
-    usage: Decimal = VERIFIED_USAGE,
-    prepaid: Decimal = VERIFIED_PREPAID,
-) -> ApifyBudgetCycle:
+def cycle(start: datetime = C1_START, end: datetime = C1_END) -> ApifyBudgetCycle:
+    """A recorded cycle row as ledger.ensure_cycle writes it: account_* columns null."""
     return ApifyBudgetCycle.objects.create(
-        cycle_start=start,
-        cycle_end=end,
-        allocation_usd=ALLOCATION,
-        account_prepaid_credit_usd=prepaid,
-        account_base_price_usd=D("19"),
-        account_limit_usd=D("19"),
-        account_usage_usd=usage,
-        account_observed_at=observed_at,
-        account_data_retention_days=31,
-        opened_at=start,
+        cycle_start=start, cycle_end=end, allocation_usd=ALLOCATION, opened_at=start
     )
 
 
@@ -287,48 +284,6 @@ def close_monitoring(
 def reserved(outcome_id: int | None) -> ApifySpendReservation:
     assert outcome_id is not None
     return ApifySpendReservation.objects.get(pk=outcome_id)
-
-
-# ── Fake Apify account endpoints (httpx.MockTransport only) ──
-
-
-def account_client(
-    *,
-    cycle_start: datetime = C1_START,
-    cycle_end: datetime = C1_END,
-    usage: str = "0.09",
-    fail: Callable[[httpx.Request], None] | None = None,
-) -> ApifyClient:
-    """An ApifyClient whose account reads answer the given cycle.
-
-    `fail(request)` runs first and may raise (a transport error, or a crash
-    injected after the counter commit and before the call).
-    """
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if fail is not None:
-            fail(request)
-        if request.url.path == "/v2/users/me/limits":
-            body = {
-                "data": {
-                    "monthlyUsageCycle": {"startAt": _z(cycle_start), "endAt": _z(cycle_end)},
-                    "limits": {"maxMonthlyUsageUsd": 19, "dataRetentionDays": 31},
-                    "current": {"monthlyUsageUsd": "@USAGE@"},
-                }
-            }
-            # The usage is spliced in as a bare JSON number (the client parses
-            # numbers, not strings, as money).
-            text = json.dumps(body).replace('"@USAGE@"', usage)
-            return httpx.Response(200, text=text)
-        if request.url.path == "/v2/users/me":
-            return httpx.Response(
-                200,
-                text='{"data": {"plan": {"id": "STARTER", "monthlyBasePriceUsd": 19,'
-                ' "monthlyUsageCreditsUsd": 19}}}',
-            )
-        return httpx.Response(404, text='{"error": {"type": "record-not-found"}}')
-
-    return ApifyClient("test-token", transport=httpx.MockTransport(handler))
 
 
 def _z(value: datetime) -> str:

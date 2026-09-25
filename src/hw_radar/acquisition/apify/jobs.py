@@ -28,13 +28,15 @@ Apify schedules or webhooks):
 
 Production safety. The budget admission binding is LedgerAdmission (E5): the
 Slice E spend ledger, which records every denial as a ledger row and fails
-closed on every unset price, cap, or account fact (MS2-D-17, -40). Nothing in
-production binds anything else. In front of it, the kill switch
-settings.HW_RADAR_APIFY_ENABLED (default false) refuses every start, an unset
-HW_RADAR_APIFY_ACTOR_ID refuses every start, and no site has an ActorRunSpec
-registered in RUN_SPECS, so even an `apify` source with everything else allowed
-is refused `no_run_spec`. With the production defaults no start request, and
-no account read, is ever sent. The poll tick never starts a run; with no
+closed on every unset price, cap, or configured account setting (MS2-D-17,
+-40, -48). Nothing in production binds anything else. In front of it, the
+kill switch settings.HW_RADAR_APIFY_ENABLED (default false) refuses every
+start, an unset HW_RADAR_APIFY_ACTOR_ID refuses every start, and no site has
+an ActorRunSpec registered in RUN_SPECS, so even an `apify` source with
+everything else allowed is refused `no_run_spec`. With the production defaults
+no start request is ever sent, and in every configuration no Apify account
+endpoint is read (MS2-D-48: the billing cycle and the account limits are
+operator-verified settings). The poll tick never starts a run; with no
 provider_run rows it makes no API call and constructs no client, so it is safe
 to schedule with no token rendered.
 
@@ -93,12 +95,9 @@ from hw_radar.acquisition.apify.contract import (
 )
 from hw_radar.acquisition.apify.importer import RejectReason, import_provider_run
 from hw_radar.acquisition.apify.ledger import (
-    AccountReader,
     LatchReason,
     LedgerConfig,
-    account_read_useful,
     load_ledger_config,
-    refresh_account_snapshot,
     reserve,
     take_budget_lock,
     trip_latch,
@@ -191,26 +190,22 @@ class BudgetDecision:
 class BudgetAdmission(Protocol):
     """Paid-admission check run after check_admission and before any row exists.
 
-    Async because the ledger may refresh the account snapshot through
-    `reader` first; every database step inside runs through sync_to_async in
-    its own transaction, so no transaction spans an await.
+    Async so the start job can await it; every database step inside runs
+    through sync_to_async in its own transaction, so no transaction spans an
+    await.
     """
 
-    async def admit(self, request: BudgetRequest, reader: AccountReader) -> BudgetDecision: ...
+    async def admit(self, request: BudgetRequest) -> BudgetDecision: ...
 
 
 class LedgerAdmission:
     """The production binding: admission by the Slice E spend ledger (E5).
 
-    Two steps, in order. First, only when the request would otherwise get as
-    far as the account-state checks (ledger.account_read_useful), refresh the
-    MS2-D-40 account snapshot: its reads are counted and committed before they
-    are sent, and a failed read leaves the snapshot stale so the reserve below
-    denies. Skipping the refresh when a setting already denies means an
-    environment with unset prices never spends an account read. Second,
-    ledger.reserve under the budget lock, which persists the admitted row or
-    the denial row (probe denials included) and trips the latch itself when
-    the decision says so (external_liability_exceeded).
+    One step: ledger.reserve under the budget lock, which materializes the
+    configured billing cycle and persists the admitted row or the denial row
+    (probe denials included). No Apify account endpoint is read, in any
+    configuration (MS2-D-48): the cycle and the account state are
+    operator-verified settings.
 
     `config` and `clock` default to the settings and to the reserve's own
     post-lock timestamp; tests pass both.
@@ -220,7 +215,7 @@ class LedgerAdmission:
         self._config = config
         self._clock = clock
 
-    async def admit(self, request: BudgetRequest, reader: AccountReader) -> BudgetDecision:
+    async def admit(self, request: BudgetRequest) -> BudgetDecision:
         config = self._config or await sync_to_async(load_ledger_config)()
         ask = AdmissionRequest(
             budget_class=BudgetClass(request.admission_class.value),
@@ -232,10 +227,6 @@ class LedgerAdmission:
                 max_bytes=request.max_bytes,
             ),
         )
-        now = self._clock() if self._clock is not None else timezone.now()
-        if await sync_to_async(account_read_useful)(ask, config=config, now=now):
-            refreshed = await refresh_account_snapshot(reader, config=config, now=now)
-            logger.info("apify account snapshot for %s: %s", request.site_key, refreshed)
         outcome = await sync_to_async(reserve)(
             ask,
             source_site_id=request.source_site_id,
@@ -444,7 +435,7 @@ async def start_provider_run(
             max_requests=validated.max_requests,
             max_bytes=validated.max_bytes,
         )
-        decision = await (admission or BUDGET_ADMISSION).admit(request, client)
+        decision = await (admission or BUDGET_ADMISSION).admit(request)
         if not decision.admitted:
             logger.info("apify start for %s denied: %s", site_key, decision.reason)
             return StartResult(StartStatus.DENIED, decision.reason)
@@ -517,7 +508,7 @@ def _has_outstanding_full_run(config: SourceConfig, scope_key: str) -> bool:
     Two concurrent FULL runs of one scope would pay twice for one sweep and
     race each other's continuity and delist stages; the MS2-D-30/-36 ordering
     guards keep that correct but not cheap, so the second start is refused
-    before budget admission, with no ledger row and no account read.
+    before budget admission, with no ledger row.
 
     Outstanding means import_state is neither finalized nor rejected, the same
     test as poller.service._has_outstanding_probe, including its fail-closed

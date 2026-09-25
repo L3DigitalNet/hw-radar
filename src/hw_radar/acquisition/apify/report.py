@@ -1,23 +1,28 @@
-"""Apify spend attribution report (plan E6, AC-7; MS2-D-17, -23, -34, -40, -45, -46).
+"""Apify spend attribution report (plan E6, AC-7; MS2-D-17, -23, -34, -40, -45, -46, -48).
 
 `build_report` reads the ledger tables and returns a `SpendReport`;
 `render_report` turns it into the text `apify_spend_report` prints. The report
 is organised by billing cycle, the authoritative budget period (MS2-D-17):
-each observed cycle gets its bounds, the project allocation, Hardware Radar's
+each recorded cycle gets its bounds, the project allocation, Hardware Radar's
 consumption split into settled, outstanding, and monitoring debits, the
-remaining project budget, the stored account snapshot, the declared external
-liability, the inclusion-watermark status, the ledger authority, operator
-consumption by kind, and per-source and per-provider totals. Ledger-wide
-sections follow: unsettled rows, released rows, overruns and latch trips, and a
+remaining project budget, the configured account state (anchor, limit, P,
+base price, retention, verification date), the declared external liability
+and the external-liability headroom `P - HR_cycle - E`, the ledger authority,
+operator consumption by kind, and per-source and per-provider totals. The
+current cycle derived from the configured anchor is printed even before
+admission has recorded its row, labelled so. Ledger-wide sections follow:
+unsettled rows, released rows, overruns and latch trips, and a
 trailing-31-day trend labelled secondary, which never admits or denies.
 
 Read-only by construction: nothing here writes a row, takes the budget lock,
-or calls Apify. The account figures are the stored snapshot as last observed
-by `ledger.refresh_account_snapshot`, so a stale snapshot is reported as
-stale rather than refreshed. A setting that makes a figure unpriceable (an
-unset unit price or cap) is reported as unavailable with the reason; the
-report never raises for it, because an operator needs the rest of the report
-most exactly when settings are broken.
+calls `ledger.ensure_cycle`, or calls Apify. Other workloads' spend on the
+shared account is not observed by the runtime (MS2-D-48), so the report states
+that instead of estimating it; the operator's per-cycle reconciliation
+compares this report with the account's usage outside the application. A
+setting that makes a figure unpriceable (an unset unit price, cap, or account
+setting) is reported as unavailable with the reason; the report never raises
+for it, because an operator needs the rest of the report most exactly when
+settings are broken.
 
 Cycle placement mirrors `ledger._tally` (MS2-D-34): the same intervals, the
 same boundary guard, the same "unreconciled counts from admission onward".
@@ -41,25 +46,23 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from typing import Final
 
-from django.db.models import Q
-
 from hw_radar.acquisition.apify.budget import (
     BudgetDenied,
+    BudgetSettings,
+    DenialReason,
     OperatorKind,
     account_margin_usd,
-    api_call_bound,
+    billing_cycle_bounds,
     project_allocation,
-    standing_account_read_debit,
     trailing_window_warning,
 )
 from hw_radar.acquisition.apify.ledger import (
     LedgerConfig,
     current_cycle,
-    discovery_status,
     load_ledger_config,
 )
 from hw_radar.acquisition.apify.reconcile import (
@@ -71,7 +74,6 @@ from hw_radar.catalog.models import (
     AdmissionClass,
     ApifyBudgetCycle,
     ApifyBudgetLatch,
-    ApifyCycleDiscovery,
     ApifyLedgerAuthority,
     ApifySpendReservation,
     ProviderRun,
@@ -81,8 +83,10 @@ from hw_radar.catalog.models.provider import ImportState, SettlementBasis, Stora
 
 __all__ = [
     "CORRECTION_CLOSE_OVERDUE",
+    "OTHER_WORKLOADS_NOT_OBSERVED",
     "TREND_WINDOW",
     "UNRECONCILED_STALE",
+    "AccountState",
     "CycleReport",
     "Figure",
     "FlaggedRow",
@@ -100,6 +104,9 @@ UNRECONCILED_STALE: Final = "unreconciled_stale"
 # reported by this name.
 API_CALL_CAP_EXHAUSTED: Final = "api_call_cap_exhausted"
 TREND_WINDOW: Final = timedelta(days=31)
+# MS2-D-48: the runtime reads no account usage, so the report never estimates
+# the shared account's other workloads; the operator reconciles them per cycle.
+OTHER_WORKLOADS_NOT_OBSERVED: Final = "not observed by the runtime (MS2-D-48)"
 
 _OPEN_STATUSES: Final = (
     ReservationStatus.RESERVED.value,
@@ -154,13 +161,11 @@ class _Share:
     settled: Decimal = Decimal(0)
     outstanding: Decimal = Decimal(0)
     monitoring: Decimal = Decimal(0)
-    hr_included: Decimal = Decimal(0)
 
     def add(self, other: _Share) -> None:
         self.settled += other.settled
         self.outstanding += other.outstanding
         self.monitoring += other.monitoring
-        self.hr_included += other.hr_included
 
     @property
     def total(self) -> Decimal:
@@ -185,29 +190,35 @@ class Totals:
 
 
 @dataclass(frozen=True, slots=True)
+class AccountState:
+    """The configured account settings (MS2-D-48); None is unset or invalid."""
+
+    anchor: datetime | None
+    limit: Figure
+    usable: Figure  # P = limit - account margin
+    base_price: Figure
+    retention_days: int | None
+    verified_on: date | None
+
+
+@dataclass(frozen=True, slots=True)
 class CycleReport:
     cycle_start: datetime
     cycle_end: datetime
     is_current: bool
+    # False for the derived current cycle whose row admission has not yet
+    # created (ledger.ensure_cycle); its debits are still placed by its bounds.
+    recorded: bool
     allocation: Figure
     recorded_allocation: Decimal | None
     consumed_settled: Decimal
     outstanding: Decimal
     monitoring: Decimal
-    discovery_allowance: Figure
-    standing_account_reads: Figure
     carried_handoff: Decimal
     remaining_project_budget: Figure
-    account_usage: Decimal | None
-    prepaid_credit: Decimal | None
-    remaining_prepaid: Figure
-    admission_headroom: Figure
-    account_observed_at: datetime | None
-    snapshot_stale: bool | None
+    account: AccountState
     external_liability: Figure
-    external_observed: Figure
-    watermark: str
-    hr_included: Decimal
+    external_headroom: Figure
     authority: str
     operator_by_kind: dict[str, Totals]
     operator_allowance: Figure
@@ -229,13 +240,11 @@ class FlaggedRow:
 class SpendReport:
     generated_at: datetime
     cycles: list[CycleReport]
-    discovery: str | None
     unsettled: list[FlaggedRow]
     released: list[FlaggedRow]
     overruns: list[FlaggedRow]
     latches: list[str]
     trend_total: Decimal
-    trend_discovery: Figure
     trend_warning: bool | None
     trend_window_start: datetime
 
@@ -275,7 +284,6 @@ def _place(
     y_start: datetime,
     y_end: datetime,
     config: LedgerConfig,
-    watermark: datetime | None,
 ) -> _Share | None:
     """This row's share of [y_start, y_end], or None when it does not touch it."""
     g = _guard(config)
@@ -295,8 +303,6 @@ def _place(
     if _touches(start, row.last_charge_at + g, y_start, y_end):
         touched = True
         share.settled = row.actual_usd or Decimal(0)
-        if watermark is not None and row.last_charge_at + g < watermark:
-            share.hr_included = share.settled
     monitoring_end = (
         _NEVER
         if _monitoring_open(row, config)
@@ -306,23 +312,6 @@ def _place(
         touched = True
         share.monitoring = row.monitoring_bound_usd or Decimal(0)
     return share if touched else None
-
-
-def _discovery_rows_touching(y_start: datetime, y_end: datetime, g: timedelta) -> int:
-    return (
-        ApifyCycleDiscovery.objects.filter(opened_at__lte=y_end + g)
-        .filter(Q(closed_at__isnull=True) | Q(closed_at__gte=y_start - g))
-        .count()
-    )
-
-
-def _discovery_allowance(config: LedgerConfig, count: int) -> Figure:
-    if count == 0:
-        return Figure(Decimal(0))
-    reads = config.max_discovery_reads
-    if reads is None or reads < 0:
-        return Figure(None, "unbounded_component")
-    return Figure.of(lambda: _usd(reads * api_call_bound(config.budget)) * count)
 
 
 # ── Row labels and flags ─────────────────────────────────────────────────────
@@ -386,29 +375,40 @@ def _authority_text(cycle_start: datetime) -> tuple[str, Decimal]:
     return text, authority.carried_consumption_usd
 
 
-def _watermark(config: LedgerConfig, observed_at: datetime | None) -> tuple[str, datetime | None]:
-    lag = config.usage_inclusion_lag_s
-    if lag is None or lag < 0:
-        return (
-            "unset (HR_included = 0: reconciled spend is debited on top of the snapshot)",
-            None,
-        )
-    if observed_at is None:
-        return f"lag {lag}s; no snapshot observed, so no watermark", None
-    mark = observed_at - timedelta(seconds=lag)
-    return f"lag {lag}s; watermark {_ts(mark)}", mark
+def _account_state(cfg: BudgetSettings) -> AccountState:
+    limit_value = cfg.account_limit_usd
+    unobservable = str(DenialReason.ACCOUNT_STATE_UNOBSERVABLE)
+    if limit_value is None or not limit_value.is_finite() or limit_value <= 0:
+        limit = usable = Figure(None, unobservable)
+    else:
+        limit = Figure(limit_value)
+        usable = Figure.of(lambda: limit_value - account_margin_usd(cfg, limit_value))
+    base = cfg.account_base_price_usd
+    base_price = (
+        Figure(base)
+        if base is not None and base.is_finite() and base >= 0
+        else Figure(None, unobservable)
+    )
+    retention = cfg.account_data_retention_days
+    return AccountState(
+        anchor=cfg.billing_cycle_anchor,
+        limit=limit,
+        usable=usable,
+        base_price=base_price,
+        retention_days=retention if retention is not None and retention >= 1 else None,
+        verified_on=cfg.account_verified_on,
+    )
 
 
 def _cycle_report(
-    cycle: ApifyBudgetCycle,
+    bounds: tuple[datetime, datetime],
+    recorded: ApifyBudgetCycle | None,
     rows: list[ApifySpendReservation],
     config: LedgerConfig,
-    now: datetime,
     is_current: bool,
 ) -> CycleReport:
-    y_start, y_end = cycle.cycle_start, cycle.cycle_end
+    y_start, y_end = bounds
     cfg = config.budget
-    watermark_text, watermark = _watermark(config, cycle.account_observed_at)
 
     runtime = _Share()
     operator = _Share()
@@ -429,7 +429,7 @@ def _cycle_report(
                 if row.source_site is not None:
                     source_denials[row.source_site.name] += 1
             continue
-        share = _place(row, y_start, y_end, config, watermark)
+        share = _place(row, y_start, y_end, config)
         if share is None:
             continue
         provider = _provider_key(row)
@@ -445,55 +445,26 @@ def _cycle_report(
             by_source[name].add(share)
             source_rows[name] += 1
 
-    g = _guard(config)
-    discovery = _discovery_allowance(config, _discovery_rows_touching(y_start, y_end, g))
-    standing = Figure.of(lambda: standing_account_read_debit(cfg))
     authority_text, carried = _authority_text(y_start)
     allocation = Figure.of(lambda: project_allocation(cfg))
-
-    fixed = (discovery.value or Decimal(0)) + (standing.value or Decimal(0))
     # The watch_refresh class check's left side (budget.decide_admission).
-    remaining_project = _unavailable(allocation, discovery, standing) or Figure(
-        (allocation.value or Decimal(0)) - (runtime.total + carried + fixed)
+    remaining_project = _unavailable(allocation) or Figure(
+        (allocation.value or Decimal(0)) - (runtime.total + carried)
     )
-    # HR_cycle of MS2-D-40: every class, carried consumption, and both allowances.
-    hr_cycle = _unavailable(discovery, standing) or Figure(
-        runtime.total + operator.total + carried + fixed
-    )
+    # HR_cycle of MS2-D-48: every class plus carried consumption.
+    hr_cycle = runtime.total + operator.total + carried
 
-    usage = cycle.account_usage_usd
-    prepaid = cycle.account_prepaid_credit_usd
-    remaining_prepaid = (
-        Figure(prepaid - usage) if prepaid is not None and usage is not None else Figure(None)
-    )
-    headroom = Figure(None)
-    external_observed = Figure(None)
-    if prepaid is not None and usage is not None and hr_cycle.value is not None:
-        hr_value = hr_cycle.value
-        headroom = Figure.of(
-            lambda: (
-                prepaid
-                - account_margin_usd(cfg, prepaid)
-                - (usage + hr_value - runtime.hr_included - operator.hr_included)
-            )
-        )
-        # The MS2-D-40 latch check's left side: what the account used beyond
-        # Hardware Radar's own debits (may be negative, which is within bound).
-        external_observed = Figure(usage - hr_value)
-    elif hr_cycle.value is None:
-        headroom = external_observed = Figure(None, hr_cycle.unavailable)
-
+    account = _account_state(cfg)
     external = cfg.external_liability_usd
     external_fig = (
         Figure(external)
         if external is not None and external.is_finite() and external >= 0
-        else Figure(None, "external_liability_unbounded")
+        else Figure(None, str(DenialReason.EXTERNAL_LIABILITY_UNBOUNDED))
     )
-    max_age = cfg.account_snapshot_max_age_s
-    stale: bool | None = None
-    if is_current and max_age is not None:
-        observed = cycle.account_observed_at
-        stale = observed is None or now - observed > timedelta(seconds=max_age)
+    # The external-liability check's remaining room: P - HR_cycle - E.
+    headroom = _unavailable(account.usable, external_fig) or Figure(
+        (account.usable.value or Decimal(0)) - hr_cycle - (external_fig.value or Decimal(0))
+    )
 
     allowance = cfg.operator_allowance_usd
     operator_allowance = (
@@ -514,25 +485,17 @@ def _cycle_report(
         cycle_start=y_start,
         cycle_end=y_end,
         is_current=is_current,
+        recorded=recorded is not None,
         allocation=allocation,
-        recorded_allocation=cycle.allocation_usd,
+        recorded_allocation=recorded.allocation_usd if recorded is not None else None,
         consumed_settled=runtime.settled + operator.settled,
         outstanding=runtime.outstanding + operator.outstanding,
         monitoring=runtime.monitoring + operator.monitoring,
-        discovery_allowance=discovery,
-        standing_account_reads=standing,
         carried_handoff=carried,
         remaining_project_budget=remaining_project,
-        account_usage=usage,
-        prepaid_credit=prepaid,
-        remaining_prepaid=remaining_prepaid,
-        admission_headroom=headroom,
-        account_observed_at=cycle.account_observed_at,
-        snapshot_stale=stale,
+        account=account,
         external_liability=external_fig,
-        external_observed=external_observed,
-        watermark=watermark_text,
-        hr_included=runtime.hr_included + operator.hr_included,
+        external_headroom=headroom,
         authority=authority_text,
         operator_by_kind={
             k: _totals(by_kind[k], kind_rows[k]) for k in sorted(set(by_kind) | set(kind_rows))
@@ -587,23 +550,41 @@ def build_report(
 ) -> SpendReport:
     """Assemble the report from stored ledger state as of `now`.
 
-    `cycles` limits the per-cycle sections to the most recent N observed
-    cycles; the ledger-wide sections always cover every row. Never raises for
-    a settings problem: each affected figure is reported as unavailable.
+    `cycles` limits the per-cycle sections to the most recent N recorded
+    cycles; the ledger-wide sections always cover every row. The current
+    cycle derived from the configured anchor is always included, recorded or
+    not (read-only: nothing is created). Never raises for a settings
+    problem: each affected figure is reported as unavailable.
     """
     config = config or load_ledger_config()
     rows = list(
         ApifySpendReservation.objects.select_related("provider_run", "source_site").order_by("pk")
     )
-    current = current_cycle(now)
-    observed = list(ApifyBudgetCycle.objects.order_by("-cycle_start"))
+    anchor = config.budget.billing_cycle_anchor
+    derived = billing_cycle_bounds(anchor, now) if anchor is not None else None
+    if derived is not None:
+        current_start: datetime | None = derived[0]
+    else:
+        # No derivable cycle: still mark a recorded row covering now, so an
+        # operator with a broken anchor sees which cycle the ledger holds.
+        covering = current_cycle(now)
+        current_start = covering.cycle_start if covering is not None else None
+    recorded = list(ApifyBudgetCycle.objects.order_by("-cycle_start"))
     if cycles is not None:
-        observed = observed[:cycles]
-    observed.reverse()
+        recorded = recorded[:cycles]
+    recorded.reverse()
     cycle_reports = [
-        _cycle_report(c, rows, config, now, is_current=current is not None and c.pk == current.pk)
-        for c in observed
+        _cycle_report(
+            (c.cycle_start, c.cycle_end), c, rows, config, is_current=c.cycle_start == current_start
+        )
+        for c in recorded
     ]
+    if derived is not None and all(c.cycle_start != derived[0] for c in recorded):
+        # ApifyBudgetCycle.cycle_start is unique, so a derived cycle absent
+        # from the (possibly --cycles-limited) list may still be recorded.
+        row = ApifyBudgetCycle.objects.filter(cycle_start=derived[0]).first()
+        bounds = (row.cycle_start, row.cycle_end) if row is not None else derived
+        cycle_reports.append(_cycle_report(bounds, row, rows, config, is_current=True))
 
     unsettled: list[FlaggedRow] = []
     released: list[FlaggedRow] = []
@@ -662,13 +643,10 @@ def build_report(
     window_start = now - TREND_WINDOW
     trend = _Share()
     for row in rows:
-        share = _place(row, window_start, now, config, None)
+        share = _place(row, window_start, now, config)
         if share is not None:
             trend.add(share)
-    trend_discovery = _discovery_allowance(
-        config, _discovery_rows_touching(window_start, now, _guard(config))
-    )
-    trend_total = trend.total + (trend_discovery.value or Decimal(0))
+    trend_total = trend.total
     try:
         warning: bool | None = trailing_window_warning(trend_total, config.budget)
     except BudgetDenied:
@@ -677,13 +655,11 @@ def build_report(
     return SpendReport(
         generated_at=now,
         cycles=cycle_reports,
-        discovery=discovery_status(config),
         unsettled=unsettled,
         released=released,
         overruns=overruns,
         latches=latches,
         trend_total=trend_total,
-        trend_discovery=trend_discovery,
         trend_warning=warning,
         trend_window_start=window_start,
     )
@@ -727,32 +703,42 @@ def _totals_line(key: str, t: Totals) -> str:
     return line
 
 
+def _setting_text(value: object | None) -> str:
+    if value is None:
+        return "unset or invalid"
+    if isinstance(value, datetime):
+        return _ts(value)
+    return str(value)
+
+
 def _render_cycle(c: CycleReport) -> list[str]:
-    marker = " [current]" if c.is_current else ""
+    marker = ""
+    if c.is_current:
+        marker = (
+            " [current]" if c.recorded else " [current; derived from the anchor, not yet recorded]"
+        )
     allocation = c.allocation.text()
     if c.recorded_allocation is not None and c.recorded_allocation != c.allocation.value:
         allocation += f" (recorded at cycle open: {_dollars(c.recorded_allocation)})"
-    stale = {None: "", True: " [STALE]", False: " [fresh]"}[c.snapshot_stale]
-    observed = _ts(c.account_observed_at) if c.account_observed_at is not None else "never"
+    acct = c.account
+    retention = f"{acct.retention_days} days" if acct.retention_days is not None else None
     lines = [
         f"Billing cycle {_ts(c.cycle_start)} -> {_ts(c.cycle_end)}{marker}",
         f"  project allocation (A):          {allocation}",
         f"  consumed (settled usage):        {_dollars(c.consumed_settled)}",
         f"  outstanding reservations:        {_dollars(c.outstanding)}",
         f"  monitoring allowances:           {_dollars(c.monitoring)}",
-        f"  discovery read allowance:        {c.discovery_allowance.text()}",
-        f"  standing account-read debit:     {c.standing_account_reads.text()}",
         f"  carried handoff consumption:     {_dollars(c.carried_handoff)}",
         f"  remaining project budget:        {c.remaining_project_budget.text()}",
-        f"  account snapshot observed:       {observed}{stale}",
-        f"  observed account usage:          {_money(c.account_usage)}",
-        f"  observed prepaid credit:         {_money(c.prepaid_credit)}",
-        f"  remaining prepaid allowance:     {c.remaining_prepaid.text()}",
-        f"  admission headroom (snapshot):   {c.admission_headroom.text()}",
-        f"  declared external liability:     {c.external_liability.text()}",
-        f"  observed non-HR account usage:   {c.external_observed.text()}",
-        f"  inclusion watermark:             {c.watermark}",
-        f"  HR_included (settled in snapshot): {_dollars(c.hr_included)}",
+        f"  billing cycle anchor:            {_setting_text(acct.anchor)}",
+        f"  configured account limit:        {acct.limit.text()}",
+        f"  usable account limit (P):        {acct.usable.text()}",
+        f"  configured plan base price:      {acct.base_price.text()}",
+        f"  configured data retention:       {_setting_text(retention)}",
+        f"  account state verified on:       {_setting_text(acct.verified_on)}",
+        f"  declared external liability (E): {c.external_liability.text()}",
+        f"  external-liability headroom:     {c.external_headroom.text()}",
+        f"  other workloads' spend:          {OTHER_WORKLOADS_NOT_OBSERVED}",
         f"  ledger authority:                {c.authority}",
         f"  operator allowance remaining:    {c.operator_allowance.text()}",
         "  operator consumption by kind:",
@@ -779,10 +765,10 @@ def _render_flagged(rows: list[FlaggedRow]) -> list[str]:
 
 def render_report(report: SpendReport) -> str:
     lines = [f"Apify spend report as of {_ts(report.generated_at)}"]
-    if report.discovery is not None:
-        lines.append(f"cycle discovery: {report.discovery}")
     if not report.cycles:
-        lines.append("No billing cycle observed (admission: cycle_unknown).")
+        lines.append(
+            "No billing cycle recorded or derivable from the anchor (admission: cycle_unknown)."
+        )
     for c in report.cycles:
         lines.append("")
         lines += _render_cycle(c)
@@ -802,6 +788,4 @@ def render_report(report: SpendReport) -> str:
         f"  {_ts(report.trend_window_start)} -> {_ts(report.generated_at)}:"
         f" {_dollars(report.trend_total)} ({warning})",
     ]
-    if report.trend_discovery.value is None:
-        lines.append(f"  discovery allowance {report.trend_discovery.text()}, not included")
     return "\n".join(lines) + "\n"

@@ -7,9 +7,16 @@ called under the E3 ledger's advisory lock without I/O:
   requested shape into a CostEstimate: the MS2-D-26 component bounds, the
   MS2-D-32 split into execution bound, post-run liability, and monitoring
   allowance, and the reserved estimate `(execution + post-run) x (1 + margin)`.
-- decide_admission applies every MS2-D-17/-40 admission rule to one request
-  against a LedgerState that the caller (E3) computes from ledger rows under
-  the budget lock. It never reads rows itself.
+- decide_admission applies every MS2-D-17/-40/-48 admission rule to one
+  request against a LedgerState that the caller (E3) computes from ledger rows
+  under the budget lock. It never reads rows itself.
+
+Account state is configuration, never an observation (MS2-D-48): the runtime
+reads no Apify account endpoint. The billing cycle is derived from the
+operator-verified anchor (billing_cycle_bounds), and the account limit, base
+price, and data retention are operator-verified settings, all validated by the
+one contract account_setting_problem, which admission and the post-admission
+correction check (reconcile.invariant_breaches) share.
 
 Callers own persistence. This module defines its own BudgetClass and
 OperatorKind (string-equal to catalog.models.provider.AdmissionClass and the
@@ -50,6 +57,7 @@ __all__ = [
     "FULL_CYCLE_HOURS",
     "HTTP_READ_CHUNK_BYTES",
     "MAX_CYCLE_TARGET_USD",
+    "AccountSettingProblem",
     "AccountSnapshot",
     "AdmissionDecision",
     "AdmissionRequest",
@@ -65,6 +73,7 @@ __all__ = [
     "RunShape",
     "UnitPrices",
     "account_margin_usd",
+    "account_setting_problem",
     "actor_fetch_bytes",
     "api_call_bound",
     "billing_cycle_bounds",
@@ -78,7 +87,6 @@ __all__ = [
     "project_allocation",
     "request_wire_overhead",
     "settle_envelope",
-    "standing_account_read_debit",
     "storage_hours",
     "trailing_window_warning",
 ]
@@ -143,10 +151,12 @@ class DenialReason(StrEnum):
     PRICING_UNVERIFIED = "pricing_unverified"
     UNBOUNDED_COMPONENT = "unbounded_component"
     LEDGER_AUTHORITY_MISSING = "ledger_authority_missing"
+    # MS2-D-48: the anchor is unset, invalid, in the future, or conflicts with
+    # a recorded cycle, or `now` is outside the derived cycle.
     CYCLE_UNKNOWN = "cycle_unknown"
+    # MS2-D-48: an operator-verified account setting is unset or invalid.
     ACCOUNT_STATE_UNOBSERVABLE = "account_state_unobservable"
     CASH_CEILING_EXCEEDED_BY_PLAN = "cash_ceiling_exceeded_by_plan"
-    EXTERNAL_LIABILITY_EXCEEDED = "external_liability_exceeded"
     CLASS_CAP = "class_cap"
     OPERATOR_ALLOWANCE_EXHAUSTED = "operator_allowance_exhausted"
     ACCOUNT_HEADROOM = "account_headroom"
@@ -184,7 +194,7 @@ class BudgetSettings:
     """Every setting the pure policy reads. None means unset or invalid.
 
     account_margin_usd is the one exception: None means absent (10% of the
-    observed prepaid credit) and a NaN means present-but-invalid.
+    configured account limit) and a NaN means present-but-invalid.
     """
 
     enabled: bool
@@ -215,8 +225,6 @@ class BudgetSettings:
     api_call_overhead_bytes: int | None
     max_api_response_bytes: int | None
     max_dataset_page_bytes: int | None
-    max_account_reads_per_cycle: int | None
-    account_snapshot_max_age_s: int | None
     cycle_boundary_guard_s: int | None
     # Operator-verified account state (MS2-D-48); None is unset or invalid.
     billing_cycle_anchor: datetime | None
@@ -267,8 +275,6 @@ def load_budget_settings() -> BudgetSettings:
         api_call_overhead_bytes=s.HW_RADAR_APIFY_API_CALL_OVERHEAD_BYTES,
         max_api_response_bytes=s.HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES,
         max_dataset_page_bytes=s.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES,
-        max_account_reads_per_cycle=s.HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE,
-        account_snapshot_max_age_s=s.HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S,
         cycle_boundary_guard_s=s.HW_RADAR_APIFY_CYCLE_BOUNDARY_GUARD_S,
         billing_cycle_anchor=s.HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR,
         account_limit_usd=s.HW_RADAR_APIFY_ACCOUNT_LIMIT_USD,
@@ -366,7 +372,6 @@ class PerCallBounds:
     dataset_page: Decimal
     kv_record_read: Decimal
     build_read: Decimal
-    account_read: Decimal
 
 
 def per_call_bounds(cfg: BudgetSettings) -> PerCallBounds:
@@ -382,14 +387,7 @@ def per_call_bounds(cfg: BudgetSettings) -> PerCallBounds:
         dataset_page=dataset_page_bound(cfg),
         kv_record_read=call,
         build_read=call,
-        account_read=call,
     )
-
-
-def standing_account_read_debit(cfg: BudgetSettings) -> Decimal:
-    """`MAX_ACCOUNT_READS_PER_CYCLE x api_call_bound`, debited in full from cycle open (ED-01)."""
-    reads = _cap(cfg.max_account_reads_per_cycle, "MAX_ACCOUNT_READS_PER_CYCLE")
-    return _usd(reads * api_call_bound(cfg))
 
 
 # ── Run estimate (MS2-D-26 components, MS2-D-32 split) ──────────────────────
@@ -686,11 +684,58 @@ def billing_cycle_bounds(anchor: datetime, now: datetime) -> tuple[datetime, dat
     return _cycle_start(anchor, k), _cycle_start(anchor, k + 1) - _CYCLE_END_EPSILON
 
 
-def account_margin_usd(cfg: BudgetSettings, prepaid_credit_usd: Decimal) -> Decimal:
-    """The configured account margin, or 10% of the observed prepaid credit when absent."""
+def account_margin_usd(cfg: BudgetSettings, limit_usd: Decimal) -> Decimal:
+    """The configured account margin, or 10% of the configured account limit when absent."""
     if cfg.account_margin_usd is None:
-        return prepaid_credit_usd * DEFAULT_ACCOUNT_MARGIN_FRACTION
+        return limit_usd * DEFAULT_ACCOUNT_MARGIN_FRACTION
     return _setting(cfg.account_margin_usd, "ACCOUNT_MARGIN_USD")
+
+
+@dataclass(frozen=True, slots=True)
+class AccountSettingProblem:
+    """The first invalid account setting: its short name and the denial it causes."""
+
+    setting: str
+    reason: DenialReason
+
+
+def _bad_money(value: Decimal | None, *, positive: bool) -> bool:
+    if value is None or not value.is_finite():
+        return True
+    return value <= 0 if positive else value < 0
+
+
+def account_setting_problem(cfg: BudgetSettings, now: datetime) -> AccountSettingProblem | None:
+    """The first invalid MS2-D-48 account setting, in contract order, or None when all are valid.
+
+    The one validation contract that admission (decide_admission) and the
+    post-admission correction check (reconcile.invariant_breaches) share
+    (R12-04), so a setting can never be valid to one and invalid to the other.
+    Setting validity only: the cash-ceiling, retention-versus-lifetime, and
+    744 h checks compare settings with each other or with the cycle and stay
+    admission guards, because a correction cannot change them. `now` bounds
+    ACCOUNT_VERIFIED_ON, evaluated at the caller's own instant.
+    """
+    anchor = cfg.billing_cycle_anchor
+    if anchor is None:
+        return AccountSettingProblem("BILLING_CYCLE_ANCHOR", DenialReason.CYCLE_UNKNOWN)
+    unobservable = DenialReason.ACCOUNT_STATE_UNOBSERVABLE
+    if _bad_money(cfg.account_limit_usd, positive=True):
+        return AccountSettingProblem("ACCOUNT_LIMIT_USD", unobservable)
+    if _bad_money(cfg.account_base_price_usd, positive=False):
+        return AccountSettingProblem("ACCOUNT_BASE_PRICE_USD", unobservable)
+    retention = cfg.account_data_retention_days
+    if retention is None or retention < 1:
+        return AccountSettingProblem("ACCOUNT_DATA_RETENTION_DAYS", unobservable)
+    verified = cfg.account_verified_on
+    # Evidence, not an expiry (owner, R39): only a date the verification
+    # could not have happened on is invalid, never an old one.
+    if verified is None or verified > now.astimezone(UTC).date() or verified < anchor.date():
+        return AccountSettingProblem("ACCOUNT_VERIFIED_ON", unobservable)
+    margin = cfg.account_margin_usd
+    if margin is not None and _bad_money(margin, positive=False):
+        return AccountSettingProblem("ACCOUNT_MARGIN_USD", DenialReason.BUDGET_SETTING_INVALID)
+    return None
 
 
 def trailing_window_warning(trailing_31d_usd: Decimal, cfg: BudgetSettings) -> bool:
@@ -706,18 +751,22 @@ def trailing_window_warning(trailing_31d_usd: Decimal, cfg: BudgetSettings) -> b
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AccountSnapshot:
-    """The latest observed account figures for the current cycle; None is unobserved."""
+    """The configured account state for the current cycle (MS2-D-48); None is unset.
+
+    Not an observation, despite the name (kept to keep the revision-12 diff
+    small): the bounds are the recorded cycle row's, derived from the
+    configured anchor, and the account figures are the operator-verified
+    settings as ledger._snapshot copied them. decide_admission validates the
+    settings themselves through account_setting_problem, so a snapshot can
+    never admit on a value the contract refuses.
+    """
 
     cycle_start: datetime | None
     cycle_end: datetime | None
-    observed_at: datetime | None
-    prepaid_credit_usd: Decimal | None
+    account_limit_usd: Decimal | None
     base_price_usd: Decimal | None
-    account_usage_usd: Decimal | None
     data_retention_days: int | None
-    # Recorded for the report only: admission never relies on overage, so the
-    # account limit adds no admissible headroom whatever its value.
-    account_limit_usd: Decimal | None = None
+    verified_on: date | None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -726,17 +775,12 @@ class CycleDebits:
 
     runtime_committed_usd and operator_committed_usd are each class group's
     settled rows touching the cycle plus unreconciled rows at full estimate
-    plus their monitoring allowances (MS2-D-34). The standing account-read
-    debit is NOT included: decide_admission adds it from settings.
+    plus their monitoring allowances (MS2-D-34).
     """
 
     runtime_committed_usd: Decimal = Decimal(0)
     operator_committed_usd: Decimal = Decimal(0)
     carried_handoff_usd: Decimal = Decimal(0)
-    discovery_allowance_usd: Decimal = Decimal(0)
-    # Settled spend the snapshot is known to contain (inclusion watermark);
-    # 0 while USAGE_INCLUSION_LAG_S is unset.
-    hr_included_usd: Decimal = Decimal(0)
     # Report-only trend metric; carried here to prove it never decides.
     trailing_31d_usd: Decimal = Decimal(0)
 
@@ -750,7 +794,7 @@ class LedgerState:
     current: CycleDebits = field(default_factory=CycleDebits)
     # Set by E3 when the request's charge interval can reach the next cycle.
     # Only the external-liability invariant is checked against it, with the
-    # current snapshot's P, because the next cycle cannot be observed yet.
+    # configured P, because the next cycle's own class debits start at zero.
     next_cycle: CycleDebits | None = None
 
 
@@ -772,19 +816,11 @@ class AdmissionDecision:
     reason: DenialReason | None = None
     detail: str = ""
     estimate: CostEstimate | None = None
-    # external_liability_exceeded: the owner's bound no longer holds, so the
-    # ledger must trip the overrun latch as well as deny (MS2-D-40).
-    trip_latch: bool = False
 
 
-def _hr_cycle(debits: CycleDebits, standing: Decimal) -> Decimal:
-    return (
-        debits.runtime_committed_usd
-        + debits.operator_committed_usd
-        + debits.carried_handoff_usd
-        + debits.discovery_allowance_usd
-        + standing
-    )
+def _hr_cycle(debits: CycleDebits) -> Decimal:
+    """MS2-D-48 `HR_cycle`: runtime committed + operator committed + carried handoff."""
+    return debits.runtime_committed_usd + debits.operator_committed_usd + debits.carried_handoff_usd
 
 
 def _deny(
@@ -800,19 +836,23 @@ def decide_admission(
 
     Denial precedence is the order below: blanket stops (kill switch, latch,
     R38, external-liability bound, allocation settings), then the estimate,
-    then ledger authority and account state, then the budget checks. A
-    reservation exactly equal to the remaining amount is admitted.
+    then the MS2-D-48 *Admission* order: ledger authority, `cycle_unknown`
+    (no cycle, or `now` outside it), `account_state_unobservable` for an
+    invalid account setting (account_setting_problem), the retention check,
+    the 744 h check, the cash-ceiling guard on the configured base price, the
+    class caps, and the external-liability check. A reservation exactly equal
+    to the remaining amount is admitted.
 
-    Budget checks, with `new = estimate + monitoring allowance` and
-    `standing = MAX_ACCOUNT_READS_PER_CYCLE x api_call_bound`:
+    Budget checks, with `new = estimate + monitoring allowance`:
     - class cap: runtime classes count every runtime debit (plus carried
-      handoff, discovery allowances, and standing) against A for
-      watch_refresh and `A - WATCH_REFRESH_RESERVE_USD` for discovery; the
-      operator class counts operator debits against OPERATOR_ALLOWANCE_USD;
-    - snapshot check: `usage + HR_cycle - HR_included + new <= P`;
+      handoff) against A for watch_refresh and `A - WATCH_REFRESH_RESERVE_USD`
+      for discovery; the operator class counts operator debits against
+      OPERATOR_ALLOWANCE_USD;
     - external-liability check: `HR_cycle + new + E <= P`, for the current
       cycle and, when given, the next;
-    where `P = prepaid credit - account margin`.
+    where `P = ACCOUNT_LIMIT_USD - account margin`. Nothing replaces the
+    retired observed-usage check: other workloads' spend is not observed by
+    the runtime, only bounded by E and Apify's own hard limit (MS2-D-48).
     """
     if not cfg.enabled:
         return _deny(DenialReason.APIFY_DISABLED, "HW_RADAR_APIFY_ENABLED is not true")
@@ -836,19 +876,11 @@ def decide_admission(
                 DenialReason.BUDGET_SETTING_INVALID, "WATCH_REFRESH_RESERVE_USD exceeds A"
             )
         ceiling = _setting(cfg.cash_ceiling_usd, "CASH_CEILING_USD")
-        max_age_s = cfg.account_snapshot_max_age_s
-        if max_age_s is None:
-            raise BudgetDenied(
-                DenialReason.BUDGET_SETTING_INVALID, "ACCOUNT_SNAPSHOT_MAX_AGE_S is invalid"
-            )
-        if cfg.account_margin_usd is not None:
-            _setting(cfg.account_margin_usd, "ACCOUNT_MARGIN_USD")
         if request.run is not None:
             estimate = estimate_run_cost(request.run, cfg)
         else:
             assert request.operator_kind is not None  # __post_init__ guarantees it
             estimate = estimate_operator_cost(request.operator_kind, cfg)
-        standing = standing_account_read_debit(cfg)
         lifetime_s = _cap(cfg.storage_max_lifetime_s, "STORAGE_MAX_LIFETIME", minimum=1)
     except BudgetDenied as denied:
         return _deny(denied.reason, denied.detail)
@@ -859,56 +891,40 @@ def decide_admission(
         )
     snap = ledger.snapshot
     if snap is None or snap.cycle_start is None or snap.cycle_end is None:
-        return _deny(DenialReason.CYCLE_UNKNOWN, "no billing cycle observed", estimate)
+        return _deny(
+            DenialReason.CYCLE_UNKNOWN, "no billing cycle derivable from the anchor", estimate
+        )
     if not snap.cycle_start <= ledger.now <= snap.cycle_end:
-        return _deny(DenialReason.CYCLE_UNKNOWN, "now is outside the observed cycle", estimate)
-    if (
-        snap.observed_at is None
-        or snap.prepaid_credit_usd is None
-        or snap.base_price_usd is None
-        or snap.account_usage_usd is None
-    ):
-        return _deny(
-            DenialReason.ACCOUNT_STATE_UNOBSERVABLE, "account snapshot incomplete", estimate
-        )
-    if ledger.now - snap.observed_at > timedelta(seconds=max_age_s):
-        return _deny(DenialReason.ACCOUNT_STATE_UNOBSERVABLE, "account snapshot stale", estimate)
-    if snap.data_retention_days is None:
-        return _deny(
-            DenialReason.UNBOUNDED_COMPONENT, "dataRetentionDays missing or unparseable", estimate
-        )
-    if lifetime_s < snap.data_retention_days * 86400:
+        return _deny(DenialReason.CYCLE_UNKNOWN, "now is outside the recorded cycle", estimate)
+    problem = account_setting_problem(cfg, ledger.now)
+    if problem is not None:
+        return _deny(problem.reason, f"{problem.setting} is unset or invalid", estimate)
+    # account_setting_problem returned None, so each of these is set and valid.
+    limit = cfg.account_limit_usd
+    base_price = cfg.account_base_price_usd
+    retention_days = cfg.account_data_retention_days
+    assert limit is not None and base_price is not None and retention_days is not None
+    if lifetime_s < retention_days * 86400:
         return _deny(
             DenialReason.UNBOUNDED_COMPONENT,
-            "STORAGE_MAX_LIFETIME is shorter than the account's dataRetentionDays",
+            "STORAGE_MAX_LIFETIME is shorter than ACCOUNT_DATA_RETENTION_DAYS",
             estimate,
         )
     if snap.cycle_end - snap.cycle_start > timedelta(hours=FULL_CYCLE_HOURS):
         return _deny(
             DenialReason.UNBOUNDED_COMPONENT,
-            f"observed cycle is longer than {FULL_CYCLE_HOURS} h",
+            f"recorded cycle is longer than {FULL_CYCLE_HOURS} h",
             estimate,
         )
-    if snap.base_price_usd > ceiling:
+    if base_price > ceiling:
         return _deny(
             DenialReason.CASH_CEILING_EXCEEDED_BY_PLAN,
-            f"plan base price {snap.base_price_usd} exceeds the cash ceiling {ceiling}",
+            f"plan base price {base_price} exceeds the cash ceiling {ceiling}",
             estimate,
         )
 
-    prepaid = snap.prepaid_credit_usd
-    usable = prepaid - account_margin_usd(cfg, prepaid)
+    usable = limit - account_margin_usd(cfg, limit)
     debits = ledger.current
-    hr_cycle = _hr_cycle(debits, standing)
-    if snap.account_usage_usd - hr_cycle > external:
-        return AdmissionDecision(
-            False,
-            DenialReason.EXTERNAL_LIABILITY_EXCEEDED,
-            "other workloads' observed consumption exceeds the declared external liability",
-            estimate,
-            trip_latch=True,
-        )
-
     new = estimate.admission_usd
     if request.budget_class is BudgetClass.OPERATOR:
         if debits.operator_committed_usd + new > _setting(
@@ -925,25 +941,16 @@ def decide_admission(
             if request.budget_class is BudgetClass.WATCH_REFRESH
             else allocation - reserve
         )
-        runtime = (
-            debits.runtime_committed_usd
-            + debits.carried_handoff_usd
-            + debits.discovery_allowance_usd
-            + standing
-        )
+        runtime = debits.runtime_committed_usd + debits.carried_handoff_usd
         if runtime + new > cap:
             return _deny(
                 DenialReason.CLASS_CAP, f"{request.budget_class} cap {cap} exceeded", estimate
             )
 
-    if snap.account_usage_usd + hr_cycle - debits.hr_included_usd + new > usable:
-        return _deny(
-            DenialReason.ACCOUNT_HEADROOM, "snapshot check: prepaid headroom exceeded", estimate
-        )
     for cycle_debits in (debits, ledger.next_cycle):
         if cycle_debits is None:
             continue
-        if _hr_cycle(cycle_debits, standing) + new + external > usable:
+        if _hr_cycle(cycle_debits) + new + external > usable:
             return _deny(
                 DenialReason.ACCOUNT_HEADROOM,
                 "external-liability check: Hardware Radar's share exceeded",

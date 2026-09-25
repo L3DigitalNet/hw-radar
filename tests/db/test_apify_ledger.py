@@ -1,10 +1,11 @@
-"""Plan E3: the ledger service's cycle predicate, reserve(), and cycle discovery.
+"""Plan E3: the ledger service's cycle predicate, reserve(), and the configured cycle.
 
 MS2-D-34 (a row counts in every billing cycle its charge interval touches; an
 unreconciled row in every cycle from its admission onward), MS2-D-40 (the
-billing cycle is the period; reconciled spend stays in the snapshot check),
-MS2-D-32 *Cycle discovery*, and MS2-D-39 (charges are placed by the billing
-clock, never by observation time). Figures come from ledger_support.
+billing cycle is the period; reconciled spend stays debited), MS2-D-48 (the
+cycle is materialized from the configured anchor, never read from Apify), and
+MS2-D-39 (charges are placed by the billing clock, never by observation
+time). Figures come from ledger_support.
 """
 
 from __future__ import annotations
@@ -47,16 +48,15 @@ from ledger_support import (
     RUN_ESTIMATE,
     SHAPE,
     STABLE,
-    STANDING,
     WATCH,
     Clock,
     FakeRuns,
-    account_client,
     api_run,
     claim,
     config,
     custom_estimate,
     cycle,
+    live_cycle_start,
     open_latches,
     open_row,
     provider_run,
@@ -92,15 +92,11 @@ from hw_radar.acquisition.apify.contract import MAX_LISTING_ROW_BYTES
 from hw_radar.acquisition.apify.importer import import_provider_run
 from hw_radar.acquisition.apify.jobs import TickReport, apify_poll_tick
 from hw_radar.acquisition.apify.ledger import (
-    DISCOVERY_EXHAUSTED,
     LatchReason,
     LedgerRefused,
-    RefreshOutcome,
     ReservationOutcome,
     current_cycle,
     cycle_debits,
-    discovery_status,
-    refresh_account_snapshot,
     reserve,
     reserve_operator,
     trip_latch,
@@ -126,7 +122,6 @@ from hw_radar.acquisition.contracts import NullResolver
 from hw_radar.catalog.models import (
     ApifyBudgetCycle,
     ApifyBudgetLatch,
-    ApifyCycleDiscovery,
     ApifyLedgerAuthority,
     ApifySpendReservation,
     ApifyUsageRead,
@@ -150,7 +145,7 @@ def _runtime(at_cycle: ApifyBudgetCycle) -> Decimal:
 
 def _fill_to(room: Decimal, at: object) -> ApifySpendReservation:
     """Seed an open row leaving exactly `room` of the watch_refresh cap."""
-    return open_row(ALLOCATION - STANDING - room, at)  # type: ignore[arg-type]
+    return open_row(ALLOCATION - room, at)  # type: ignore[arg-type]
 
 
 # ── reserve() basics ──
@@ -200,16 +195,63 @@ def test_denied_rows_count_nothing() -> None:
 
 @pytest.mark.django_db
 def test_unknown_cycle_denies() -> None:
-    assert _reserve().reason == DenialReason.CYCLE_UNKNOWN
+    unset = config(budget={"billing_cycle_anchor": None})
+    assert _reserve(cfg=unset).reason == DenialReason.CYCLE_UNKNOWN
+    assert not ApifyBudgetCycle.objects.exists()
+    # A `now` before the anchor derives no cycle either.
+    assert _reserve(C1_START - HOUR).reason == DenialReason.CYCLE_UNKNOWN
+    assert not ApifyBudgetCycle.objects.exists()
 
 
 @pytest.mark.django_db
-def test_external_liability_exceeded_trips_latch() -> None:
-    cycle(usage=D("5.60"))  # other workloads: 5.60 - standing 0.54 > 5.00
+def test_first_reserve_materializes_the_configured_cycle_row() -> None:
     claim()
-    outcome = _reserve()
-    assert outcome.reason == DenialReason.EXTERNAL_LIABILITY_EXCEEDED
-    assert _reserve().reason == DenialReason.OVERRUN_LATCH
+    assert _reserve().admitted
+    row = ApifyBudgetCycle.objects.get()
+    assert (row.cycle_start, row.cycle_end) == (C1_START, C1_END)
+    assert row.allocation_usd == ALLOCATION
+    assert row.account_read_count == 0
+    assert (
+        row.account_prepaid_credit_usd,
+        row.account_base_price_usd,
+        row.account_limit_usd,
+        row.account_usage_usd,
+        row.account_observed_at,
+        row.account_data_retention_days,
+    ) == (None,) * 6
+    # A second reserve finds the same row rather than creating another.
+    assert _reserve(NOW + HOUR).admitted
+    assert ApifyBudgetCycle.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_rollover_materializes_next_cycle_and_continues_authority() -> None:
+    claim()
+    assert _reserve().admitted
+    at = C2_START + HOUR
+    assert _reserve(at).admitted
+    assert list(
+        ApifyBudgetCycle.objects.order_by("cycle_start").values_list("cycle_start", "cycle_end")
+    ) == [
+        (C1_START, C1_END),
+        (C2_START, C2_END),
+    ]
+    continued = ApifyLedgerAuthority.objects.get(cycle_start=C2_START)
+    assert (continued.kind, continued.ledger_id) == ("continued", "env-a")
+
+
+@pytest.mark.django_db
+def test_anchor_moved_backward_into_recorded_cycle_denies_cycle_unknown() -> None:
+    c1 = cycle()
+    claim()
+    before = list(ApifyBudgetCycle.objects.values_list("pk", "cycle_start", "cycle_end"))
+    # An anchor of 1 Sep derives [1 Sep, 30 Sep], and the recorded 5 Sep row
+    # starts inside it: history would be rewritten, so nothing is created.
+    back = config(budget={"billing_cycle_anchor": C1_START.replace(day=1)})
+    assert _reserve(cfg=back).reason == DenialReason.CYCLE_UNKNOWN
+    assert list(ApifyBudgetCycle.objects.values_list("pk", "cycle_start", "cycle_end")) == before
+    c1.refresh_from_db()
+    assert c1.cycle_end == C1_END
 
 
 # ── Concurrency (MS2-D-41 *Reserve*) ──
@@ -256,51 +298,48 @@ def test_reservation_straddling_cycle_boundary_counts_in_both_cycles() -> None:
 
 @pytest.mark.django_db
 def test_arbitrary_non_calendar_cycle_boundary() -> None:
-    """A 5th-to-4th cycle places spend by its bounds, never by calendar month.
+    """A day-5 anchor's 5th-to-4th cycles place spend by their bounds, never by calendar month.
 
-    The plan's second case, a cycle shortened by a plan change, needs the
-    async snapshot refresh (transactional DB) and lives in
-    test_cycle_shortened_by_plan_change_moves_the_boundary.
+    The plan's second case, a cycle shortened by a plan change, lives in
+    test_anchor_moved_forward_clamps_the_recorded_cycle.
     """
-    c1, c2 = cycle(), cycle(C2_START, C2_END)
+    claim()
+    assert _reserve(C1_START + DAY).admitted
+    assert _reserve(C2_START + DAY).admitted
+    c1 = ApifyBudgetCycle.objects.get(cycle_start=C1_START)
+    c2 = ApifyBudgetCycle.objects.get(cycle_start=C2_START)
+    assert (c1.cycle_end, c2.cycle_end) == (C1_END, C2_END)
+    ApifySpendReservation.objects.all().delete()
     # 3 October is calendar October but billing cycle 1 (5 Sep -> 4 Oct).
     october_3 = C1_END - timedelta(days=1, hours=12)
     reconcile(open_row(D("0.30"), october_3), actual=D("0.20"), last_charge_at=october_3 + HOUR)
     assert (_runtime(c1), _runtime(c2)) == (D("0.20"), D(0))
 
 
-@pytest.mark.django_db(transaction=True, serialized_rollback=True)
-def test_cycle_shortened_by_plan_change_moves_the_boundary() -> None:
-    cycle(observed_at=None)
+@pytest.mark.django_db
+def test_anchor_moved_forward_clamps_the_recorded_cycle() -> None:
+    c1 = cycle()
     claim()
-    shortened_end = C1_START + 15 * DAY  # a plan change ends cycle 1 early
-    at = shortened_end - DAY
-    outcome = asyncio.run(
-        refresh_account_snapshot(account_client(cycle_end=shortened_end), config=CONFIG, now=at)
+    # A plan change moves the real cycle: the operator re-verifies and sets a
+    # later anchor, 20 Sep, which derives [20 Sep, 19 Oct] (MS2-D-48 *Drift*).
+    new_start = C1_START + 15 * DAY
+    moved = config(
+        budget={"billing_cycle_anchor": new_start, "account_verified_on": new_start.date()}
     )
-    assert outcome == RefreshOutcome.REFRESHED
-    assert ApifyBudgetCycle.objects.get(cycle_start=C1_START).cycle_end == shortened_end
+    at = new_start - DAY
     reconcile(open_row(D("0.20"), at), actual=D("0.20"), last_charge_at=at + HOUR)
     late = reconcile(
-        open_row(D("0.30"), at), actual=D("0.30"), last_charge_at=shortened_end - GUARD / 2
+        open_row(D("0.30"), at), actual=D("0.30"), last_charge_at=new_start - GUARD / 2
     )
-    # After the shortened end no row covers now until the next cycle is found.
-    after = shortened_end + HOUR
-    assert current_cycle(after) is None
-    assert _reserve(after).reason == DenialReason.CYCLE_UNKNOWN
-    new_start = shortened_end + timedelta(milliseconds=1)
-    asyncio.run(
-        refresh_account_snapshot(
-            account_client(cycle_start=new_start, cycle_end=new_start + 30 * DAY),
-            config=CONFIG,
-            now=after,
-        )
-    )
+    after = new_start + HOUR
+    assert _reserve(after, moved).admitted
+    c1.refresh_from_db()
+    assert c1.cycle_end == new_start - timedelta(milliseconds=1)
     new_cycle = current_cycle(after)
     assert new_cycle is not None and new_cycle.cycle_start == new_start
-    old = ApifyBudgetCycle.objects.get(cycle_start=C1_START)
-    assert _runtime(old) == D("0.50")
-    assert _runtime(new_cycle) == late.actual_usd  # only the row within a guard
+    assert _runtime(c1) == D("0.50")
+    # Only the row within a guard of the boundary, plus the admitted run.
+    assert _runtime(new_cycle) == (late.actual_usd or D(0)) + RUN_DEBIT
     # Authority continues across the plan-change boundary (adjacent cycles).
     assert ApifyLedgerAuthority.objects.filter(cycle_start=new_start).exists()
 
@@ -329,7 +368,7 @@ def test_reconciled_spend_leaves_a_cycle_its_charge_interval_does_not_touch() ->
 
 @pytest.mark.django_db
 def test_late_cleanup_settled_spend_counts_in_the_cycle_of_its_final_charge() -> None:
-    c1, c2 = cycle(), cycle(C2_START, C2_END, observed_at=C2_START + 3 * DAY)
+    c1, c2 = cycle(), cycle(C2_START, C2_END)
     claim()
     late = open_row(D("0.40"), C1_END - 2 * DAY)  # missed its cleanup deadline
     reconcile(
@@ -382,7 +421,7 @@ def test_unreconciled_reservation_never_ages_out() -> None:
 @pytest.mark.django_db
 def test_stuck_reservation_still_counted() -> None:
     cycle()
-    c3 = cycle(C3_START, C3_END, observed_at=C3_START + DAY)
+    c3 = cycle(C3_START, C3_END)
     claim(C3_START)
     stuck_run = provider_run(site(), C1_START + DAY, remote_status="RUNNING")
     open_row(D("0.40"), C1_START + DAY, run=stuck_run)
@@ -392,184 +431,27 @@ def test_stuck_reservation_still_counted() -> None:
     assert _reserve(at).reason == DenialReason.CLASS_CAP
 
 
-# ── Reconciled spend stays in the snapshot check (MS2-D-40, R5-01) ──
-
-# A filler row settled in this cycle plus a snapshot whose usage leaves room
-# for exactly three runs under the snapshot check. The filler keeps
-# `usage - HR_cycle` below the $5 external bound, so the snapshot check (not
-# the external-liability check or the class cap) is the one that binds.
-FILLER = D("6.00")
-LAGGING_USAGE = D("17.10") - FILLER - STANDING - 3 * RUN_DEBIT - TICK
+# ── Reconciled spend stays debited (MS2-D-40, R5-01; MS2-D-48) ──
 
 
-def _snapshot_bound_ledger() -> None:
-    cycle(usage=LAGGING_USAGE)
+@pytest.mark.django_db
+def test_reconciled_spend_stays_debited_against_configured_limit() -> None:
+    # A $15 limit (P = 13.50, P - E = 8.50 < A) so the external-liability
+    # check binds. Room for exactly three runs after an 8.50 - 3 runs filler.
+    small = config(budget={"account_limit_usd": D("15")})
+    cycle()
     claim()
-    reconcile(open_row(FILLER, NOW - DAY), actual=FILLER, last_charge_at=NOW - DAY + HOUR)
-
-
-def _reserve_and_reconcile(at: object) -> ReservationOutcome:
-    outcome = _reserve(at)
-    if outcome.admitted:
+    filler = D("8.50") - 3 * RUN_DEBIT
+    reconcile(open_row(filler, NOW - DAY), actual=filler, last_charge_at=NOW - DAY + HOUR)
+    for i in range(3):
+        outcome = _reserve(NOW + i * timedelta(minutes=1), small)
+        assert outcome.admitted
         row = reserved(outcome.reservation_id)
-        reconcile(row, actual=row.estimate_usd or D(0), last_charge_at=row.reserved_at + HOUR)  # type: ignore[operator]
-    return outcome
-
-
-@pytest.mark.django_db
-def test_repeated_reserve_reconcile_against_one_unchanged_snapshot_keeps_debit() -> None:
-    _snapshot_bound_ledger()
-    for i in range(3):
-        assert _reserve_and_reconcile(NOW + i * timedelta(minutes=1)).admitted
-    outcome = _reserve(NOW + timedelta(minutes=5))
+        # Settled at its estimate with monitoring still open: it keeps
+        # debiting its full RUN_DEBIT, and nothing observed ever lowers it.
+        reconcile(row, actual=row.estimate_usd or D(0), last_charge_at=row.reserved_at + HOUR)
+    outcome = _reserve(NOW + timedelta(minutes=5), small)
     assert (outcome.admitted, outcome.reason) == (False, DenialReason.ACCOUNT_HEADROOM)
-
-
-@pytest.mark.django_db(transaction=True, serialized_rollback=True)
-def test_refreshed_snapshot_that_still_lags_keeps_reconciled_debit() -> None:
-    _snapshot_bound_ledger()
-    for i in range(3):
-        assert _reserve_and_reconcile(NOW + i * timedelta(minutes=1)).admitted
-    later = NOW + 30 * timedelta(minutes=1)  # past the 900 s snapshot age
-    assert _reserve(later).reason == DenialReason.ACCOUNT_STATE_UNOBSERVABLE
-    # The refreshed snapshot reports the same (lagging) account usage.
-    refreshed = asyncio.run(
-        refresh_account_snapshot(account_client(usage=str(LAGGING_USAGE)), config=CONFIG, now=later)
-    )
-    assert refreshed == RefreshOutcome.REFRESHED
-    assert _reserve(later).reason == DenialReason.ACCOUNT_HEADROOM
-
-
-@pytest.mark.django_db
-def test_inclusion_watermark_unset_debits_all_reconciled_cycle_spend() -> None:
-    c1 = cycle()
-    reconcile(
-        open_row(D("0.40"), C1_START + DAY), actual=D("0.30"), last_charge_at=C1_START + DAY + HOUR
-    )
-    current, _ = cycle_debits(c1, CONFIG)
-    assert current.hr_included_usd == 0
-    assert current.runtime_committed_usd == D("0.30")
-
-
-@pytest.mark.django_db
-def test_inclusion_lag_set_drops_only_rows_ended_before_watermark() -> None:
-    c1 = cycle(observed_at=NOW)
-    lag = config(usage_inclusion_lag_s=int((2 * HOUR).total_seconds()))
-    # Watermark = NOW - 2 h; a row's interval ends at last_charge_at + guard.
-    reconcile(open_row(D("0.40"), NOW - DAY), actual=D("0.30"), last_charge_at=NOW - 4 * HOUR)
-    reconcile(
-        open_row(D("0.40"), NOW - DAY), actual=D("0.20"), last_charge_at=NOW - HOUR - HOUR / 2
-    )
-    open_row(D("0.10"), NOW - DAY)
-    current, _ = cycle_debits(c1, lag)
-    assert current.hr_included_usd == D("0.30")
-    assert current.runtime_committed_usd == D("0.60")
-
-
-# ── Cycle discovery (MS2-D-32, R10-05) ──
-
-
-class _Crash(BaseException):
-    """Process loss between the counter commit and the call."""
-
-
-def _read_count_elsewhere() -> int:
-    def work() -> int:
-        try:
-            return ApifyCycleDiscovery.objects.get(closed_at__isnull=True).read_count
-        finally:
-            connection.close()
-
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        return pool.submit(work).result()
-
-
-@pytest.mark.django_db(transaction=True, serialized_rollback=True)
-def test_empty_ledger_bootstrap_read_is_counted_before_it_is_sent() -> None:
-    seen: list[int] = []
-
-    def crash(_request: httpx.Request) -> None:
-        seen.append(_read_count_elsewhere())  # committed, visible to another connection
-        raise _Crash
-
-    with pytest.raises(_Crash):
-        asyncio.run(refresh_account_snapshot(account_client(fail=crash), config=CONFIG, now=NOW))
-    assert seen == [1]
-    assert ApifyCycleDiscovery.objects.get().read_count == 1
-    assert not ApifyBudgetCycle.objects.exists()
-
-
-@pytest.mark.django_db(transaction=True, serialized_rollback=True)
-def test_exhausted_cycle_read_cap_then_rollover_discovers_next_cycle() -> None:
-    c1 = cycle()
-    claim()
-    ApifyBudgetCycle.objects.filter(pk=c1.pk).update(account_read_count=3000)
-    stale = NOW + HOUR
-    outcome = asyncio.run(refresh_account_snapshot(account_client(), config=CONFIG, now=stale))
-    assert outcome == RefreshOutcome.READ_CAP_EXHAUSTED
-    assert _reserve(stale).reason == DenialReason.ACCOUNT_STATE_UNOBSERVABLE
-    # After cycle_end, discovery uses its own allowance, not the spent cap.
-    after = C1_END + timedelta(minutes=10)
-    outcome = asyncio.run(
-        refresh_account_snapshot(
-            account_client(cycle_start=C2_START, cycle_end=C2_END), config=CONFIG, now=after
-        )
-    )
-    assert outcome == RefreshOutcome.DISCOVERED
-    c2 = ApifyBudgetCycle.objects.get(cycle_start=C2_START)
-    discovery = ApifyCycleDiscovery.objects.get()
-    assert (discovery.close_reason, discovery.cycle_start, discovery.read_count) == (
-        "discovered",
-        C2_START,
-        1,
-    )
-    # The discovering read counts on the new row too, plus the plan read.
-    assert c2.account_read_count == 2
-    c1.refresh_from_db()
-    allowance = cycle_debits(c1, CONFIG)[0].discovery_allowance_usd
-    assert allowance > 0
-    assert cycle_debits(c2, CONFIG)[0].discovery_allowance_usd == allowance
-    # Authority continued, and the fresh snapshot admits.
-    assert _reserve(after).admitted
-
-
-@pytest.mark.django_db(transaction=True, serialized_rollback=True)
-def test_failed_discovery_reads_count_and_stop_at_cap() -> None:
-    cfg = config(max_discovery_reads=3)
-
-    def down(_request: httpx.Request) -> None:
-        raise httpx.ConnectError("apify unreachable")
-
-    at = NOW
-    for n in range(1, 4):
-        outcome = asyncio.run(
-            refresh_account_snapshot(account_client(fail=down), config=cfg, now=at)
-        )
-        assert outcome == RefreshOutcome.READ_FAILED
-        # Spacing: a read inside the interval is not sent at all.
-        too_soon = asyncio.run(
-            refresh_account_snapshot(account_client(fail=down), config=cfg, now=at + HOUR / 60)
-        )
-        # At the cap, exhaustion is reported before spacing.
-        expected = (
-            RefreshOutcome.DISCOVERY_EXHAUSTED if n == 3 else RefreshOutcome.DISCOVERY_TOO_SOON
-        )
-        assert too_soon == expected
-        at += timedelta(seconds=300)
-    assert ApifyCycleDiscovery.objects.get().read_count == 3
-    capped = asyncio.run(refresh_account_snapshot(account_client(), config=cfg, now=at))
-    assert capped == RefreshOutcome.DISCOVERY_EXHAUSTED
-    assert _reserve(at, cfg).reason == DenialReason.CYCLE_UNKNOWN
-    assert discovery_status(cfg) == DISCOVERY_EXHAUSTED
-
-    # The owner command reads the cap from settings.
-    with override_settings(HW_RADAR_APIFY_MAX_DISCOVERY_READS=3):
-        call_command("apify_budget_reset", "--discovery", "--reason", "apify outage over")
-    assert discovery_status(cfg) is None
-    rows = ApifyCycleDiscovery.objects.order_by("pk")
-    assert [r.close_reason for r in rows] == ["owner_reset", ""]
-    found = asyncio.run(refresh_account_snapshot(account_client(), config=cfg, now=at))
-    assert found == RefreshOutcome.DISCOVERED
 
 
 # ══ E4: reconcile and the overrun latch (MS2-D-23, -26, -32, -33, -34, -41, -46, -47) ══
@@ -1017,7 +899,7 @@ def test_below_estimate_upward_correction_after_capacity_reuse_trips_latch() -> 
     assert _settle_read(run_a, "0.50", ELIGIBLE + timedelta(seconds=60), STABLE)
     # B reserves the released $1.50 and more: the runtime cap is now full.
     a = _fresh(a)
-    room = ALLOCATION - STANDING - (a.actual_usd or D(0)) - (a.monitoring_bound_usd or D(0))
+    room = ALLOCATION - (a.actual_usd or D(0)) - (a.monitoring_bound_usd or D(0))
     open_row(room, NOW)
     assert open_latches() == []
     _monitor(a, "1.00", NOW + DAY)  # still below A's own $2 reservation
@@ -1025,19 +907,62 @@ def test_below_estimate_upward_correction_after_capacity_reuse_trips_latch() -> 
     assert _fresh(a).actual_usd == D("1.0000")
 
 
+def _stable_with(**budget: Any) -> Any:
+    return dataclasses.replace(STABLE, budget=dataclasses.replace(STABLE.budget, **budget))
+
+
 @pytest.mark.django_db
 def test_upward_correction_breaching_external_liability_check_trips_latch() -> None:
-    # P = 6.60 prepaid -> usable 5.94; with E = 5.00 Hardware Radar may hold
-    # 0.94. The row's correction takes HR_cycle past that, while the class
-    # cap, the target, and the snapshot check all still hold.
-    cycle(prepaid=D("6.60"), usage=D("0.10"))
+    # A $6.00 configured limit -> P = 5.40; with E = 5.00 Hardware Radar may
+    # hold 0.40. The row's correction takes HR_cycle past that, while the
+    # class cap and the target both still hold.
+    small = _stable_with(account_limit_usd=D("6.00"))
+    cycle()
     run, row = settled_run(estimate=custom_estimate("0.60"))
-    _settle_read(run, "0.10", ELIGIBLE, STABLE)
-    assert _settle_read(run, "0.10", ELIGIBLE + timedelta(seconds=60), STABLE)
+    _settle_read(run, "0.10", ELIGIBLE, small)
+    assert _settle_read(run, "0.10", ELIGIBLE + timedelta(seconds=60), small)
     assert open_latches() == []
-    _monitor(_fresh(row), "0.45", NOW + DAY)
-    assert invariant_breaches(_fresh(row), CONFIG) == ["2026-09-05 external-liability check"]
+    _monitor(_fresh(row), "0.45", NOW + DAY, small)
+    assert invariant_breaches(_fresh(row), small, NOW + DAY) == [
+        "2026-09-05 external-liability check"
+    ]
     assert open_latches() == [LatchReason.POST_ADMISSION_INVARIANT_BREACH]
+
+
+# Contract cases 1-6 of budget.account_setting_problem (R12-04). The correction
+# below happens at NOW + DAY (21 Sep); a verified-on of 22 Sep is invalid then.
+_CORRECTION_AT = NOW + DAY
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    ("changes", "setting"),
+    [
+        ({"billing_cycle_anchor": None}, "BILLING_CYCLE_ANCHOR"),
+        ({"account_limit_usd": None}, "ACCOUNT_LIMIT_USD"),
+        ({"account_base_price_usd": None}, "ACCOUNT_BASE_PRICE_USD"),
+        ({"account_data_retention_days": 0}, "ACCOUNT_DATA_RETENTION_DAYS"),
+        ({"account_verified_on": (_CORRECTION_AT + DAY).date()}, "ACCOUNT_VERIFIED_ON"),
+        ({"account_margin_usd": D("NaN")}, "ACCOUNT_MARGIN_USD"),
+    ],
+    ids=lambda v: v if isinstance(v, str) else "",
+)
+def test_correction_with_invalid_account_setting_is_an_invariant_breach(
+    changes: dict[str, Any], setting: str
+) -> None:
+    cycle()
+    claim()
+    run, row = settled_run(estimate=custom_estimate("2.00"))
+    _settle_read(run, "0.50", ELIGIBLE, STABLE)
+    assert _settle_read(run, "0.50", ELIGIBLE + timedelta(seconds=60), STABLE)
+    assert open_latches() == []
+    bad = _stable_with(**changes)
+    _monitor(_fresh(row), "1.00", _CORRECTION_AT, bad)  # upward, still below $2
+    assert invariant_breaches(_fresh(row), bad, _CORRECTION_AT) == [f"unverifiable: {setting}"]
+    assert open_latches() == [LatchReason.POST_ADMISSION_INVARIANT_BREACH]
+    if setting == "ACCOUNT_VERIFIED_ON":
+        # Evaluated at the caller's own now: a day later the date is valid.
+        assert invariant_breaches(_fresh(row), bad, _CORRECTION_AT + 2 * DAY) == []
 
 
 @pytest.mark.django_db
@@ -1352,7 +1277,7 @@ def test_dataset_over_cap_trips_latch() -> None:
 
 @pytest.mark.django_db(transaction=True, serialized_rollback=True)
 def test_overrun_never_admits_repair_run_or_dataset_reread() -> None:
-    cycle(observed_at=NOW)
+    cycle()
     claim()
     trip_latch(LatchReason.OVERRUN, config=CONFIG, now=NOW)
     # No repair run or probe: admission is denied.
@@ -1536,9 +1461,7 @@ def test_outage_spanning_correction_deadline_closing_read_applies_correction() -
     assert a.correction_monitor_until is not None
     day0 = a.reconciled_at or NOW
     # Run B reserves into the released capacity (the runtime cap is now full).
-    open_row(
-        ALLOCATION - STANDING - (a.actual_usd or D(0)) - (a.monitoring_bound_usd or D(0)), day0
-    )
+    open_row(ALLOCATION - (a.actual_usd or D(0)) - (a.monitoring_bound_usd or D(0)), day0)
     # The provider raises A to $1 on day 6; the poller is down from day 5 to
     # day 8, across the day-7 deadline.
     fake.totals[run_a.external_run_id or ""] = "0.50"
@@ -1562,7 +1485,7 @@ def test_outage_spanning_correction_deadline_closing_read_applies_correction() -
     assert open_latches() == [LatchReason.POST_ADMISSION_INVARIANT_BREACH]
     assert report.released == []
     # Counted at $1 in the cycle A's charge interval touches.
-    assert _runtime(c1) >= ALLOCATION - STANDING + D("0.50")
+    assert _runtime(c1) >= ALLOCATION + D("0.50")
 
 
 @pytest.mark.django_db(transaction=True, serialized_rollback=True)
@@ -1675,7 +1598,7 @@ def test_closing_read_after_cycle_boundary_debits_the_new_cycle() -> None:
     row = _fresh(row)
     assert row.correction_monitor_closed_at == until
     later = until + HOUR
-    c2 = cycle(C2_START, C2_END, observed_at=later)
+    c2 = cycle(C2_START, C2_END)
     claim(C2_START)
     monitoring = row.monitoring_bound_usd or D(0)
     assert cycle_debits(c2, CONFIG)[0].runtime_committed_usd == monitoring
@@ -1761,11 +1684,7 @@ def test_build_row_without_build_id_stays_at_bound_and_never_reconciles() -> Non
 
 @pytest.mark.django_db
 def test_inspection_settle_sets_last_charge_at_and_no_correction_obligation() -> None:
-    cycle(observed_at=timezone.now())
-    ApifyBudgetCycle.objects.update(
-        cycle_start=timezone.now() - DAY, cycle_end=timezone.now() + DAY
-    )
-    claim(ApifyBudgetCycle.objects.get().cycle_start)
+    claim(live_cycle_start())
     with override_settings(**PRICED, HW_RADAR_APIFY_ENABLED=True):
         call_command("apify_operator_reserve", "--kind", "inspect", "--reason", "look at run")
     row = ApifySpendReservation.objects.get(operator_kind="inspect")
@@ -1827,12 +1746,10 @@ def test_envelope_denial_from_unset_limit_is_recorded() -> None:
 
 
 @pytest.mark.django_db
-def test_discovery_reset_stores_the_owners_reason() -> None:
-    ApifyCycleDiscovery.objects.create(opened_at=NOW, read_count=24)
-    with override_settings(HW_RADAR_APIFY_MAX_DISCOVERY_READS=24):
+def test_budget_reset_rejects_the_retired_discovery_option() -> None:
+    # MS2-D-48 retired runtime cycle discovery with its owner reset.
+    with pytest.raises(CommandError, match="--discovery"):
         call_command("apify_budget_reset", "--discovery", "--reason", "apify outage over")
-    closed = ApifyCycleDiscovery.objects.get(close_reason="owner_reset")
-    assert closed.reason == "apify outage over"
 
 
 @pytest.mark.django_db(transaction=True, serialized_rollback=True)
