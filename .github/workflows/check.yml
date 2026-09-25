@@ -67,8 +67,9 @@ jobs:
       - name: Coverage report
         run: uv run coverage report
 
+      # --skip-editable: see scripts/check.py (the unpublished project itself).
       - name: Dependency audit
-        run: uv run pip-audit
+        run: uv run pip-audit --skip-editable
 
       # Actor projects (MS2-D-38): each is its own uv project with its own lock,
       # so its gate runs in its own environment. Mirrors scripts/check.py's
@@ -87,4 +88,4 @@ jobs:
         run: uv run --directory actors/hw-radar-synthetic-collector --locked coverage report
 
       - name: "Actor hw-radar-synthetic-collector: dependency audit"
-        run: uv run --directory actors/hw-radar-synthetic-collector --locked pip-audit
+        run: uv run --directory actors/hw-radar-synthetic-collector --locked pip-audit --skip-editable

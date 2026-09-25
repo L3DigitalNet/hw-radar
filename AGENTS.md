@@ -74,7 +74,7 @@ uv run ruff check .
 uv run basedpyright
 uv run coverage run -m pytest
 uv run coverage report
-uv run pip-audit
+uv run pip-audit --skip-editable
 ```
 
 Use `uv add`, `uv add --dev`, and `uv remove` for dependency changes. Do not
