@@ -37,7 +37,9 @@ with every marketplace source still disabled: GPU/RAM/CPU first-class
 categories, category-specific `match | no_match | unknown` requirement
 evaluation, and Hardware Radar's first self-owned Apify Actor project
 (`actors/hw-radar-synthetic-collector`, deployed privately and proven by eleven admitted runs in a
-non-production proof environment on 2026-09-25).
+non-production proof environment on 2026-09-25). The provider-run and Apify spend-ledger
+infrastructure behind it is deployed too, with Apify admission deliberately left unconfigured in
+production. eBay GPU/RAM/CPU category sweeps and a pilot measurement report are in development.
 
 ## Documentation
 

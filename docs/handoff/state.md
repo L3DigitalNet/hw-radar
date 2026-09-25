@@ -2,10 +2,10 @@
 
 ## Current focus
 
-- Prod `531916e` (0021/0022 undeployed, deny-all). dev: Slices D+E, plan rev 12, F5a tooling. Sources off.
-- F5a done 2026-09-25 in a proof env: build 1.0.1, 11 admitted runs, 0 delistings, live AC-4; see evidence.
-- Proof env holds the 2026-09-05 cycle's ledger authority; drain + handoff before any prod paid admission.
-- Next: F1–F3 pilot sources; owner: MAX_KV_WRITES→3 (F-01), OQ24, MS-1e ratification, F6.
+- Prod `508b1f0` (Slices D/E, 0021/0022; Apify unconfigured, sources off). dev adds F1–F3, fixes.
+- Owner gates: MS-1e audit (packet in docs/evidence), OQ32 floor, OQ31 SPD/Seagate terms, OQ24.
+- Proof env keeps the ledger authority; run its tick.sh after 2026-10-02 21:10Z, then drain/handoff.
+- F6 blocked: no source enabled, no category seeds in prod, 0% condition capture (see TODO).
 
 ## Active incidents
 

@@ -41,24 +41,39 @@ Instructions for AI agents:
 - [x] Add an acquisition-provider boundary to hw-radar. **Slice D (core) complete 2026-09-25**
   (D1–D12; D9 verifier 10/11 bullets hold, the storage-deadline bullet with the plan's accepted
   exceptions). A FULL Actor start is refused while a same-scope run's import is undecided
-  (`scope_run_outstanding`, `3c117c9`). Migration `0021` undeployed. See `docs/STATUS.md`.
+  (`scope_run_outstanding`, `3c117c9`). Migration `0021` deployed 2026-09-25 (`508b1f0`).
 - [x] Add Hardware Radar Apify budget admission/accounting ($20/month cash ceiling, $12 operating
   target, reserve-before-run + reconcile-after-run, `budget_paused`, no automatic escalation).
   **Slice E complete 2026-09-25** (E1–E8; E7 verifier 16/16 acceptance claims hold; crash windows
-  d1/d2 closed `40b7295`). Migration `0022` undeployed. Keep `report._place` in step with
+  d1/d2 closed `40b7295`). Migration `0022` deployed 2026-09-25 (`508b1f0`). Keep `report._place` in step with
   `ledger._tally` (pinned by `test_cycle_totals_match_ledger_cycle_debits`).
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
-  categories and both local + self-owned-Apify provider paths. Measure cost, completeness,
-  identifier quality, condition/shipping coverage, freshness, and failure recovery before adding
-  breadth.
+  categories and both local + self-owned-Apify provider paths. F1–F3 landed 2026-09-25 (eBay
+  category sweeps, `pilot_report`; evidence `docs/evidence/2026-09-25-f1-f3-pilot.md`). Remaining:
+  measure a sustained pilot (more than one run per source), which needs the owner's per-source
+  enablement. Only eBay, goHardDrive, and WD are usable local sources while OQ31 is open, and no
+  Actor-backed merchant is admitted yet (OQ24).
+- [ ] Capture listing condition: the pilot measured 0% condition coverage on every source (eBay
+  Browse `condition`/`conditionId` is not mapped). Condition feeds the drive matcher's variant
+  grain, so change it only with a `matcher_version` bump after, or together with, the MS-1e
+  ratification.
+- [ ] Seed GPU/RAM/CPU reference rows in production (`import_refdata`; production has 0 category
+  spec rows) before any category watch, and extend seeds to cover the chosen F6 product.
+- [ ] Extract the WD part number from the SKU key into `ParsedListing.attrs`; WD titles carry no
+  part number, so WD listings cannot resolve (MS-1e packet finding F2).
 - [x] Coordinate one self-owned private Hardware Radar Actor as the integration proof. **F5a
   executed 2026-09-25** in a non-production proof environment (evidence:
   `docs/evidence/2026-09-25-f5a-synthetic-proof.md`): build `1.0.1`, eleven admitted runs over every
   fault mode, zero delistings, live AC-4 switch, $0.00527 total account usage.
 - [ ] F5a step 5 (MS2-D-45): before any production environment admits paid Apify work in the
-  2026-09-05 cycle, keep the proof environment's ticks running until its correction monitoring
-  closes (7-day window), confirm it drained, then `apify_ledger_handoff`. Until then the proof
-  environment holds the cycle's ledger authority.
+  2026-09-05 cycle, drain the proof environment. Run its tick wrapper
+  (`~/.local/state/hw-radar-f5a/tick.sh N GAP`, workstation-local; reads the runtime token from
+  OpenBao at run time) at least once after 2026-10-02 21:10Z, so every reservation's closing read
+  commits (monitoring windows close 2026-10-02 19:40–21:09Z; interim reads that fall due
+  2026-09-26 are optional, and a missed one becomes overdue and is taken by the closing read). Then
+  confirm `apify_spend_report` shows 0 monitoring and 0 outstanding, and run `apify_ledger_handoff`
+  only if production paid admission is actually wanted. Until then the proof environment holds the
+  cycle's ledger authority.
 - [ ] Production Apify runtime rendering: production secrets come from the Hetzner-side OpenBao
   peer through the CT's bao-agent template, not the workstation path; add the scoped runtime token
   there and render `HW_RADAR_APIFY_TOKEN` only when production paid admission is intentionally
@@ -68,14 +83,16 @@ Instructions for AI agents:
   smoke is ever wanted; the synthetic Actor is not a production collection source.
 - [x] Keep provider identity separate from marketplace/source identity: proven by D7
   (`test_provider_switch_preserves_identity_history_and_watch_state`, AC-4).
-- [ ] Run the existing MS-1e owner-in-the-loop ratification step for the drive matcher before
-  enabling affected drive source/category combinations: live harvest, label draft, owner audit,
-  full verification gate, and ADR-0019 flip only on PASS.
+- [ ] MS-1e drive-matcher ratification: harvest and draft labels are done (2026-09-25,
+  `docs/evidence/2026-09-25-ms1e-audit-packet.md`; provisional FAIL, 17 of 100 required
+  auto-accepts). Waiting on the owner: audit the 36 listed ids, decide the labeling rule (R2) and
+  OQ32. Then run the full verification gate and flip ADR-0019 only on a composite PASS.
 - [ ] Add category-specific validation corpora/gates before auto-accepting GPU/RAM/CPU matches;
   drive-corpus precision does not validate other categories.
 - [ ] Deliberately enable each source × category combination only after its operational,
   retention/ToS, completeness, match-quality, and cost gates pass.
-- [ ] re-verify eBay category ids via Taxonomy API quarterly (last 2026-09-25, tree 0 v134)
+- [ ] Re-verify eBay category IDs (27386, 170083, 11210, 164, 56088) through the Taxonomy API
+  quarterly and on eBay category-change notices (last 2026-09-25, tree 0, version 134).
 - [ ] Add the remaining SanDisk/WD real-corpus alias verification; blocked on the owner-gated
   drive harvest / first SSD seed.
 - [ ] Confirm the first post-migration-0015 continuous-sweep log before relying on
@@ -96,8 +113,11 @@ Instructions for AI agents:
   multi-category watch-first path is working and real history identifies which category-specific
   scoring work is valuable.
 - [ ] **Deferred with MS-2:** resolve eBay `feedbackScore` semantics before any future MS-2e plan.
-- [ ] **Blocked on owner (OQ24):** rule on the production Actor-backed merchant source. Newegg is
-  excluded on ToU evidence (automated access/scraping prohibited "for any purpose", retrieved
-  2026-09-24); B&H and refurbished server-parts sellers still need ToS/robots review. Plan finding
-  R20: bounded-retention sources (e.g. eBay, 6h TTL) need a verified per-run Apify storage expiry.
-  The first Actor proof no longer needs this answer (uses a controlled synthetic source).
+- [ ] **Blocked on owner (OQ24):** rule on the production Actor-backed merchant source.
+  Records from 2026-09-25 are in `docs/research/source-admission/`: ServerPartDeals and B&H are
+  `exclude`; Micro Center, ServerMonkey, and SabrePC are `permission-required`; Newegg was already
+  excluded. No candidate is `eligible`, so F5b cannot start. Plan finding R20: bounded-retention
+  sources need a verified per-run Apify storage expiry.
+- [ ] **Blocked on owner (OQ31):** decide on the ServerPartDeals and Seagate connectors, whose
+  terms prohibit automated access. Both stay disabled; the SA-004 enable order in
+  `docs/handoff/deployed.md` depends on the decision.

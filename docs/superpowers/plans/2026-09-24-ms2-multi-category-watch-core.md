@@ -6991,11 +6991,44 @@ follow-up R12-01).**
     - every non-drive item carries a hint;
     - a GPU complete sweep cannot delist drive listings (scoped absence);
     - the frozen drive tests stay green.
+  - **Landed 2026-09-25** (`d2bc220`, `20fe3b8`, `1ef8aae`; evidence
+    [`docs/evidence/2026-09-25-f1-f3-pilot.md`](../../evidence/2026-09-25-f1-f3-pilot.md)).
+    Facts re-verified live: tree `0` version `134`; the three IDs stand, and eBay
+    also has server leaves 11210 (Server Memory) and 56088 (Server CPUs);
+    `getRateLimits` reports `buy.browse` at 5,000 per 86,400 s (R8's quota question
+    closed); offsets past 10,000 still returned items and offset 50,000 returned a
+    silent empty page. Category-only totals (≈109k–1.3M) can never be complete, so
+    the pilot sweeps are query-scoped (RTX 3090 in 27386, 32GB DDR4 ECC RDIMM in
+    11210, EPYC 7302 in 56088; fixed-price only). **Deviation from the task list
+    above:** a verifier showed offset paging over a live, re-ranked set can skip an
+    item while `total` and the id count still agree, so only a **single-page** sweep
+    can be `complete`. Every multi-page sweep is incomplete
+    (`multi_page_unprovable`), and its absence goes through the grace path.
+    `test_pagination_reaches_complete_when_total_within_cap` is therefore replaced by
+    `test_multi_page_sweep_within_cap_is_unprovable` and
+    `test_single_page_sweep_is_complete`. Each scope's delist also excludes every key
+    seen anywhere in the run. Category sweeps share a 60 s deadline; a failure fails
+    only its own sweep. `probe()` stays one GET. Per-scope outcomes land in
+    `ScraperRun.detail_json["scopes"]`.
 - **F2 — ServerPartDeals breadth check.** If non-drive collections exist, add
   hinted, scoped collection sweeps. Otherwise record "drive-only" as a finding.
+  - **Landed 2026-09-25: no change.** RAM collections and some GPU products
+    exist, but the site's Terms of Service prohibit "spider, crawl, or scrape"
+    and "any automated use of the Service", so the connector is not broadened
+    ([record](../../research/source-admission/2026-09-25-serverpartdeals.md)). The
+    existing drive connector's own conflict is
+    [OQ31](../../open-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access).
 - **F3 — Measurement.** `pilot_report` summarizes, per source and provider:
   runs, completeness distribution, identifier (MPN) coverage, condition and
   shipping presence, freshness lag, failures, and cost (Task 6).
+  - **Landed 2026-09-25** (`0b2246b`, `968fb1e`): `manage.py pilot_report`, JSON
+    schema `hw-radar/pilot-report/v1`, grouped by source, provider, scope, and
+    category. Unmetered sources print "no direct provider cost (not metered)", and
+    missing evidence prints "not recorded". A bounded live pilot into a scratch
+    database found 0% condition coverage on every source and no GPU/RAM/CPU
+    reference rows (production has none either). It also found and fixed a
+    goHardDrive URL/selector drift (`2c8bce6`) and a Scrapy DNS thread-pool defect
+    (`b9e01a1`).
 - **F4 — Category corpora (prep for owner gate R4).** Harvest GPU/RAM/CPU samples
   with `harvest_corpus`. Its hint round trip landed in B6 (MS2-D-27), so the
   harvested entries replay through their own category rules. F4 changes no
