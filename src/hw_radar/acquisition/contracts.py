@@ -135,12 +135,19 @@ class DelistScope:
     Both paths are reversible — Listing.mark_relisted() clears the mark when the
     source shows the listing again — so the failure mode of a wrong delist is a
     temporarily hidden offer, not lost data.
+
+    scope_key — the MS2-D-12 collection scope the sweep enumerated. The delist
+        stage only considers listings whose collection_scope equals it, and None
+        means the legacy NULL scope (collection_scope IS NULL), never "every
+        scope": a complete sweep of one category must not delist the others.
+        The default keeps every pre-scope adapter on the NULL scope unchanged.
     """
 
     seen_keys: frozenset[str]
     observed_at: datetime
     complete: bool
     absence_grace: timedelta
+    scope_key: str | None = None
 
 
 @runtime_checkable

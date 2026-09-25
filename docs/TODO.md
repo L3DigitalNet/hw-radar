@@ -24,8 +24,10 @@ Instructions for AI agents:
   rules/registry/acceptance policy, corpus category-hint round trip). CPU 9 / GPU 8 / RAM 2
   first-party rows seeded; no further RAM expansion is planned in MS-2 (OQ27 resolved
   2026-09-25 — no new retention class for non-first-party reference data).
-- [ ] Add `ProviderRunEvidence.truncation_reason` (MS2-D-11), deferred out of D1 into D2 or a
-  follow-up.
+- [ ] Add `ProviderRunEvidence.truncation_reason` (MS2-D-11), deferred out of D1. The DB side
+  landed in D2 (`provider_run.truncation_reason`, migration `0021`, with a CHECK that it is set
+  iff completeness is `truncated`); the evidence-model field and its None-omitting serializer
+  remain, needed by D4/D8.
 - [ ] Split the committed input contract into a common schema + synthetic extension so a future
   merchant Actor can't inherit `faultMode` (verifier finding, low priority).
 - [ ] Harden D3 client's proxy guard: currently top-level only; nested proxy config is blocked via
@@ -45,8 +47,11 @@ Instructions for AI agents:
 - [ ] Add an acquisition-provider boundary to hw-radar. **Seam done:** `CollectionProvider`
   contract, run-evidence completeness gate, truncated/partial/failed runs cannot delist.
   **D-prep code-complete:** D3 client and D1 Actor project (`actors/hw-radar-synthetic-collector`,
-  contract schemas, `classify_run`, CI Actor gates). **Next (Slice D):** Apify push/build/run
-  (none has occurred yet), truncation_reason (above), Slice D entry-gate review, then D2.
+  contract schemas, `classify_run`, CI Actor gates). **D2 schema done** (migration `0021`:
+  `provider_run`, `scope_sweep_continuity`, `SourceConfig.collection_provider`, listing scope and
+  ordering watermarks, NULL-scope lane watermarks, scope-filtered `_apply_delist`). **Next
+  (Slice D core):** D4 → D10 → D5 → D6 → D7 → D8 → D11 → D12 → D9; Apify push/build/run (none
+  has occurred yet); truncation_reason on the evidence model (above).
 - [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
   initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential

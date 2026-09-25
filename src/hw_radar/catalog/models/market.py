@@ -295,6 +295,19 @@ class Listing(RetentionGoverned):
     delist_reason = models.CharField(
         max_length=20, choices=DelistReason.choices, blank=True, default=""
     )
+    # MS2-D-12 collection scope ("<site_key>:<category>:<query_id>") of the sweep
+    # that last wrote this row. NULL is the legacy NULL scope, not "unknown": the
+    # delist stage acts on exactly one scope, and a None DelistScope.scope_key
+    # selects the NULL rows (acquisition.pipeline._apply_delist).
+    collection_scope = models.CharField(max_length=100, null=True, blank=True)
+    # Ordering watermarks for out-of-order imports (MS2-D-30, -35), each only
+    # ever raised. NULL means "none recorded since the column existed", which
+    # the guards read as "no bound", so deployed rows need no backfill:
+    # last_observed_at is the observed_at of the newest observation applied to
+    # current state; last_absence_at is the newest delist evidence time, kept
+    # separately from delisted_at because mark_relisted clears that column.
+    last_observed_at = models.DateTimeField(null=True, blank=True)
+    last_absence_at = models.DateTimeField(null=True, blank=True)
 
     objects: ClassVar[ListingManager] = ListingManager()
 
@@ -323,6 +336,12 @@ class Listing(RetentionGoverned):
                 fields=["source_site", "source_listing_key"],
                 condition=models.Q(delisted_at__isnull=True),
                 name="listing_active_by_site_key",
+            ),
+            # The scoped delist candidate query (source, scope, still active).
+            models.Index(
+                fields=["source_site", "collection_scope"],
+                condition=models.Q(delisted_at__isnull=True),
+                name="listing_active_by_site_scope",
             ),
             *retention_indexes("listing_expires"),
         ]

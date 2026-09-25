@@ -91,10 +91,10 @@ class RunFailureClass(models.TextChoices):
 
 
 class ProviderKind(models.TextChoices):
-    """Who collected a run's data (ADR 0021: source identity is independent of it).
+    """Who collects a source's data (ADR 0021: source identity is independent of it).
 
-    No model field uses this yet, so it needs no migration; the Slice D
-    provider-run table will be its first column.
+    Used both as a run's collector (ProviderRun.provider_kind) and as a source's
+    selected provider (SourceConfig.collection_provider, MS2-D-18).
     """
 
     LOCAL = "local", "Local collector"
@@ -106,7 +106,7 @@ class RunCompleteness(models.TextChoices):
 
     Only COMPLETE is evidence of absence. TRUNCATED (page/item/budget limit hit),
     PARTIAL_FAILURE and FAILED never are — see acquisition.providers for the gate
-    that enforces this. Unused by any field for now, like ProviderKind.
+    that enforces this. ProviderRun.completeness stores it for remote runs.
     """
 
     COMPLETE = "complete", "Complete"
@@ -122,8 +122,8 @@ class TruncationReason(models.TextChoices):
     state: every cause has identical delist semantics, so splitting TRUNCATED
     into per-cause members would break the ADR-0021 taxonomy and every
     TRUNCATED branch of the gate for no behavioral gain. RESOURCE_LIMIT is a
-    byte or transfer budget set at admission. Unused by any field for now; the
-    Slice D provider-run table adds the nullable column.
+    byte or transfer budget set at admission. ProviderRun.truncation_reason
+    stores it, blank for every other completeness.
     """
 
     ITEM_LIMIT = "item_limit", "Item limit"
@@ -166,6 +166,12 @@ class SourceConfig(TimeStamped):
     bucket_burst = models.PositiveIntegerField(default=3)
     misfire_grace_s = models.PositiveIntegerField(default=60)
     notes = models.TextField(blank=True, default="")
+    # Who collects this source (MS2-D-18). Switching it never touches listings
+    # or watch state: listing identity is keyed by source, not by provider. The
+    # Actor reference for an apify source comes from settings, not this row.
+    collection_provider = models.CharField(
+        max_length=10, choices=ProviderKind.choices, default=ProviderKind.LOCAL
+    )
 
     class Meta:
         db_table = "source_config"
@@ -183,6 +189,21 @@ class SourceConfig(TimeStamped):
                     )
                 ),
                 name="source_config_fast_lane_eligible",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(collection_provider__in=[k.value for k in ProviderKind]),
+                name="source_config_collection_provider_valid",
+            ),
+            # Heartbeat and fast lane are local-only in MS-2 (MS2-D-18): both
+            # fetch through the local adapter, so an apify source with either
+            # lane on would run the local collector for a source whose
+            # collection was moved to the Actor (MS2-D-24).
+            models.CheckConstraint(
+                condition=(
+                    models.Q(collection_provider=ProviderKind.LOCAL)
+                    | models.Q(heartbeat_enabled=False, fast_lane=False)
+                ),
+                name="source_config_remote_provider_local_only_lanes",
             ),
         ]
 
@@ -236,13 +257,36 @@ class SourceLaneState(TimeStamped):
     # "no continuous run established yet" and blocks stale-absence delisting
     # outright. Never read by the scheduler: it carries evidence, not cadence.
     continuous_since = models.DateTimeField(null=True, blank=True)
+    # The legacy NULL collection scope's ordering watermarks (MS2-D-35, -36),
+    # written only on the FULL lane row; non-NULL scopes keep the same three on
+    # ScopeSweepContinuity (provider.py). They live here rather than as a NULL
+    # row there because moving the NULL scope would change the lane-row
+    # mechanism the frozen eBay continuity tests pin, for no behavior gain
+    # (MS2-D-31 rejected alternative (b)).
+    # NULL means "no bound" for each, so deployed rows need no backfill.
+    last_eligible_sweep_at = models.DateTimeField(null=True, blank=True)
+    continuity_broken_at = models.DateTimeField(null=True, blank=True)
+    last_complete_sweep_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "source_lane_state"
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
                 fields=["source_config", "lane"], name="source_lane_state_unique_lane"
-            )
+            ),
+            # The heartbeat lane never sweeps a scope, so a watermark on its row
+            # would be one the continuity and delist guards never read.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(lane=SchedulingLane.FULL)
+                    | models.Q(
+                        last_eligible_sweep_at__isnull=True,
+                        continuity_broken_at__isnull=True,
+                        last_complete_sweep_at__isnull=True,
+                    )
+                ),
+                name="source_lane_state_scope_watermarks_full_only",
+            ),
         ]
 
 

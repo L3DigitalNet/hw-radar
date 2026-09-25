@@ -66,7 +66,15 @@ from hw_radar.catalog.models.ops import (
     SourceConfig,
     SourceLaneState,
     SourceTier,
+    TruncationReason,
     VolatilityProfile,
+)
+from hw_radar.catalog.models.provider import (
+    AdmissionClass,
+    ImportState,
+    ProviderRun,
+    ScopeSweepContinuity,
+    StorageState,
 )
 from hw_radar.catalog.models.resolution import (
     FetchRequestStatus,
@@ -88,6 +96,7 @@ from hw_radar.catalog.models.watch import (
 __all__ = [
     "BOUNDED_RETENTION_CLASSES",
     "INDEFINITE_RETENTION_CLASSES",
+    "AdmissionClass",
     "AliasSourceKind",
     "AliasType",
     "AvailabilityHeartbeatEvent",
@@ -110,6 +119,7 @@ __all__ = [
     "GpuRequirement",
     "GpuSpec",
     "HeartbeatDecision",
+    "ImportState",
     "LifecycleState",
     "Listing",
     "ListingResolution",
@@ -122,6 +132,7 @@ __all__ = [
     "ProductModel",
     "ProductVariant",
     "ProviderKind",
+    "ProviderRun",
     "RamGeneration",
     "RamModuleType",
     "RamRequirement",
@@ -141,6 +152,7 @@ __all__ = [
     "RunStatus",
     "SchedulerCheckpoint",
     "SchedulingLane",
+    "ScopeSweepContinuity",
     "ScraperRun",
     "SearchObservation",
     "Seller",
@@ -150,7 +162,9 @@ __all__ = [
     "SourceTier",
     "SourceType",
     "StockStatus",
+    "StorageState",
     "TimeStamped",
+    "TruncationReason",
     "UnknownModelBackfill",
     "VerificationEvent",
     "VolatilityProfile",

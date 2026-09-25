@@ -191,12 +191,21 @@ def _apply_delist(site: SourceSite, scope: DelistScope, continuous_since: dateti
     IR-002 field redaction that mass-delist destroys merchant content on a source
     that never changed. A complete sweep is unaffected: enumerating the whole
     result set is direct evidence of absence and owes nothing to polling history.
+
+    Candidates are limited to the sweep's own collection scope (MS2-D-12), with
+    a None scope_key meaning collection_scope IS NULL. `filter(collection_scope=
+    None)` would also compile to IS NULL, but the explicit branch keeps that
+    mapping visible where a "None means all scopes" edit would do the damage.
     """
     candidates = (
         Listing.objects.not_delisted()
         .filter(source_site=site)
         .exclude(source_listing_key__in=scope.seen_keys)
     )
+    if scope.scope_key is None:
+        candidates = candidates.filter(collection_scope__isnull=True)
+    else:
+        candidates = candidates.filter(collection_scope=scope.scope_key)
     if scope.complete:
         reason = DelistReason.ABSENT_FROM_SWEEP
     else:
