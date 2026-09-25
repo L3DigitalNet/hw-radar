@@ -4162,7 +4162,10 @@ the then-current code. D-prep (D1, D3) is not gated.
       `external_liability_unbounded`, and the 5.00 default is never
       substituted);
       `test_default_external_liability_admits_only_when_invariant_holds`
-      (the variable absent: the bound is 5.00; a reservation with
+      (the variable absent: the bound is 5.00. The fixture isolates check 2 by
+      setting the Hardware Radar target above `P − 5.00` and leaving check 1
+      slack, because with the verified $19 credit and $1.90 margin the $12
+      target binds first (R34); in that fixture a reservation with
       `HR_cycle + estimate + 5.00 = P` is admitted, one cent more is denied,
       and a stale snapshot still denies);
       `test_external_liability_consumes_share_before_target`;
@@ -4852,6 +4855,21 @@ resolved; all accepted → revision 8.** Static read-only review of revision 7 a
 **Round 8 — delegate `b73b6633` (codex), READY, no new findings; plan converged
 at revision 8.** Static read-only review of revision 8. No further revision is
 required; the plan's Apify budget/ledger design (revisions 5–8) is converged.
+
+**Revision 9 targeted review — delegate `be0b1419` (codex), 2026-09-25: three
+low findings, no critical/high/medium.** Scope: the revision 9 diff only
+(owner decisions OQ25–OQ29), not the converged revision 8 text. It confirmed
+the budget arithmetic (`P = $17.10`, check 2 caps Hardware Radar at $12.10 so
+the $12 target binds first; `A = $11`; two $0.41 build bounds fit in $1.00,
+three do not), that every fail-closed path survives (present-but-empty or
+invalid liability values deny every class), that no passage lets the runtime
+use the operator key or gives CI a credential, and that F5a alone supplies the
+Apify exit while F6 and MS-1e stay separate. Findings, all accepted and fixed
+in revision 9: the E2 default-liability test now states a fixture that
+isolates check 2; OQ26's record marks the former "denied while unset" rule as
+history; OQ25's verification note no longer names the Apify account. Noted
+limitation (unchanged): an absent variable cannot be told apart from an
+accidental omission, so the default is chosen deliberately.
 
 ## Next slice after A
 
