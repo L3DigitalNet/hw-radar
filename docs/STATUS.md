@@ -48,13 +48,13 @@
   project 64 passed, 99% coverage. Migrations empty->head and head->0017->head both OK; A0 oracle
   unchanged. Verifiers: Slice B C1-C9, Slice C/D-prep V1-V10 all CONFIRMED. Post-battery hardening
   (complete-report count checks, Actor wall-clock deadline) landed after it; targeted gates green.
-- **Owner gates open (session 2):** OQ25 (Apify credential + MCP tool scope), OQ26 (external-
-  liability bound; blocks all live paid admission incl. the synthetic proof), OQ27 (retention
-  class for non-first-party reference data), OQ28 (can MS-2 exit on the synthetic proof alone),
-  OQ29 (operator allowance size, optional). Plus carried-over: MS-1e drive ratification and a
-  category corpus gate before GPU/RAM/CPU auto-accept. See `docs/open-questions.md`.
-- Verified read-only account state (2026-09-24): Apify plan STARTER, `maxMonthlyUsageUsd` 19
-  (prepaid credit), billing cycle 5th 00:00Z -> 4th 23:59:59Z (anniversary). No settings changed.
-  Deviation: this used the apify-actors agent namespace's token once, read-only (no HR token yet).
+- **Owner decisions 2026-09-25 (OQ25–OQ29 resolved):** Apify credential split — unscoped
+  operator key `secret/apps/hw-radar/agent/apify`, scoped runtime token pending; $5.00/cycle
+  external-liability bound; no new non-first-party retention class; MS-2 exits on the
+  synthetic proof (F5a) alone; $1.00/cycle operator allowance. Carried over: OQ24, MS-1e
+  ratification, category corpus gate. See `docs/resolved-questions.md`.
+- **Dependabot (2026-09-25):** #28 merged (ruff Markdown scoping); #31/#32 closed/deferred; #33 merged.
+- Verified account state (2026-09-24): Apify STARTER, `maxMonthlyUsageUsd` 19, billing cycle
+  5th 00:00Z -> 4th 23:59:59Z, no settings changed.
 - Project Standards Catalog 5 pinned to 5.29.0 (Agent Handoff 1.17); upstream issue #80 resolved
   and re-verified 2026-09-06 under this pin.

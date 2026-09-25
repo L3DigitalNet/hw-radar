@@ -50,7 +50,8 @@ Last updated: 2026-09-24
 - MS-2 multi-category watch core (re-baselined by ADR-0021/ADR-0022, replacing
   the old MS-2a scoring-substrate sequencing): Slices A–C and D-prep complete
   on `dev`; Slice D entry-gate design review, D2 onward, and Slice E remain;
-  owner gates OQ25–OQ29 open. ADR-0011's detailed drive-scoring design is
-  accepted but deferred from the immediate critical path.
+  OQ25–OQ29 resolved 2026-09-25, OQ24 (production merchant source) still owner-
+  gated. ADR-0011's detailed drive-scoring design is accepted but deferred from
+  the immediate critical path.
 - MS-3 operator-facing product UI: not implemented
 - MS-4 alerting: not implemented
