@@ -341,6 +341,26 @@
 >   the new *Implementation tasks (rev 12)*; F5a; R3, R25, R38, and the new
 >   R39; the paragraph after the risk table; and *Review lineage*. Codex review
 >   of revision 12 is pending.
+> - **Rev-12 Codex follow-up (2026-09-25).** A Codex bounded review of
+>   revision 12 (`ea9029f8`) returned REVISION_REQUIRED with five findings,
+>   R12-01..R12-05 (1 high, 3 medium, 1 low), all accepted. The owner also
+>   answered the three R39 points. The changes stay within revision 12 and
+>   are marked **Rev-12 Codex follow-up**. No decision ID is added. E9 was
+>   revised in place before any E9 task ran: E9.2 now absorbs the forced
+>   retirements, E9.6 (verification-age warning) is new, and the close-out
+>   is E9.7.
+>   - R12-01: durable recovery for a 402 whose latch was never recorded,
+>     inside `reserve` and each tick (MS2-D-48 *Hard-limit refusal*).
+>   - R12-02: commit boundaries and the full fixture inventory (E9.2, E9.4).
+>   - R12-03: reserve before disabling for a planned change, plus a bounded
+>     recovery-verification exception (MS2-D-48 *Operator verification*).
+>   - R12-04: one account-setting validation contract for admission and
+>     corrections (MS2-D-47, E9.2).
+>   - R12-05: R33/R34 overrides and the command docstrings (E9.5).
+>   - Owner: no verification expiry (a report warning instead), R38 still
+>     accepted, and a C-011 clarification in the master spec. R39 is
+>     closed.
+>   See *Review lineage*.
 
 **Goal:** prove the smallest complete multi-category decision path without an
 ADR-0011 score:
@@ -3625,6 +3645,12 @@ revision 7, review R6-02).** This decision refines MS2-D-26 and MS2-D-41.
      Revision 12 (owner decision (s5, 2026-09-25), R25): the external-liability check only, against the
      configured `P` (MS2-D-48). An unset or invalid account setting is
      reported as an unverifiable breach, which fails closed;
+     Rev-12 Codex follow-up (R12-04): "an unset or invalid account setting"
+     means exactly the six cases of `budget.account_setting_problem(cfg,
+     now)`: anchor, limit, base price, retention, verified-on, and margin.
+     The correction's own processing time is passed as `now`. Admission and
+     corrections share this one contract (E9.2). The cash-ceiling,
+     retention-versus-lifetime, and 744 h checks stay admission guards;
   4. trips the overrun latch with `post_admission_invariant_breach` if **any**
      of them is exceeded, or with the existing overrun reason if the row's
      settled amount exceeds its own reservation;
@@ -3751,6 +3777,10 @@ and operator-verified account settings (Slice E; revision 12, owner decision
     above. Valid only if it is on or after the anchor's date and not after
     `now`'s UTC date. It is evidence, not an expiry: revision 12 adds no
     re-verification age (owner point in R39).
+    Rev-12 Codex follow-up: the owner answered on 2026-09-25 with "No expiry; warn
+    only". Admission never ages it out. `apify_spend_report` prints a
+    non-blocking warning when it predates the current cycle's start
+    (E9.6).
   - `HW_RADAR_APIFY_ACCOUNT_MARGIN_USD` is unchanged. Absent means 10% of
     `…_ACCOUNT_LIMIT_USD`, and present but invalid means
     `budget_setting_invalid`.
@@ -3797,6 +3827,22 @@ and operator-verified account settings (Slice E; revision 12, owner decision
   Each needs the owner, and `apify_budget_reset --reason` is the reset. A 402
   on a poll, read, or delete keeps that call's existing handling, so the
   drain never stops.
+  - *Durable recovery* (Rev-12 Codex follow-up, R12-01; Binding). The 402 and its
+    latch trip commit in two transactions. If the process is lost between
+    them, the persisted `stage_detail.start_error.status_code == 402` is the
+    durable record, and `trip_stranded_start_refusals_locked` repairs the
+    missing trip in two places:
+    - inside every `reserve`, under the budget lock and before the latch is
+      read, so no later admission of any class can slip through;
+    - in each poll tick's stranded-latch sweep.
+    A row that has any `account_limit_refused` trip, open or cleared, is
+    never re-tripped. A cleared trip is the owner's deliberate reset (R21
+    rule), not an unrecorded one. The estimator-bump clear does not apply
+    to this reason. *Rejected:* one transaction for the provider-row write
+    and the trip. The ED-05 lock order forbids taking the budget lock under
+    the provider-row lock. *Rejected:* waiting for the row's `orphaned_start`
+    deadline. Other sources and operator reservations would be admitted in
+    the meantime.
 - **Retired, kept, and repurposed (answers the fate list).**
 
   | Item | Revision 12 |
@@ -3856,6 +3902,35 @@ and operator-verified account settings (Slice E; revision 12, owner decision
   within the account margin, and recorded under R36. Every later operator
   account read is reserved as an operator `inspect` envelope (MS2-D-46), and
   each read counts as one of its record reads.
+  - Rev-12 Codex follow-up (R12-03; Binding). The kill switch, an open latch,
+    an invalid account setting, and `cycle_unknown` all deny the operator
+    class too. "Every later operator account read is reserved" therefore
+    holds only while admission works, and it is qualified as follows:
+    1. *Planned change* (the owner announces a plan or billing change):
+       reserve the `inspect` envelope **before** setting
+       `HW_RADAR_APIFY_ENABLED=false`. Then disable, make the reads
+       outside the application, correct the settings, and settle the
+       envelope. Settlement is not admission, so it works while disabled
+       (ED-07).
+    2. *Recovery verification* (no envelope can be admitted: a 402 latch,
+       a `cycle_unknown` or `account_state_unobservable` denial, an
+       exhausted operator allowance, or an unannounced billing change). A
+       bounded exception, like the bootstrap one, applies:
+       - at most three operator-key `GET`s (`/v2/users/me`,
+         `/v2/users/me/limits`, and `/v2/users/me/usage/monthly`) per
+         triggering event;
+       - made outside the application;
+       - unledgered, covered by the margin, and recorded in STATUS (date,
+         trigger, call count, the values read, no identifiers) and under
+         R36;
+       - a second recovery verification for the same event needs the
+         owner's approval.
+    3. Never enable paid work, clear the latch, or loosen a setting just to
+       obtain an envelope for inspection. The latch is cleared only by the
+       owner's `apify_budget_reset --reason`, after the configuration is
+       correct.
+    *Rejected:* an operator-class exemption from the kill switch or the
+    latch. It would weaken the unchanged blanket stops.
 - **Operator reconciliation (procedural; recommended at each cycle close
   and during F5a).** Under an `inspect` reservation, the operator reads the
   cycle's monthly usage with the operator key and compares it with
@@ -3865,6 +3940,11 @@ and operator-verified account settings (Slice E; revision 12, owner decision
   is the after-the-fact detection that check 1 and
   `external_liability_exceeded` used to provide inside the runtime (R38,
   R39).
+  Rev-12 Codex follow-up: the owner confirmed R38 on 2026-09-25 ("Still
+  accepted"). This end-of-cycle comparison of the ledger with account usage
+  is the standing control. F5a still measures API-call billing on the
+  operator side, and a real per-call charge revises the estimator bound
+  then, through a plan revision.
 - **Client surface (MS2-D-15).** `get_account_limits`, `get_monthly_usage`,
   `get_account_plan`, and their result types are removed from
   `acquisition/apify/client.py`. The operator uses the Apify CLI, `curl`, or
@@ -3954,7 +4034,7 @@ Task IDs refer to the slices below.
 | AC-7 — reservation bounds cumulative work (MS2-D-32) | spec :943 | D10, E1–E4 | `test_apify_ledger.py::test_repeated_pre_commit_reads_are_capped_and_reserved`, `::test_non_null_usage_before_cleanup_completes_does_not_release_liability`, `::test_delayed_deletion_keeps_storage_liability_outstanding` |
 | AC-7 — settled spend counts in every billing cycle its charge interval touches (MS2-D-34 as revised in rev 5) | spec :943 | E1, E3, E4 | `test_apify_ledger.py::test_late_cleanup_settled_spend_counts_in_the_cycle_of_its_final_charge`, `::test_reconciled_spend_leaves_a_cycle_its_charge_interval_does_not_touch` |
 | C-011 / AC-7 — billing cycle is the period; cash ceiling = project allocation + account prepaid headroom (MS2-D-40, OQ23) | spec :181, :943 | E1–E3 | `test_apify_budget.py::test_cycle_bounds_come_from_account_limits_not_calendar`, `::test_account_headroom_below_project_target_binds`, `::test_project_target_below_account_headroom_binds`, `::test_admission_never_relies_on_overage`, `::test_plan_base_price_above_cash_ceiling_denies_all`; `test_apify_ledger.py::test_arbitrary_non_calendar_cycle_boundary`; rev 12 (R25): the cycle-bounds and headroom tests are rewritten on the configured anchor and limit (E9.1, E9.2) |
-| C-011 / AC-7 / NFR-003 — the runtime reads no account state; configured cycle and operator-verified account settings; 402 hard-limit latch (MS2-D-48, rev 12, R25) | spec :181, :267, :943 | E9.1–E9.5 | `test_apify_no_account_reads.py::test_runtime_paths_never_request_account_endpoints`, `::test_no_runtime_module_references_account_endpoints`; `test_apify_budget.py::test_admission_admits_with_configured_cycle_and_limit`, `::test_unset_or_invalid_anchor_denies_cycle_unknown`, `::test_unset_or_invalid_account_setting_denies_account_state_unobservable`, `::test_billing_cycle_bounds_from_anchor`, `::test_billing_cycle_bounds_are_computed_from_the_anchor_not_iterated`; `test_apify_ledger.py::test_anchor_moved_backward_into_recorded_cycle_denies_cycle_unknown`; `test_apify_ledger_authority.py::test_handoff_record_is_cycle_scoped_under_configured_anchor`; `test_apify_admission.py::test_start_refused_with_402_trips_account_limit_latch_and_keeps_reservation` |
+| C-011 / AC-7 / NFR-003 — the runtime reads no account state; configured cycle and operator-verified account settings; 402 hard-limit latch (MS2-D-48, rev 12, R25) | spec :181, :267, :943 | E9.1–E9.5 | `test_apify_no_account_reads.py::test_runtime_paths_never_request_account_endpoints`, `::test_no_runtime_module_references_account_endpoints`; `test_apify_budget.py::test_admission_admits_with_configured_cycle_and_limit`, `::test_unset_or_invalid_anchor_denies_cycle_unknown`, `::test_unset_or_invalid_account_setting_denies_account_state_unobservable`, `::test_billing_cycle_bounds_from_anchor`, `::test_billing_cycle_bounds_are_computed_from_the_anchor_not_iterated`; `test_apify_ledger.py::test_anchor_moved_backward_into_recorded_cycle_denies_cycle_unknown`; `test_apify_ledger_authority.py::test_handoff_record_is_cycle_scoped_under_configured_anchor`; `test_apify_admission.py::test_start_refused_with_402_trips_account_limit_latch_and_keeps_reservation`; rev-12 Codex follow-up: `test_apify_crash_windows.py::test_402_trip_lost_between_commits_is_repaired_before_next_admission`, `test_apify_ledger.py::test_correction_with_invalid_account_setting_is_an_invariant_breach`, `test_apify_spend_report.py::test_report_warns_when_account_verification_predates_current_cycle` (E9.3, E9.2, E9.6) |
 | AC-7 — provisional → finalized usage; reconcile and release (MS2-D-41) | spec :943 | E4 | `test_apify_ledger.py::test_first_usage_read_is_provisional_until_settle_delay`, `::test_finalized_usage_written_once_not_recomputed`, `::test_reconcile_below_reservation_returns_capacity`, `::test_reconcile_above_reservation_trips_overrun_and_pauses_paid_work`; revision 6 (R5-03): `::test_nonnull_usage_rising_after_ten_seconds_is_not_finalized_early`, `::test_permanently_unfinalized_run_stays_at_bound_and_is_stale_at_cycle_end`, `::test_upward_correction_after_reconciliation_raises_settled_and_trips_latch` |
 | AC-7 / C-011 — reconciled spend stays debited; shared-account external liability owner-bounded (MS2-D-40, rev 6 R5-01/R5-02) | spec :943 | E2, E3 | `test_apify_ledger.py::test_repeated_reserve_reconcile_against_one_unchanged_snapshot_keeps_debit`, `::test_refreshed_snapshot_that_still_lags_keeps_reconciled_debit`; `test_apify_budget.py::test_empty_or_invalid_external_liability_denies_all_paid_admission`, `::test_default_external_liability_admits_only_when_invariant_holds` (rev 9, OQ26), `::test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_prepaid`; rev 12 (R25): the snapshot-check tests are retired with check 1, and reconciled spend stays debited in check 2: `test_apify_ledger.py::test_reconciled_spend_stays_debited_against_configured_limit` (E9.2) |
 | AC-7 — one HR ledger authority per cycle; drained handoff (MS2-D-45, rev 6 R5-04) | spec :943 | E1, E3, F5a | `test_apify_ledger_authority.py::test_handoff_export_refused_while_proof_run_is_running`, `::test_handoff_export_refused_while_usage_is_provisional_or_unfinalized`, `::test_second_environment_denied_until_handoff_imported` |
@@ -6332,15 +6412,33 @@ longer exist.
 Revision 12 (owner decision (s5, 2026-09-25), R25). Design authority: MS2-D-48.
 These tasks land as one PR into `dev` (branch off `dev`). Each numbered task
 is one signed conventional commit that leaves the gate green. The gate is the
-*Global constraints* command plus `makemigrations --check --dry-run`, which
-must report no changes, because revision 12 has no schema change. Every
-behavior task starts with its failing test (correct-reason RED). Paths are
-under `src/hw_radar/` and `tests/`.
+*Global constraints* command (ruff, basedpyright, pytest with coverage,
+pip-audit) plus `makemigrations --check --dry-run`, which must report no
+changes, because revision 12 has no schema change. Every behavior task starts
+with its failing test (correct-reason RED). Paths are under `src/hw_radar/`
+and `tests/`.
+
+*Rev-12 Codex follow-up (R12-01..R12-05; owner R39 answers, 2026-09-25).*
+This section was revised in place before any E9 task ran. No E9 task has been
+dispatched, so no task ID is superseded.
+- E9.2 now also carries every retirement that its field and signature
+  changes force (R12-02), and it lists every affected test double and
+  fixture by line.
+- E9.2 defines the one account-setting validation contract that admission
+  and corrections share (R12-04).
+- E9.3 adds durable recovery for a 402 whose latch was never recorded
+  (R12-01).
+- E9.4 keeps only the client, the settings, and the static scan.
+- E9.5 gains the command docstrings (R12-05).
+- E9.6 is new: the report's verification-age warning (owner R39 point 1).
+- The close-out moves to E9.7.
 
 **Do not change:** the reservation estimate, the MS2-D-34 predicate apart
-from the discovery term, the lock key and lock order, the latch semantics,
-row-before-start, operator reservations, `E`, the target, the cash ceiling,
-the operator allowance, R38, any model, or any migration.
+from the discovery term, the lock key and lock order, the latch semantics
+(except that the `account_limit_refused` trip is exempt from the
+estimator-bump clear, E9.3), row-before-start, operator reservations, `E`,
+the target, the cash ceiling, the operator allowance, R38, any model, or any
+migration.
 
 **E9.1 — Settings and pure cycle derivation (additive).**
 - `settings.py`:
@@ -6389,22 +6487,26 @@ the operator allowance, R38, any model, or any migration.
     - `test_every_derived_cycle_is_at_most_744_hours`: 48 consecutive
       cycles for anchor days 1 and 28.
 
-**E9.2 — Regression tests first (RED), then switch admission to the
-configured state.** This is the core commit.
-- Write first:
-  - `tests/db/test_apify_no_account_reads.py::test_runtime_paths_never_request_account_endpoints`.
-    Use one `httpx.MockTransport` that records every request and fails on
-    any path starting with `/v2/users`. Drive the real paths:
-    - `start_provider_run` through `LedgerAdmission`, once admitted and
-      once denied (anchor unset);
-    - `recovery_probe_job`;
-    - `apify_poll_tick`s through poll → import → storage delete →
-      settlement → selector-4 monitoring → closing read;
-    - an operator build row bound and read through selector 2.
-    Assert that the recorded paths are non-empty and none is under
-    `/v2/users`, that every `ApifyBudgetCycle.account_read_count` is 0, and
-    that `ApifyCycleDiscovery` has no row. It fails on the current code,
-    because the refresh step reads `/v2/users/me/limits`.
+**E9.2 — Switch admission to the configured state and retire every runtime
+account read with its dependents (one commit; rev-12 Codex follow-up R12-02
+and R12-04).** This commit is large on purpose. Once `BudgetSettings` loses
+a field, or `admit` loses its `reader`, every consumer has to change in the
+same commit, or basedpyright and pytest go red.
+- RED first:
+  `tests/db/test_apify_no_account_reads.py::test_runtime_paths_never_request_account_endpoints`.
+  Use one `httpx.MockTransport` that records every request and fails on any
+  path starting with `/v2/users`. Drive the real paths:
+  - `start_provider_run` through `LedgerAdmission`, once admitted and once
+    denied (anchor unset);
+  - `recovery_probe_job`;
+  - `apify_poll_tick`s through poll → import → storage delete → settlement
+    → selector-4 monitoring → closing read;
+  - an operator build row bound and read through selector 2.
+
+  Assert that the recorded paths are non-empty and none is under
+  `/v2/users`, that every `ApifyBudgetCycle.account_read_count` is 0, and
+  that `ApifyCycleDiscovery` has no row. It fails on the current code,
+  because the refresh step reads `/v2/users/me/limits`.
 - `budget.py`:
   - Change `AccountSnapshot` to the configured state. Keep the name to
     keep the diff small, and update the docstring. Its fields are
@@ -6413,29 +6515,46 @@ configured state.** This is the core commit.
     `prepaid_credit_usd`, and `account_usage_usd`.
   - Change `account_margin_usd(cfg, limit)` to 10% of the configured limit
     when absent.
-  - In `decide_admission`, apply the MS2-D-48 *Admission* order.
-    `account_state_unobservable` is returned when:
-    - the limit is `None`, not finite, or ≤ 0;
-    - the base price is `None`, not finite, or < 0;
-    - the retention is `None` or < 1;
-    - `verified_on` is `None`, after `now`'s UTC date, or before the
-      anchor's date.
-    Delete check 1, the `external_liability_exceeded` block, and the
-    `ACCOUNT_SNAPSHOT_MAX_AGE_S` validation. In `_hr_cycle` and the runtime
-    class check, drop `standing`, `discovery_allowance_usd`, and
+  - **Account-setting validation contract (R12-04; Binding).** Add a pure
+    `account_setting_problem(cfg: BudgetSettings, now: datetime) ->
+    AccountSettingProblem | None`, where the frozen dataclass
+    `AccountSettingProblem` holds `setting: str` and `reason:
+    DenialReason`. It returns the first failing check, in this order:
+    1. anchor `None` → `BILLING_CYCLE_ANCHOR`, `cycle_unknown`;
+    2. limit `None`, not finite, or ≤ 0 → `ACCOUNT_LIMIT_USD`,
+       `account_state_unobservable`;
+    3. base price `None`, not finite, or < 0 → `ACCOUNT_BASE_PRICE_USD`,
+       `account_state_unobservable`;
+    4. retention `None` or < 1 → `ACCOUNT_DATA_RETENTION_DAYS`,
+       `account_state_unobservable`;
+    5. verified-on `None`, after `now`'s UTC date, or before the anchor's
+       date → `ACCOUNT_VERIFIED_ON`, `account_state_unobservable`;
+    6. margin present but invalid → `ACCOUNT_MARGIN_USD`,
+       `budget_setting_invalid`.
+
+    It checks setting validity only. The cash-ceiling comparison, the
+    retention-versus-lifetime check, and the 744 h check stay admission
+    guards, because a correction cannot change them. `decide_admission` calls
+    it after authority. The anchor case is reached only when no cycle could
+    be derived, so the anchor still denies `cycle_unknown`, as MS2-D-48
+    states.
+  - In `decide_admission`, apply the MS2-D-48 *Admission* order through
+    that function. Delete check 1, the `external_liability_exceeded` block,
+    and the `ACCOUNT_SNAPSHOT_MAX_AGE_S` validation. In `_hr_cycle` and the
+    runtime class check, drop `standing`, `discovery_allowance_usd`, and
     `hr_included_usd`.
   - Remove `CycleDebits.discovery_allowance_usd` and `hr_included_usd`,
     `standing_account_read_debit`, `PerCallBounds.account_read`,
     `DenialReason.EXTERNAL_LIABILITY_EXCEEDED`, `AdmissionDecision.trip_latch`,
-    `BudgetSettings.max_account_reads_per_cycle`, and
-    `account_snapshot_max_age_s`.
+    `BudgetSettings.max_account_reads_per_cycle` and
+    `account_snapshot_max_age_s`, and their lines in `load_budget_settings`.
 - `acquisition/apify/ledger.py`:
   - Add `ensure_cycle(config, now) -> ApifyBudgetCycle | None` with MS2-D-48
     *Materialization* exactly. Assert the caller is in an atomic block, as
     `take_budget_lock` does.
   - `reserve`, `claim_origin`, `export_handoff`, and `import_handoff` call
-    it instead of `current_cycle`. Keep `current_cycle` for read-only
-    callers.
+    it instead of `current_cycle`, each after the lock, as today (lines 660,
+    1062, 1189, and 1318). Keep `current_cycle` for read-only callers.
   - `_snapshot(cycle)` becomes `_snapshot(cycle, cfg)`: the row's bounds
     plus the settings.
   - `reserve` loses its latch-creating branch.
@@ -6443,24 +6562,41 @@ configured state.** This is the core commit.
   - `_build_record` drops the `discovery_allowance_usd` and
     `standing_account_read_usd` lines. `HANDOFF_RECORD_VERSION` stays 1.
   - Add `LatchReason.ACCOUNT_LIMIT_REFUSED = "account_limit_refused"`.
+  - Delete, in this commit (R12-02; moved from E9.4): `AccountReader`,
+    `RefreshOutcome`, `_Plan`, `_plan_limits_read` (reads
+    `account_snapshot_max_age_s`, line 824), `_count_cycle_read` (reads
+    `max_account_reads_per_cycle`, line 859), `_record_cycle`,
+    `_record_snapshot`, `refresh_account_snapshot`, `_trip_over_cap`,
+    `account_read_useful`, `discovery_status`, `reset_discovery`,
+    `DISCOVERY_EXHAUSTED`, `_discovery_allowance`, the `LedgerConfig`
+    fields `max_discovery_reads`, `discovery_read_interval_s`, and
+    `usage_inclusion_lag_s` and their `load_ledger_config` lines, the
+    `AccountLimits`, `AccountPlan`, `ApifyError`, and `httpx` imports if
+    unused, and the retired names in `__all__`.
   - Update the module docstring.
 - `acquisition/apify/jobs.py`:
-  - `BudgetAdmission.admit(self, request)` and `LedgerAdmission.admit`
-    call only `reserve`. The start job calls `admit(request)`.
+  - `BudgetAdmission.admit(self, request)` and `LedgerAdmission.admit` call
+    only `reserve`. The start job calls `admit(request)`.
   - Remove the `AccountReader`, `account_read_useful`, and
     `refresh_account_snapshot` imports.
-  - Update the module docstring's "no account read" sentence: it now holds
-    in every configuration.
-- `acquisition/apify/reconcile.py` `invariant_breaches`:
-  - Drop `standing`, discovery, "account snapshot unobserved", and "snapshot
-    check".
-  - Compute `usable = limit − account_margin_usd(cfg, limit)` from
-    settings. An invalid limit or margin appends `unverifiable: <setting>`
-    (a breach, so it fails closed).
+  - Update the module and class docstrings: "no account read" now holds in
+    every configuration.
+- `acquisition/apify/reconcile.py` `invariant_breaches(resv, config, now)`:
+  - Add the explicit `now` parameter. The one caller (line 962) passes its
+    own `now`.
+  - Call `account_setting_problem(cfg, now)` first. On a problem, append
+    exactly `unverifiable: <setting>`, skip every account check, and keep
+    the class and allocation checks. Any breach trips
+    `post_admission_invariant_breach`, as today.
+  - Otherwise compute `usable = limit − account_margin_usd(cfg, limit)`,
+    and apply only the external-liability check per touched cycle.
+  - Drop `standing`, discovery, "account snapshot unobserved", and
+    "snapshot check", and update the docstring.
 - `acquisition/apify/report.py`:
   - Remove observed usage, remaining prepaid, snapshot headroom, observed
     non-Hardware-Radar usage, `[STALE]`, the watermark, `standing`, and
-    `discovery`.
+    `discovery`, together with the `discovery_status`,
+    `standing_account_read_debit`, and `account_margin_usd(prepaid)` uses.
   - Per cycle, add the configured account state (anchor, limit, `P`, base
     price, retention days, verified-on) and `external-liability headroom =
     P − HR_cycle − E`. Add the fixed line "other workloads' spend: not
@@ -6469,37 +6605,93 @@ configured state.** This is the core commit.
     materialized, and label it so. The report stays read-only and never
     calls `ensure_cycle`.
   - `_place` drops the watermark argument. Keep the `_tally` cross-file
-    contract.
-- `tests/db/ledger_support.py`:
-  - `config()` sets the anchor `C1_START`, limit `19.00`, base price
-    `19.00`, retention 31, and verified-on `C1_START.date()`.
-  - `cycle()` stops writing the `account_*` fields.
-  - Delete `account_client`.
-- Tests updated in the same commit:
+    contract. Update the module docstring.
+- `catalog/management/commands/apify_budget_reset.py` (moved from E9.4,
+  because `reset_discovery` is deleted here): remove `--discovery`, the
+  `reset_discovery` import, and the discovery half of the docstring and
+  help text.
+- **Test and fixture inventory (R12-02; verified against the tree at
+  `84c5cd0`).** Change every item in this commit:
+  - `tests/db/ledger_support.py`:
+    - module docstring line 5;
+    - `BUDGET` lines 94 and 113–114: drop the two retired fields and add
+      the five new ones (anchor `C1_START`, limit `19.00`, base price
+      `19.00`, retention 31, verified-on `C1_START.date()`);
+    - delete `STANDING` (line 130);
+    - `config()`;
+    - `cycle()` lines 145–162: stop writing the `account_*` fields;
+    - delete `account_client` (line 287 and its section).
+  - `tests/unit/test_apify_budget.py`:
+    - fixtures: `CFG` (lines 102–103), `snap()` (114–116), `usable()`
+      (170–172), and the check-1 binding helper (180–196), whose docstring
+      describes check 1;
+    - delete `test_observed_external_consumption_above_bound_denies_and_trips_latch`
+      (line 449), `test_inclusion_watermark_reduces_only_the_snapshot_check`
+      (806), `test_account_read_bound_is_standing_cycle_debit` (654),
+      and `test_snapshot_exactly_at_max_age_is_fresh`;
+    - drop `"max_account_reads_per_cycle"` from the parametrization of
+      `test_api_calls_priced_at_bound_without_billing_verification` (line
+      633), and `{"account_snapshot_max_age_s": None}` from the one at line
+      840;
+    - remove the `standing_account_read_debit` terms from
+      `test_exact_boundary_admitted_and_epsilon_over_denied` (258),
+      `test_default_external_liability_admits_only_when_invariant_holds`
+      (402–405), `test_external_liability_consumes_share_before_target`
+      (422), and the concurrent-external-consumption test (435–438);
+    - `test_straddling_reservation_checked_against_both_cycles_external_bound`
+      (468) and
+      `test_operator_reservation_counts_against_operator_class_and_account_checks`
+      (488–492);
+    - `test_outstanding_reservations_are_counted` (797): its
+      `discovery_allowance_usd` input goes;
+    - the rewrites, deletions, and additions listed below.
+  - `tests/db/test_apify_admission.py`: the `AccountLimits`/`AccountPlan`
+    imports (38–39) and `STANDING` (129).
+  - The admission doubles, whose `admit(self, request, reader:
+    AccountReader)` becomes `admit(self, request)` and whose `AccountReader`
+    import is dropped:
+    - `tests/db/test_apify_poll_job.py`, lines 52 and 126;
+    - `tests/db/test_apify_storage_cleanup.py`, lines 48 and 181;
+    - `tests/db/test_apify_crash_windows.py`, lines 65 and 304
+      (`ReleasedUnderStart`);
+    - `tests/db/test_apify_recovery_probe.py`, lines 48 and 105.
+  - `tests/db/test_apify_recovery_probe.py`: the fake account endpoints
+    (577–610), the `account_read_count == 2` assertion (652), and
+    `STANDING` (691).
+  - `tests/db/test_apify_ledger.py`: the imports of `STANDING` and
+    `account_client` (50, 54), and every `refresh_account_snapshot` and
+    `STANDING` use (153, 279, 294, 402–437, 496–571, 1020, 1540, and 1565),
+    plus the test at 1039 for the new `invariant_breaches` signature.
+  - `tests/db/test_apify_ledger_authority.py`: `STANDING` (38, 233, and
+    410) and the `standing`/`discovery` line assertions (399–400).
+  - `tests/db/test_apify_spend_report.py`: `STANDING` (34, 218, 232, and
+    238) and the discovery and watermark expectations.
+  - `tests/db/test_apify_budget_schema.py`: **unchanged**. It tests the
+    unchanged columns and tables directly.
+- Named test changes:
   - `test_apify_budget.py`:
     - Rewrite `test_cycle_bounds_come_from_account_limits_not_calendar` →
       `test_cycle_bounds_come_from_configured_anchor_not_calendar`.
     - `test_stale_or_unreadable_account_snapshot_denies` →
       `test_unset_or_invalid_account_setting_denies_account_state_unobservable`,
-      parametrized over each MS2-D-48 invalid case.
+      parametrized over contract cases 2–5.
     - `test_missing_data_retention_days_denies` → expects
       `account_state_unobservable`.
     - Rewrite on the configured values:
       `test_account_headroom_below_project_target_binds`,
       `test_project_target_below_account_headroom_binds`,
       `test_plan_base_price_above_cash_ceiling_denies_all`,
-      `test_configured_account_margin_replaces_the_ten_percent_default`,
+      `test_configured_account_margin_replaces_the_ten_percent_default`, and
       `test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_prepaid`
-      (renamed `…_past_configured_limit`), and
-      `test_straddling_reservation_checked_against_both_cycles_external_bound`.
-    - Delete `test_snapshot_exactly_at_max_age_is_fresh`,
-      `test_account_read_bound_is_standing_cycle_debit`, and
-      `test_inclusion_watermark_reduces_only_the_snapshot_check`.
+      (renamed `…_past_configured_limit`).
     - Add `test_admission_admits_with_configured_cycle_and_limit` (all set,
       `HR_cycle` 0: admitted; with `P = 17.10`, a reservation that would
       take `HR_cycle + new + 5.00` above 17.10 is denied `account_headroom`)
       and `test_unset_or_invalid_anchor_denies_cycle_unknown` (unset, and a
       `now` before the anchor).
+    - Add `test_account_setting_problem_contract`, parametrized over cases
+      1–6 with the exact setting and reason, plus `None` when all are
+      valid.
   - `test_apify_ledger.py`:
     - Delete `test_empty_ledger_bootstrap_read_is_counted_before_it_is_sent`,
       `test_exhausted_cycle_read_cap_then_rollover_discovers_next_cycle`,
@@ -6524,10 +6716,14 @@ configured state.** This is the core commit.
       - `test_rollover_materializes_next_cycle_and_continues_authority`.
       - `test_anchor_moved_backward_into_recorded_cycle_denies_cycle_unknown`:
         no row is created, and the existing rows are unchanged.
-      - `test_reconciled_spend_stays_debited_against_configured_limit`: this
-        replaces the R5-01 pair. Repeated reserve → reconcile, and the
-        admission that would exceed `P − E` is denied `account_headroom`.
-      - `test_correction_with_account_limit_unset_is_an_invariant_breach`.
+      - `test_reconciled_spend_stays_debited_against_configured_limit`:
+        repeated reserve → reconcile, and the admission that would exceed
+        `P − E` is denied `account_headroom`.
+      - `test_correction_with_invalid_account_setting_is_an_invariant_breach`
+        (R12-04), parametrized over contract cases 1–6. An upward correction
+        with that setting invalid yields exactly `unverifiable: <setting>`
+        and one open `post_admission_invariant_breach` trip. Verified-on is
+        evaluated at the correction's own `now`.
   - `test_apify_ledger_authority.py`:
     - Rewrite `test_same_cycle_handoff_carries_account_read_and_monitoring_debits`
       → `test_same_cycle_handoff_carries_monitoring_debits_without_account_read_lines`.
@@ -6543,8 +6739,8 @@ configured state.** This is the core commit.
     `test_stale_snapshot_is_refreshed_then_start_admitted`,
     `test_settings_denial_skips_the_account_read`, and
     `test_over_cap_account_read_trips_latch`.
-  - `test_apify_recovery_probe.py`: drop the fake account endpoints. E8's
-    two tests run on the configured cycle.
+  - `test_apify_recovery_probe.py`: E8's two tests run on the configured
+    cycle.
   - `test_apify_spend_report.py`:
     - Delete `test_inclusion_watermark_set_reports_included_settlement`.
     - Rewrite `test_empty_ledger_reports_no_cycle_and_discovery_exhaustion`
@@ -6552,10 +6748,20 @@ configured state.** This is the core commit.
     - Update `test_report_for_seeded_ledger_spanning_two_cycles`.
     - Add `test_report_prints_configured_account_state_without_observed_usage`.
     - Keep `test_cycle_totals_match_ledger_cycle_debits` green.
-  - `test_apify_budget_schema.py`: unchanged. The schema is unchanged, and
-    the discovery-table constraint tests stay as schema tests.
+  - The command's test module: `apify_budget_reset --discovery` is rejected
+    as an unknown option.
+- **Completion check (Binding).** After this commit, this search over `src/`
+  and `tests/` returns hits only in `client.py` and its unit tests (removed
+  in E9.4), `settings.py` and `tests/unit/test_settings.py` (removed in
+  E9.4), `catalog/models/provider.py`, migration `0022`, and
+  `tests/db/test_apify_budget_schema.py`:
 
-**E9.3 — Hard-limit refusal (402).**
+  ```
+  rg -n 'AccountReader|account_snapshot_max_age_s|max_account_reads_per_cycle|standing_account_read_debit|discovery_allowance|hr_included|EXTERNAL_LIABILITY_EXCEEDED|refresh_account_snapshot|account_read_useful|reset_discovery|discovery_status|usage_inclusion_lag|max_discovery_reads|STANDING\b'
+  ```
+
+**E9.3 — Hard-limit refusal (402) and its durable recovery (rev-12 Codex
+follow-up R12-01).**
 - RED first, in `tests/db/test_apify_admission.py`:
   - `test_start_refused_with_402_trips_account_limit_latch_and_keeps_reservation`:
     the transport answers the start with 402 `{"error": {"type":
@@ -6569,6 +6775,24 @@ configured state.** This is the core commit.
       deadline, unchanged.
   - `test_start_error_other_than_402_does_not_trip_account_limit_latch` (a
     500 and a transport error).
+- RED first, in `tests/db/test_apify_crash_windows.py`:
+  - `test_402_trip_lost_between_commits_is_repaired_before_next_admission`.
+    Monkeypatch the start job's `trip_latch` to raise a simulated process
+    loss after `_record_start_error` committed. Then, with no tick in
+    between, call `reserve` for a different source and `reserve_operator`
+    (`inspect`). Expect:
+    - exactly one latch row with reason `account_limit_refused` for the
+      402 row, open;
+    - both new requests persisted as `denied` with `overrun_latch`, and no
+      new admitted reservation;
+    - the original reservation unchanged (`reserved`, same estimate, same
+      `provider_run`).
+  - `test_402_trip_lost_between_commits_is_repaired_by_the_next_tick`: the
+    same crash, then one `apify_poll_tick` → one open trip.
+  - `test_owner_cleared_402_trip_is_never_retripped`: after `apify_budget_reset
+    --reason`, neither `reserve` nor a tick recreates the trip. The row's
+    cleared trip is the record that it was handled.
+  - `test_estimator_bump_does_not_clear_account_limit_refused`.
 - `jobs.start_provider_run`: in the `except` around `client.start_run`, after
   `_record_start_error` commits, if `isinstance(exc, ApifyApiError) and
   exc.status_code == 402`, call `await
@@ -6576,30 +6800,48 @@ configured state.** This is the core commit.
   provider_run_id=row.pk)` and return the result above. Otherwise, keep the
   current behavior. Add a comment that cites MS2-D-48 and why the type string
   is not matched.
+- `ledger.py`: add `trip_stranded_start_refusals_locked(estimator_version,
+  now) -> list[int]` (the caller holds the budget lock).
+  - It selects the `ProviderRun` rows with
+    `stage_detail__start_error__status_code=402` that have **no**
+    `budget_latch_trips` row with reason `account_limit_refused`, whether
+    open **or cleared**. Any existing trip, including an owner-cleared one,
+    means the condition was recorded, and it is never re-tripped (the same
+    rule as `storage_cleanup._stranded`, R21).
+  - For each selected row it calls `trip_latch_locked`, and logs at error
+    level.
+  - It is called in two places:
+    1. `reserve`, right after `take_budget_lock()` and
+       `_clear_on_estimator_bump`, before `latch_tripped()`. Every later
+       admission of any class therefore sees the repaired trip in its own
+       transaction.
+    2. `storage_cleanup.trip_stranded_latches`, inside its existing
+       budget-locked transaction. Extend its lock-free precheck with the
+       same query, so a tick with nothing stranded still takes no lock.
+
+    No separate startup hook is needed, because (1) precedes every
+    admission and (2) runs on the first tick after a restart.
+- `_clear_on_estimator_bump`: exclude `reason = account_limit_refused`. An
+  estimator bump replaces a price bound, and it says nothing about the
+  account's hard limit. Only the owner's reset clears this trip.
 - Make the E5 and E6 report and shortlist text show the new latch reason. No
   code change is expected beyond the enum member.
 
-**E9.4 — Remove the retired machinery.**
-- `client.py`: delete `get_account_limits`, `get_monthly_usage`,
-  `get_account_plan`, `AccountLimits`, `AccountPlan`, `MonthlyUsage`,
-  `DailyUsage`, and any helper used only by them (check `_service_usd` and
-  `_opt_positive_int`), plus the module docstring's account bullet and the
-  `GET /v2/users/me` wire-name note.
-- `ledger.py`: delete `AccountReader`, `RefreshOutcome`, `_Plan`,
-  `_plan_limits_read`, `_count_cycle_read`, `_record_cycle`,
-  `_record_snapshot`, `refresh_account_snapshot`, `_trip_over_cap`,
-  `account_read_useful`, `discovery_status`, `reset_discovery`,
-  `DISCOVERY_EXHAUSTED`, `_discovery_allowance`, the `LedgerConfig` fields
-  `max_discovery_reads`, `discovery_read_interval_s`, and
-  `usage_inclusion_lag_s`, and the unused `httpx`, `AccountLimits`, and
-  `AccountPlan` imports. Remove the retired names from `__all__`. Leave
-  `CycleDiscoveryCloseReason` in the models, which are unchanged.
+**E9.4 — Remove the client account reads and the retired settings.**
+- `client.py`:
+  - Delete `get_account_limits`, `get_monthly_usage`, `get_account_plan`,
+    `AccountLimits`, `AccountPlan`, `MonthlyUsage`, `DailyUsage`, and any
+    helper used only by them (check `_service_usd` and
+    `_opt_positive_int`).
+  - Delete the account bullet at lines 10–12 of the module docstring.
+  - Delete the "Limits" and "Monthly usage" documentation bullets and URLs
+    at lines 114–122 (R12-02), and the `GET /v2/users/me` wire-name note at
+    line 135. After this, no `/v2/users` literal is left for the static scan
+    to find.
 - `settings.py`: delete `HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE`,
   `…_MAX_DISCOVERY_READS`, `…_DISCOVERY_READ_INTERVAL_S`,
-  `…_ACCOUNT_SNAPSHOT_MAX_AGE_S`, and `…_USAGE_INCLUSION_LAG_S`, and update
-  the `ACCOUNT_MARGIN_USD` comment.
-- `catalog/management/commands/apify_budget_reset.py`: remove `--discovery`
-  and the `reset_discovery` import.
+  `…_ACCOUNT_SNAPSHOT_MAX_AGE_S`, and `…_USAGE_INCLUSION_LAG_S`. Nothing
+  reads them after E9.2. Update the `ACCOUNT_MARGIN_USD` comment.
 - Tests:
   - `tests/unit/test_apify_client.py`: delete
     `test_account_limits_parsed_into_cycle_bounds`,
@@ -6607,19 +6849,37 @@ configured state.** This is the core commit.
     `test_account_plan_parsed_from_users_me`,
     `test_account_limits_parse_data_retention_days`, and every monthly-usage
     test. Add `test_client_has_no_account_read_methods`.
-  - `tests/unit/test_settings.py`: add
-    `test_retired_account_read_settings_are_absent`, and update
-    `test_budget_keys_absent_take_the_plan_defaults`.
-  - The command's tests: `apify_budget_reset --discovery` is rejected as an
-    unknown option.
-  - RED first: `tests/db/test_apify_no_account_reads.py::test_no_runtime_module_references_account_endpoints`.
-    No file under `src/hw_radar/` may contain `/v2/users` or `users/me`. It
-    fails until `client.py` loses the account reads, and it is green at this
-    task's commit.
+  - `tests/unit/test_settings.py`: remove the five entries from the
+    defaults map (lines 186–192), update
+    `test_budget_keys_absent_take_the_plan_defaults`, and add
+    `test_retired_account_read_settings_are_absent`.
+  - RED first:
+    `tests/db/test_apify_no_account_reads.py::test_no_runtime_module_references_account_endpoints`.
+    No file under `src/hw_radar/` may contain `/v2/users` or `users/me`. At
+    `84c5cd0` the only hits are in `client.py`. It fails until those are
+    gone, and it is green at this task's commit.
 
-**E9.5 — Environment and docs.**
+**E9.5 — Environment and docs (R12-05 adds the command docstrings).**
 - Do not add the new settings to any committed environment file. They are
   account values, rendered by the operator from the verification.
+- `catalog/management/commands/apify_ledger_claim.py`, lines 7–8: replace
+  "(run a snapshot refresh first)" with the configured-anchor rule. The
+  claim itself materializes the cycle, and it is refused `cycle_unknown`
+  when the anchor is unset, invalid, in the future, or conflicting.
+- `catalog/management/commands/apify_spend_report.py`, lines 3–12: replace
+  the stored-snapshot and staleness wording with the configured account
+  state, the external-liability headroom, the verification-age warning
+  (E9.6), and "other workloads' spend is not observed by the runtime".
+- Re-read the docstrings of `apify_budget_reset.py`, `jobs.py`, `ledger.py`,
+  `report.py`, and `reconcile.py` (all edited in E9.2). This search must
+  return nothing:
+
+  ```
+  rg -n -i 'snapshot refresh|stale snapshot|cycle discovery|account read' src/hw_radar/acquisition/apify src/hw_radar/catalog/management/commands
+  ```
+
+  Any hit is either rewritten, or marked as retired with a MS2-D-48
+  pointer.
 - In `docs/TODO.md`, the F5a prerequisites gain the operator verification
   and the five settings, and lose "verify the runtime token's account reads".
   The Actor **Read** grant for the runtime token is added.
@@ -6627,13 +6887,30 @@ configured state.** This is the core commit.
 - `docs/handoff/credentials.md` is already updated by the revision-12
   decision record.
 
-**E9.6 — Close-out.**
+**E9.6 — Verification-age warning (owner R39 point 1, 2026-09-25).**
+- RED first, in `tests/db/test_apify_spend_report.py`:
+  - `test_report_warns_when_account_verification_predates_current_cycle`:
+    `…_ACCOUNT_VERIFIED_ON` before the derived current cycle's start prints
+    one warning line that names the setting and both dates.
+  - `test_report_has_no_verification_warning_when_verified_this_cycle`.
+- In `tests/unit/test_apify_budget.py` or `tests/db/test_apify_ledger.py`:
+  `test_old_verification_does_not_affect_admission`. An old but valid
+  verified-on date still admits, which proves the warning never gates.
+- `report.py`: compute the warning from the settings and the derived current
+  cycle (read-only), and render it in the cycle header. The warning is
+  informational only. `decide_admission`, `ensure_cycle`, and
+  `invariant_breaches` never read it.
+
+**E9.7 — Close-out.**
 - Gate.
 - `makemigrations --check --dry-run` reports no changes.
-- The regression tests of E9.2 through E9.4 pass.
+- The regression tests of E9.2 through E9.6 pass.
+- The E9.2 completion search holds, with only the listed files.
 - Record in this plan's E9 a *Landed* note with the commit IDs.
-- The Codex targeted review of revision 12 runs before E9.1 starts. It is
-  pending in *Review lineage*.
+- The Codex bounded review of revision 12 has run
+  (REVISION_REQUIRED, R12-01..R12-05, all resolved by the rev-12 Codex
+  follow-up; see *Review lineage*). Any further review round follows the
+  lineage note.
 
 ## Slice F — Pilot sources, measurement, end-to-end proof
 
@@ -6875,13 +7152,13 @@ drive matcher (ADR 0019, R5).
 | R30 | The platform limit may deviate by up to about 10% at enforcement (Apify help center). The account limit is therefore a secondary backstop, not proof of zero overage. Revision 6 (R5-02): the margin does not bound other workloads either; Hardware Radar's own admission stays within the owner-declared share (R33), and whole-account safety also depends on other workloads honoring that bound. Whether the platform aborts a running run at the limit is unverified, and the enforcement experiment must not run on the shared account without owner sign-off. | Sign off before any enforcement experiment | none |
 | R31 | **Resolved (owner decision, 2026-09-25; [OQ28](../../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone)).** The controlled synthetic Actor proof (F5a) is sufficient for the Apify portion of MS-2 exit, including Task 6's self-owned-Apify execution. F5b is not required to close MS-2; it stays source- and legal-gated by OQ24, which may remain open after MS-2 closes. | — | none |
 | R32 | **Resolved (owner decision, 2026-09-25; [OQ27](../../resolved-questions.md#oq27--retention-class-for-non-first-party-reference-data)).** MS-2 adds no production retention class for non-first-party reference data: no `third_party_reference` class and no rewrite of the `*_retention_ttl_coherent` CHECKs. Authoritative reference seeds come only from first-party, manufacturer-authoritative sources; non-first-party PDFs and pages may inform research or manual review but never automatically seed authoritative aliases or specs. The importer's refusal of `non_first_party` documents (MS2-D-06) is the MS-2 behavior. B4c's RAM expansion, whose only purpose was admitting three third-party-hosted Micron PDFs, is withdrawn; the existing first-party RAM rows stay. Reopen only with a concrete source, intended use, provenance model, and actual need. | — | none |
-| R33 | **Resolved (owner decision, 2026-09-25; [OQ26](../../resolved-questions.md#oq26--external-liability-bound-for-the-shared-apify-account)).** `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD` is the maximum that other workloads sharing the Apify account may consume in one billing cycle (equivalently, `P −` it is Hardware Radar's allocated share). It defaults to the owner-set 5.00 per cycle: Hardware Radar reserves up to $5.00 of the prepaid usage for consumption outside its ledger. It is a conservative Hardware Radar accounting bound, not permission for another project to spend $5. Paid admission still fails closed when the value is explicitly empty or invalid, when the account snapshot is stale or unobservable, and when the invariant cannot be satisfied (MS2-D-40 check 2). Residual: Hardware Radar derives the bound from no other workload's code or records, cannot enforce it on those workloads, and detects a breach only when a snapshot shows it (`external_liability_exceeded` trips the latch). | — (changing the bound is an owner decision) | none |
-| R34 | Revision 6 admission is deliberately conservative and may leave Hardware Radar well under its $12 target: reconciled spend is debited on top of the snapshot while no inclusion watermark exists (R5-01); run usage settles at its execution bound until F5a supports `stable_reads` (R5-03); and the external-liability bound is reserved in full. With the verified figures ($19 prepaid, $1.90 margin) and no watermark, late-cycle headroom falls roughly by Hardware Radar's own settled spend. Revision 9: with the owner's 5.00 bound, check 2 caps Hardware Radar's cycle debit at $12.10 ($17.10 − $5.00), just above the $12 target, so at the verified figures the target binds before check 2. | Set `…_USAGE_INCLUSION_LAG_S` and `stable_reads` only from F5a evidence | E live capacity |
+| R33 | **Resolved (owner decision, 2026-09-25; [OQ26](../../resolved-questions.md#oq26--external-liability-bound-for-the-shared-apify-account)).** `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD` is the maximum that other workloads sharing the Apify account may consume in one billing cycle (equivalently, `P −` it is Hardware Radar's allocated share). It defaults to the owner-set 5.00 per cycle: Hardware Radar reserves up to $5.00 of the prepaid usage for consumption outside its ledger. It is a conservative Hardware Radar accounting bound, not permission for another project to spend $5. Paid admission still fails closed when the value is explicitly empty or invalid, when the account snapshot is stale or unobservable, and when the invariant cannot be satisfied (MS2-D-40 check 2). Residual: Hardware Radar derives the bound from no other workload's code or records, cannot enforce it on those workloads, and detects a breach only when a snapshot shows it (`external_liability_exceeded` trips the latch). **Rev-12 Codex follow-up (R12-05).** Revision 12 supersedes the "stale or unobservable snapshot" denial and the detection through `external_liability_exceeded` in this row (MS2-D-48). Admission now fails closed on an explicitly empty or invalid bound, an invalid operator-verified account setting (`account_state_unobservable`), and a failed check 2 against the configured `P`. A breach by other workloads is caught only by Apify's hard limit (402 → `account_limit_refused`) and by the operator's cycle reconciliation (R39). | — (changing the bound is an owner decision) | none |
+| R34 | Revision 6 admission is deliberately conservative and may leave Hardware Radar well under its $12 target: reconciled spend is debited on top of the snapshot while no inclusion watermark exists (R5-01); run usage settles at its execution bound until F5a supports `stable_reads` (R5-03); and the external-liability bound is reserved in full. With the verified figures ($19 prepaid, $1.90 margin) and no watermark, late-cycle headroom falls roughly by Hardware Radar's own settled spend. Revision 9: with the owner's 5.00 bound, check 2 caps Hardware Radar's cycle debit at $12.10 ($17.10 − $5.00), just above the $12 target, so at the verified figures the target binds before check 2. **Rev-12 Codex follow-up (R12-05).** Revision 12 supersedes this row's snapshot debit and its `…_USAGE_INCLUSION_LAG_S` action: the setting and check 1 are retired (MS2-D-48). The remaining conservatism is the `stable_reads` default and the full `E` reservation. At the verified figures, check 2 still caps `HR_cycle` at $12.10, and the target binds first. | Set `…_USAGE_INCLUSION_LAG_S` and `stable_reads` only from F5a evidence; rev 12: set `stable_reads` only from F5a evidence (the inclusion-lag action is withdrawn) | E live capacity |
 | R35 | The first ledger authority in a cycle (`apify_ledger_claim --origin`, MS2-D-45) rests on an owner attestation that no other environment admitted paid work that cycle; every later authority is machine-checked (continuation, or a drained handoff bound to one destination ledger, revision 7). Residual: a handoff record is a digest-keyed file, not a cryptographically signed one, so the checks protect against mistakes, not against deliberate hand-editing. | Attest only when true | E live admission |
 | R36 | Operator reservations (MS2-D-46) are a procedural control: the Console, CLI, and MCP cannot be intercepted, so an operation run without a reservation is unaccounted. Revision 9 (owner decision, 2026-09-25; [OQ29](../../resolved-questions.md#oq29--operator-allowance-size)): the allowance defaults to 1.00 per cycle, replacing the 0.50 assumption under which one build bound ($0.41) nearly filled it. Revision 11 (R10-12) states the fit by formula. One build reservation is `build_reservation = …_OPERATOR_BUILD_BOUND_USD + (…_MAX_RUN_POLLS + …_MAX_CORRECTION_READS) × api_call_bound` (MS2-D-46). Two fit when `2 × build_reservation ≤ …_OPERATOR_ALLOWANCE_USD < 3 × build_reservation`. At the defaults and Starter prices (approximate; `api_call_bound ≈ $0.000181`, MS2-D-32), one is about $0.423, two about $0.846 (about $0.154 left for inspection and probe envelopes), and a third, about $1.269, does not fit. Revision 9's "$0.82 … leaving $0.18 … $1.23" omitted the call allowance. Under the default `bound` settlement a settled build returns little capacity, so at most two builds fit per cycle, fewer when inspection envelopes are reserved, until F5a evidence allows `stable_reads`. | Reserve before every build or inspection; changing the allowance is an owner decision | F5a deployment cadence |
 | R37 | (Revision 7; revised in revision 8.) Correction monitoring (MS2-D-41, selector 4) runs for a fixed window after a row's last charge (default seven days, an assumption) and closes only when a successful closing read at or after the deadline commits. A provider correction that arises after that closing read is not observed by any environment; window closure is not provider finality. Under the default `bound` settlement the settled amount already equals the enforced execution bound, so the exposure matters mainly under `stable_reads`. The window delays a drained handoff by at least one window (MS2-D-45). Revision 8 residual: a closing read that can never succeed (for example, a run or build record no longer returned) keeps its obligation open, visible as `correction_close_overdue`, and blocks handoff indefinitely; that fails closed, and any release of such an obligation would need a plan revision. | Choose `stable_reads` only if F5a's read trail shows no correction after half the window | E accuracy under `stable_reads`; handoff timing |
-| R38 | **Owner acceptance required (revision 11, R10-01).** Apify's documents name the billing units: compute, data transfer, proxy, and storage reads, writes, lists, and timed storage (`docs.apify.com/platform/actors/running/usage-and-resources`, `apify.com/pricing`, retrieved 2026-09-25). They do not state (a) how many operations one API call is metered as, (b) which bytes are metered as transfer, or (c) the per-call overhead of the Actor SDK's platform calls inside a run. MS2-D-32 *Per-call bound* derives everything the documents support and enforces wire-byte ceilings: a response-body cap, httpcore's response-header limit, a request-body cap, and a pinned socket receive buffer. For the rest it assumes (a) at most one operation per item or record a call returns or deletes, and one for a call that returns none; (b) at most the call's wire bytes; and (c) that the run's own usage breakdown, settled at `max(execution bound, every observed read)`, reveals the overhead, with an actual above the reservation tripping the latch. If an assumption fails, the enforced call counts limit the damage, but no documented monetary ceiling exists. Snapshot check 1 and `external_liability_exceeded` (MS2-D-40) detect it after the fact, because the account figure contains any under-priced charge. At the defaults, the modeled per-run call and transfer bounds come to a few cents (MS2-D-32 illustrative figures). Revision 12 (owner decision (s5, 2026-09-25), R25): the after-the-fact runtime detection by check 1 and `external_liability_exceeded` is retired. Detection is now the operator's cycle reconciliation, F5a step 4, and Apify's 402 (`account_limit_refused`). The owner accepted R38 before this change; R39 asks whether that acceptance still holds. | **Accepted by the owner 2026-09-25** (`…_CALL_BILLING_RESIDUAL_ACCEPTED` defaults to that date). Re-review if F5a's measurements contradict an assumption | E live admission; F5a |
-| R39 | **New (revision 12, owner decision (s5, 2026-09-25), R25).** The runtime no longer observes account state (MS2-D-48). (a) The other workloads' actual spend is invisible. Only `E` (5.00) and Apify's hard limit (verified $19, equal to the prepaid credit) bound it, and Apify documents enforcement deviation of about 10%. (b) Cycle drift: a plan or billing change moves the real cycle, and the runtime keeps the configured anchor until the operator re-verifies. Hardware Radar's spend in one real cycle could then span two derived cycles. Its cash exposure stays behind the account limit, but it could consume the other workloads' share. (c) The configured limit, base price, and retention can go stale in the same way. Mitigations: a billing change is an owner action; re-verification is required before re-enabling; a 402 start refusal latches (`account_limit_refused`); the operator's cycle reconciliation; a backward anchor move denies `cycle_unknown`. **Owner points:** (1) whether to add a re-verification age, for example `…_ACCOUNT_VERIFIED_ON` within the current cycle; (2) whether R38's acceptance stands without after-the-fact runtime detection; (3) whether master spec C-011's "prepaid allowance actually remaining" is satisfied by Apify's limit, or needs a spec clarification. | Owner answers points 1–3; operator verification before enabling | E9; F5a |
+| R38 | **Owner acceptance required (revision 11, R10-01).** Apify's documents name the billing units: compute, data transfer, proxy, and storage reads, writes, lists, and timed storage (`docs.apify.com/platform/actors/running/usage-and-resources`, `apify.com/pricing`, retrieved 2026-09-25). They do not state (a) how many operations one API call is metered as, (b) which bytes are metered as transfer, or (c) the per-call overhead of the Actor SDK's platform calls inside a run. MS2-D-32 *Per-call bound* derives everything the documents support and enforces wire-byte ceilings: a response-body cap, httpcore's response-header limit, a request-body cap, and a pinned socket receive buffer. For the rest it assumes (a) at most one operation per item or record a call returns or deletes, and one for a call that returns none; (b) at most the call's wire bytes; and (c) that the run's own usage breakdown, settled at `max(execution bound, every observed read)`, reveals the overhead, with an actual above the reservation tripping the latch. If an assumption fails, the enforced call counts limit the damage, but no documented monetary ceiling exists. Snapshot check 1 and `external_liability_exceeded` (MS2-D-40) detect it after the fact, because the account figure contains any under-priced charge. At the defaults, the modeled per-run call and transfer bounds come to a few cents (MS2-D-32 illustrative figures). Revision 12 (owner decision (s5, 2026-09-25), R25): the after-the-fact runtime detection by check 1 and `external_liability_exceeded` is retired. Detection is now the operator's cycle reconciliation, F5a step 4, and Apify's 402 (`account_limit_refused`). The owner accepted R38 before this change; R39 asks whether that acceptance still holds. **Rev-12 Codex follow-up: owner answer 2026-09-25, "Still accepted".** The R38 acceptance stands without after-the-fact runtime detection. F5a step 4 still measures API-call billing on the operator side. A measured real per-call charge revises the estimator bound then, through a plan revision. The operator's end-of-cycle reconciliation (MS2-D-48) compares the ledger with account usage. | **Accepted by the owner 2026-09-25** (`…_CALL_BILLING_RESIDUAL_ACCEPTED` defaults to that date). Re-review if F5a's measurements contradict an assumption | E live admission; F5a |
+| R39 | **New (revision 12, owner decision (s5, 2026-09-25), R25).** The runtime no longer observes account state (MS2-D-48). (a) The other workloads' actual spend is invisible. Only `E` (5.00) and Apify's hard limit (verified $19, equal to the prepaid credit) bound it, and Apify documents enforcement deviation of about 10%. (b) Cycle drift: a plan or billing change moves the real cycle, and the runtime keeps the configured anchor until the operator re-verifies. Hardware Radar's spend in one real cycle could then span two derived cycles. Its cash exposure stays behind the account limit, but it could consume the other workloads' share. (c) The configured limit, base price, and retention can go stale in the same way. Mitigations: a billing change is an owner action; re-verification is required before re-enabling; a 402 start refusal latches (`account_limit_refused`); the operator's cycle reconciliation; a backward anchor move denies `cycle_unknown`. **Owner points:** (1) whether to add a re-verification age, for example `…_ACCOUNT_VERIFIED_ON` within the current cycle; (2) whether R38's acceptance stands without after-the-fact runtime detection; (3) whether master spec C-011's "prepaid allowance actually remaining" is satisfied by Apify's limit, or needs a spec clarification. **Rev-12 Codex follow-up: owner points closed 2026-09-25 ([OQ30](../../resolved-questions.md#oq30--runtime-apify-account-reads-r25)).** (1) "No expiry; warn only": no admission expiry, and `apify_spend_report` warns when `…_ACCOUNT_VERIFIED_ON` predates the current cycle start (E9.6). (2) "Still accepted": R38 stands (see R38). (3) "Clarify the spec": master spec C-011 carries a dated 2026-09-25 clarification. The runtime plans against the operator-verified account limit minus the margin, Apify's hard limit enforces the account-wide remaining allowance, and the operator reconciles each cycle. The residuals (a)–(c) stay accepted with those mitigations, plus the durable 402 recovery (R12-01) and the recovery-verification procedure (R12-03). | Closed 2026-09-25 (owner answers 1–3); operator verification before enabling | E9; F5a |
 
 No new ADR or OQ file is created by this plan. Revision 5: OQ23 is resolved and
 OQ24 split by the owner's 2026-09-24 decisions, recorded in
@@ -6907,6 +7184,8 @@ needs are:
   the five MS2-D-48 settings;
 - (revision 12) the R39 owner points: a re-verification age, whether R38's
   acceptance stands, and the C-011 wording;
+  Rev-12 Codex follow-up: all three were answered by the owner on 2026-09-25 (R39,
+  OQ30) and are no longer open;
 - the R35 attestation at the first origin claim;
 - F4 corpus labeling and ratification (R4), and the MS-1e drive-matcher
   ratification and pilot-source enabling (R5), which stays a distinct gate that
@@ -7274,6 +7553,33 @@ before E9 starts. The review should focus on the anchor derivation and
 conflict rules, the admission order, the 402 classification, the
 retired-machinery list, and whether any invariant listed as unchanged was
 weakened.
+
+**Rev-12 Codex follow-up: Codex bounded review of revision 12 (delegate
+`ea9029f8`, result sha256 `2f2f2175…`, 2026-09-25).**
+- **Verdict:** REVISION_REQUIRED. Five findings, all ACCEPTED with no part
+  rejected, and all resolved in place within revision 12.
+- The review confirmed the configured-cycle arithmetic, the lock order of
+  `ensure_cycle` in `reserve`, `claim_origin`, `export_handoff`, and
+  `import_handoff`, the backward-overlap conflict rule, and that no other
+  producer of account requests exists.
+
+| Finding | Severity | Disposition | Where | Proof |
+| --- | --- | --- | --- | --- |
+| R12-01 a 402 whose latch trip is lost between the two commits does not pause later admission | high | Accepted; resolved. The commit order is kept (ED-05). The 402 persisted in `stage_detail.start_error` is repaired under the budget lock inside every `reserve`, before the latch is read, and in each tick's stranded sweep. Any existing trip, open or owner-cleared, blocks a re-trip. The estimator bump no longer clears this reason | MS2-D-48 *Hard-limit refusal*; E9.3 | `test_apify_crash_windows.py::test_402_trip_lost_between_commits_is_repaired_before_next_admission`, `::test_402_trip_lost_between_commits_is_repaired_by_the_next_tick`, `::test_owner_cleared_402_trip_is_never_retripped`, `::test_estimator_bump_does_not_clear_account_limit_refused` |
+| R12-02 the E9 commits cannot all be gate-green; the double and fixture inventory is incomplete | medium | Accepted; resolved. Every cited location was verified against `84c5cd0`. E9.2 now retires every ledger, budget, and command dependent of the removed fields and signature in the same commit. It lists all four admission doubles, `ledger_support` (including `STANDING` and `account_client`), the unit fixtures, and every test using a removed name, and deletes `test_observed_external_consumption_above_bound_denies_and_trips_latch`. It adds a binding `rg` completion check. E9.4 removes the `client.py:114–122` URLs. Additional items found beyond the review: `STANDING` uses in five test modules, `test_apify_recovery_probe.py:577–652`, the unit parametrizations at lines 633 and 840, the `apify_budget_reset --discovery` import dependency, and the `invariant_breaches` test at 1039 | E9.2, E9.4 | the E9.2 completion search; the gate at each commit |
+| R12-03 re-verification deadlocks: disabling, an open latch, or invalid settings deny the envelope the verification needs | medium | Accepted; resolved. For a planned change, the envelope is reserved before disabling. When none can be admitted, a bounded recovery verification applies: at most 3 operator-key GETs per triggering event, outside the application, unledgered, recorded in STATUS and R36, with a second verification needing the owner. Paid work is never enabled and the latch never cleared just to inspect. An operator-class exemption from the blanket stops is rejected | MS2-D-48 *Operator verification* | procedural (R36); no runtime change |
+| R12-04 the promise to validate corrections is broader than E9.2 implements | medium | Accepted; resolved with the broad contract. `budget.account_setting_problem(cfg, now)` covers anchor, limit, base price, retention, verified-on, and margin. Admission and `invariant_breaches(resv, config, now)` share it, with an explicit `now`. The cash-ceiling, lifetime, and 744 h checks are named as admission-only | MS2-D-47 inline; E9.2 | `test_apify_budget.py::test_account_setting_problem_contract`; `test_apify_ledger.py::test_correction_with_invalid_account_setting_is_an_invariant_breach` |
+| R12-05 R33/R34 and two command docstrings still direct retired behavior | low | Accepted; resolved. R33/R34 carry superseding notes and R34's action is narrowed. E9.5 lists `apify_ledger_claim.py:7–8` and `apify_spend_report.py:3–12` and adds a docstring search | R33, R34; E9.5 | the E9.5 search |
+
+**Owner answers to the R39 points (2026-09-25, bounded choice; recorded in
+[OQ30](../../resolved-questions.md#oq30--runtime-apify-account-reads-r25)).**
+1. "No expiry; warn only (Recommended)": the report warning is E9.6.
+2. "Still accepted (Recommended)": R38 stands.
+3. "Clarify the spec (Recommended)": the dated amendment of master spec
+   C-011 was made in the same change.
+
+R39 is closed. A further review round is optional: the follow-up adds no
+decision, and each change is covered by a named test or procedure.
 
 ## Next slice after A
 

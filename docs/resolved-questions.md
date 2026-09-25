@@ -646,5 +646,10 @@ _Recommendation ratified as presented (2026-07-04): `dependency-review-action` g
   - whether to add a re-verification age;
   - whether R38's acceptance stands without after-the-fact runtime detection;
   - whether master spec C-011's "prepaid allowance actually remaining" needs a clarification now that Apify's limit, not a runtime observation, enforces it.
+- **Follow-ups answered (owner, 2026-09-25, bounded choice; plan R39 closed):**
+  1. **Re-verification age: "No expiry; warn only (Recommended)".** Admission never ages out `HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON`. `apify_spend_report` prints a non-blocking warning when the date predates the current cycle's start.
+  2. **R38: "Still accepted (Recommended)".** The R38 acceptance stands. F5a still measures API-call billing on the operator side, and a measured real per-call charge revises the estimator bound then. The operator's end-of-cycle reconciliation compares the ledger with account usage.
+  3. **C-011: "Clarify the spec (Recommended)".** The master spec's C-011 carries a dated clarification: the runtime plans against the operator-verified account limit minus the margin, Apify's hard limit enforces the account-wide remaining allowance, and the operator reconciles each cycle.
+- A Codex bounded review of plan revision 12 (REVISION_REQUIRED, R12-01..R12-05) was resolved in the plan's rev-12 Codex follow-up. None of it changed this decision.
 
 **My Comments:** _(none recorded; the decision above is the owner's 2026-09-25 direction.)_
