@@ -830,8 +830,14 @@ envelope gets a category-discriminated spec payload and per-row
   (`resource_limit` = a byte or transfer budget set at admission). It qualifies
   `truncated` only:
   - `ProviderRunEvidence` gains an optional `truncation_reason`. A validator
-    requires it for non-local `truncated` evidence and forbids it for every other
-    completeness. Local truncated evidence keeps `None`.
+    forbids it for every completeness except non-local `truncated`. Local
+    truncated evidence keeps `None`. *Amended 2026-09-25 (D8 landing):* the
+    model does not *require* it for non-local `truncated` evidence, because the
+    frozen Slice A remote fakes in `tests/db/test_collection_provider.py` build
+    that evidence without a reason. The requirement is enforced where the
+    Apify path persists it: the `provider_run_truncation_reason_coherent`
+    CHECK (set iff completeness is `truncated`), and the importer copies the
+    reason from the `provider_run` row into the evidence.
   - A `None` reason is omitted from the evidence JSON, so local
     `detail_json["provider"]` stays byte-identical and
     `test_run_source_records_local_provider_evidence` stays green unmodified. The
