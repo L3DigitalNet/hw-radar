@@ -34,6 +34,9 @@
   `apify_spend_report` (AC-7), `LedgerAdmission` bound in production, `budget_paused` in the
   shortlist, ledger-settled probe (E8). Verifier: 16/16 acceptance claims hold; its two crash
   windows are fixed (`40b7295`). FULL starts are refused while a same-scope run is outstanding.
+- **MS-2 plan revision 12 (R25, MS2-D-48) implemented on branch `s5-e9`:** the runtime reads no
+  Apify account state; the billing cycle comes from `HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR` and the
+  account limits from four operator-verified settings; a 402 start trips `account_limit_refused`.
 - **Production cannot start or pay for an Actor run:** `RUN_SPECS` empty, kill switch off, no
   Actor id, unit prices unset. No Apify push/build/run has occurred. F5a prerequisites are in
   `docs/TODO.md`. 2026-09-25 (F5a preflight): the empty private Actor resource

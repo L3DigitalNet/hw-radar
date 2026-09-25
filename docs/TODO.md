@@ -62,9 +62,17 @@ Instructions for AI agents:
   Actor output observation-only: no Django model imports, no production DB credentials, no
   canonical matching/persistence.
   **F5a prerequisites (all unmet; production stays deny-all until every one holds):**
-  1. Owner: scoped runtime token (item above); verify it can read `/v2/users/me` and
-     `/v2/users/me/limits`, else admission denies `account_state_unobservable` (the operator key
-     is never a fallback). Keep the account usage limit at or below the prepaid credit.
+  1. Owner: scoped runtime token (item above), including the Actor **Read** grant on the
+     Hardware Radar Actor (the 2026-09-25 token got `404` on its own Actor). The runtime reads no
+     account state (MS2-D-48), so the token needs no account permission; the operator key is
+     never rendered to a runtime. Keep the account usage limit at or below the prepaid credit.
+  1a. Operator verification (MS2-D-48, before enabling): with the operator key, outside the
+     application, read the account's limits and plan and set the five settings
+     `HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR` (the observed `monthlyUsageCycle.startAt`),
+     `…_ACCOUNT_LIMIT_USD` (lesser of the usage limit and the prepaid credit),
+     `…_ACCOUNT_BASE_PRICE_USD`, `…_ACCOUNT_DATA_RETENTION_DAYS`, and `…_ACCOUNT_VERIFIED_ON`;
+     record the check (date, values, no identifiers) in STATUS. None has a default and none goes
+     in a committed environment file; unset denies `cycle_unknown` / `account_state_unobservable`.
   2. Operator: set the eight unit prices from `apify.com/pricing` (`…_USD_PER_CU`,
      `…_DATASET_{READS,WRITES}_USD_PER_1000`, `…_DATASET_STORAGE_USD_PER_GB_HOUR`,
      `…_KV_{READS,WRITES}_USD_PER_1000`, `…_KV_STORAGE_USD_PER_GB_HOUR`,
@@ -74,8 +82,8 @@ Instructions for AI agents:
   3. Code: register the synthetic site's `ActorRunSpec` in `jobs.RUN_SPECS` and its
      SourceSite/SourceConfig (`collection_provider=apify`); deploy `0021`/`0022`.
   4. Operator: `apify_operator_reserve --kind build` before `apify push`/build; settle it.
-  5. Set `HW_RADAR_APIFY_ENABLED=true`; the first start discovers the cycle and is denied
-     `ledger_authority_missing`; owner runs `apify_ledger_claim`; then the capability probe (R25).
+  5. Owner runs `apify_ledger_claim` (it materializes the configured cycle); set
+     `HW_RADAR_APIFY_ENABLED=true`; then the capability probe (R25).
 - [x] Keep provider identity separate from marketplace/source identity: proven by D7
   (`test_provider_switch_preserves_identity_history_and_watch_state`, AC-4).
 - [ ] Run the existing MS-1e owner-in-the-loop ratification step for the drive matcher before

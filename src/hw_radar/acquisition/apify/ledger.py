@@ -36,9 +36,10 @@ SCOPE: settlement, usage reads, and selector 4 live in
 `acquisition.apify.reconcile` (E4), which builds on the lock, the cycle
 predicate, and the latch here; the start job's binding of this ledger is
 `jobs.LedgerAdmission` (E5), which calls only `reserve`; the spend report is
-E6. This module never calls Apify. The retired account-snapshot refresh and
-cycle discovery (MS2-D-40, -32) left `ApifyCycleDiscovery` and the cycle
-row's `account_*` columns in the schema, unwritten (MS2-D-48 *Schema*).
+E6. This module never calls Apify. The runtime account snapshot and the
+runtime's discovery of the billing cycle (MS2-D-40, -32) are retired by
+MS2-D-48; they left `ApifyCycleDiscovery` and the cycle row's `account_*`
+columns in the schema, unwritten (MS2-D-48 *Schema*).
 
 Requirements: PostgreSQL (`pg_advisory_xact_lock`), a Django context with the
 catalog app, and the HW_RADAR_APIFY_* settings read by `load_ledger_config`.

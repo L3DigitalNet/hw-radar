@@ -9,9 +9,9 @@ than the raw JSON, so callers never depend on Apify's wire names:
   ``get_record``, ``delete_dataset``, ``delete_key_value_store``;
 * ``get_build`` for operator builds settled through the ledger (MS2-D-46).
 
-It deliberately has no account read (MS2-D-48): the runtime token cannot read
-the account endpoints, and the billing cycle and account limits are
-operator-verified settings, read by the operator outside the application.
+It deliberately calls no account endpoint (MS2-D-48): the runtime token cannot
+read them, and the billing cycle and account limits are operator-verified
+settings, read by the operator outside the application.
 
 There is deliberately no retry, backoff, or polling loop here. The poll job
 (MS2-D-16) owns cadence and retries, and a retry hidden inside the transport

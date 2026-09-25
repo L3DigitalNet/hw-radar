@@ -4,8 +4,11 @@
 admitted paid Hardware Radar work in the current billing cycle and records
 this environment (HW_RADAR_APIFY_LEDGER_ID) as the cycle's authority. It is the
 one authority whose truth rests on the owner's word rather than a check (R35),
-so the attestation text is stored in `attested_by`. Refused when the cycle is
-unobserved (run a snapshot refresh first) or already has an authority row here.
+so the attestation text is stored in `attested_by`. The claim itself
+materializes the billing cycle derived from HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR
+(MS2-D-48), so no earlier start is needed. It is refused `cycle_unknown` when
+the anchor is unset, invalid, in the future, or conflicts with a recorded
+cycle, and refused when the cycle already has an authority row here.
 """
 
 from __future__ import annotations

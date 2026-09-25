@@ -9,8 +9,8 @@ delete_failed or orphaned run is cleaned up by hand, R21; an
 re-verified, MS2-D-48); an estimator correction clears the latch on its own
 through an HW_RADAR_APIFY_ESTIMATOR_VERSION bump, not through this command.
 
-The former `--discovery` reset is retired with runtime cycle discovery
-(MS2-D-48): the billing cycle now comes from the configured anchor.
+The former `--discovery` reset is retired (MS2-D-48): the runtime no longer
+discovers the billing cycle, which now comes from the configured anchor.
 """
 
 from __future__ import annotations
