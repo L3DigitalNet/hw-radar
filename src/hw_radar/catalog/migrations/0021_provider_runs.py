@@ -159,6 +159,7 @@ class Migration(migrations.Migration):
                 ("storage_cleanup_due_at", models.DateTimeField()),
                 ("storage_cleanup_attempts", models.PositiveIntegerField(default=0)),
                 ("storage_deleted_at", models.DateTimeField(blank=True, null=True)),
+                ("orphaned_start_at", models.DateTimeField(blank=True, null=True)),
             ],
             options={
                 "db_table": "provider_run",

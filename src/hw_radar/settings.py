@@ -36,6 +36,13 @@ Environment contract (see .env.example for dev values):
   HW_RADAR_APIFY_MAX_RUN_POLLS
                             optional; per-run cap on status polls (default 60,
                             MS2-D-32 *Run polls*)
+  HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS
+                            optional; per-run cap on storage-cleanup attempts
+                            (default 10, MS2-D-32 *Operation caps*)
+  HW_RADAR_APIFY_DELETE_404_IS_ABSENT
+                            optional; only the literal "true" lets a 404 on a
+                            storage delete count as deleted (default false,
+                            MS2-D-25 *404 rule*; set only after the R25 probe)
 Production values arrive via the bao-agent tmpfs render (systemd
 EnvironmentFile=/run/bao-agent/hw-radar.env) - never a plaintext file at rest.
 """
@@ -219,6 +226,22 @@ HW_RADAR_APIFY_IMPORT_MARGIN = int(os.environ.get("HW_RADAR_APIFY_IMPORT_MARGIN"
 # MS2-D-32 *Run polls* (60, an assumption): the most `GET` run calls selector 1
 # makes for one provider_run, each counted and committed before it is sent.
 HW_RADAR_APIFY_MAX_RUN_POLLS = int(os.environ.get("HW_RADAR_APIFY_MAX_RUN_POLLS", "60"))
+# MS2-D-32 *Operation caps* (10, an assumption): the most storage-cleanup
+# attempts one provider_run may spend. An attempt is the whole MS2-D-33 overdue
+# sequence (abort, confirming GET, one DELETE per storage not yet verified
+# deleted), counted and committed before its first call; the start-option-
+# mismatch abort is attempt 1. At the cap retries stop and the row is left
+# `delete_failed` (E trips the latch on it).
+HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS = int(os.environ.get("HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS", "10"))
+# MS2-D-25 *404 rule* (ED-19). Whether a scoped token answers 404 rather than
+# 403 for storage it cannot access is unobserved; if it does, trusting a 404
+# would verify a deletion while the storage kept accruing cost. So a 404 on
+# delete counts as deleted only when this is true, which the operator sets
+# after the R25 capability probe records a 403 for inaccessible storage. As
+# with the kill switch, only the literal "true" enables it.
+HW_RADAR_APIFY_DELETE_404_IS_ABSENT = (
+    os.environ.get("HW_RADAR_APIFY_DELETE_404_IS_ABSENT", "").strip().lower() == "true"
+)
 
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"

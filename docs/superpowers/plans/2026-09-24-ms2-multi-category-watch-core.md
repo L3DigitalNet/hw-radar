@@ -5013,6 +5013,24 @@ the then-current code. D-prep (D1, D3) is not gated.
         leads to `delete_failed` at the cap; with it true, a 404 on the run's
         own recorded storage id is `deleted`.
       - `test_run_poll_cap_stops_polling_and_settles_at_bound` (ED-01).
+  - Landed 2026-09-25: `acquisition/apify/storage_cleanup.py` holds the
+    selector-2 cleanup unit and the selector-3 overdue unit, now the
+    `apify_poll_tick` defaults. An attempt is counted and committed before
+    its first call; a failed attempt records its errors and backs off from
+    the attempt count (it does not raise); per-storage progress lives in
+    `stage_detail.storage_verified_deleted`. At
+    `HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS` (10) the row is `delete_failed` and
+    both selectors drop it. `HW_RADAR_APIFY_DELETE_404_IS_ABSENT` (false)
+    is the 404 rule. The overdue unit rejects a still-`pending` import
+    before its calls (`_reject(only_from=PENDING)`), which also settles a
+    lost-response PROBE for D12's one-outstanding rule. `orphaned_start` is
+    the column `provider_run.orphaned_start_at`, added to the undeployed
+    `0021`. The reject reasons keep D10's landed names
+    (`storage_deadline_passed`, `content_past_ttl`) for this section's
+    `storage_deadline` and `retention_expired`. The poll-cap test covers
+    the D side (polling stops; selector 3 cleans the row without spending
+    polls). Settlement at the bound (`bound_unfinalized`) and
+    `final_charge_op_at` are E's.
 - **D12 — Provider-dispatched recovery probes (MS2-D-24).**
   - Tests (`tests/db/test_apify_recovery_probe.py`; admission is bound to a
     test-only `AllowAllAdmission`, and production stays deny-all):

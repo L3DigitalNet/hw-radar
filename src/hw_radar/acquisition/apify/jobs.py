@@ -31,12 +31,12 @@ starts a run; with no provider_run rows it makes no API call and constructs no
 client, so it is safe to schedule with no token rendered.
 
 SCOPE: storage deletion and the overdue abort-and-delete sequence are D11's
-units of work (MS2-D-25, -33); this module owns their selectors and binds each
-to a StorageUnit hook whose default only logs. The one abort sent here is the
-start-option-mismatch abort, which MS2-D-32 makes attempt 1 of the overdue
-sequence: it is counted in storage_cleanup_attempts and committed before it is
-sent, and it deletes nothing (deletion needs terminal evidence, which the D11
-unit establishes). The ledger, the overrun latch (a mismatch, an observed
+units of work (MS2-D-25, -33) in acquisition.apify.storage_cleanup; this module
+owns their selectors and binds those units as the StorageUnit defaults. The one
+abort sent here is the start-option-mismatch abort, which MS2-D-32 makes
+attempt 1 of the overdue sequence: it is counted in storage_cleanup_attempts
+and committed before it is sent, and it deletes nothing (deletion needs
+terminal evidence, which the storage unit establishes). The ledger, the overrun latch (a mismatch, an observed
 restart, and an orphaned start all trip it), reconciliation, and selector 4 are
 Slice E. Recovery-probe dispatch by provider is D12.
 
@@ -542,18 +542,33 @@ def select_active(now: datetime) -> list[int]:
     ]
 
 
+def _storage_work_left() -> Q:
+    """Storage not yet deleted and still worth an attempt.
+
+    A row at the delete-attempt cap (left `delete_failed`, MS2-D-32) or marked
+    `orphaned_start` (nothing to abort or delete, MS2-D-33) is excluded:
+    re-selecting it would only re-log the same terminal state every tick. Both
+    stay visible to reporting and to E's latch through their own columns.
+    """
+    return (
+        ~Q(storage_state=StorageState.DELETED)
+        & Q(storage_cleanup_attempts__lt=settings.HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS)
+        & Q(orphaned_start_at__isnull=True)
+    )
+
+
 def select_outstanding(now: datetime) -> list[int]:
     """Selector 2: terminal rows whose import is unfinished, or finished with storage left.
 
     Rows backing off (`next_attempt_at` in the future) wait; the D10 importer
-    writes that backoff itself on retry exhaustion and relies on this filter.
-    (E adds the unreconciled-reservation clause.)
+    and the storage unit write that backoff themselves and rely on this
+    filter. (E adds the unreconciled-reservation clause.)
     """
     return list(
         ProviderRun.objects.filter(_due(now), remote_status__in=_TERMINAL_STATUSES)
         .filter(
             ~Q(import_state__in=_TERMINAL_IMPORT)
-            | (Q(import_state__in=_TERMINAL_IMPORT) & ~Q(storage_state=StorageState.DELETED))
+            | (Q(import_state__in=_TERMINAL_IMPORT) & _storage_work_left())
         )
         .order_by("pk")
         .values_list("pk", flat=True)
@@ -567,8 +582,7 @@ def select_overdue(now: datetime) -> list[int]:
     (start response never recorded), non-terminal, and terminal rows all qualify.
     """
     return list(
-        ProviderRun.objects.filter(_due(now), storage_cleanup_due_at__lte=now)
-        .exclude(storage_state=StorageState.DELETED)
+        ProviderRun.objects.filter(_due(now), _storage_work_left(), storage_cleanup_due_at__lte=now)
         .order_by("pk")
         .values_list("pk", flat=True)
     )
@@ -577,18 +591,14 @@ def select_overdue(now: datetime) -> list[int]:
 type StorageUnit = Callable[[int, ApifyClient], Awaitable[None]]
 
 
-async def pending_storage_unit(provider_run_id: int, client: ApifyClient) -> None:
-    """Default binding for the D11 cleanup and overdue units: select, log, do nothing."""
-    logger.debug("provider_run %s awaits storage cleanup (D11)", provider_run_id)
-
-
 @dataclass(slots=True)
 class TickReport:
     """Which rows each unit handled this tick, and which failed (then backed off)."""
 
     polled: list[int] = field(default_factory=list)
     imported: list[int] = field(default_factory=list)
-    # Handed to the cleanup unit, which is a logging no-op until D11 binds one.
+    # Handed to the storage units. A failed delete attempt is recorded and
+    # backed off by the unit itself, so it lands here, not in `failed`.
     cleanup: list[int] = field(default_factory=list)
     overdue: list[int] = field(default_factory=list)
     failed: list[int] = field(default_factory=list)
@@ -676,8 +686,8 @@ async def apify_poll_tick(
     resolver: ListingResolver,
     evaluator: ListingEvaluator | None = None,
     client_factory: ClientFactory | None = None,
-    cleanup: StorageUnit = pending_storage_unit,
-    overdue: StorageUnit = pending_storage_unit,
+    cleanup: StorageUnit | None = None,
+    overdue: StorageUnit | None = None,
 ) -> TickReport:
     """Run the three selectors once; each row's unit commits and fails on its own.
 
@@ -687,8 +697,15 @@ async def apify_poll_tick(
     loss, cancellation) propagates with every earlier unit already committed.
     The client is built only when a selector returns a row, so an idle tick
     needs no token; a failed construction is recorded in `error` and ends the
-    tick without backing any row off.
+    tick without backing any row off. `cleanup` and `overdue` default to the
+    D11 storage units; tests substitute their own.
     """
+    # Imported here, not at module top: storage_cleanup builds on this module's
+    # observation writer, so a top-level import would be circular.
+    from hw_radar.acquisition.apify import storage_cleanup
+
+    cleanup_unit = cleanup or storage_cleanup.cleanup_storage_unit
+    overdue_unit_fn = overdue or storage_cleanup.overdue_storage_unit
     report = TickReport()
     client: ApifyClient | None = None
 
@@ -716,14 +733,14 @@ async def apify_poll_tick(
     def outstanding(pk: int) -> Callable[[ApifyClient], Awaitable[str]]:
         async def unit(c: ApifyClient) -> str:
             return await _outstanding_unit(
-                pk, c, resolver=resolver, evaluator=evaluator, cleanup=cleanup
+                pk, c, resolver=resolver, evaluator=evaluator, cleanup=cleanup_unit
             )
 
         return unit
 
     def overdue_unit(pk: int) -> Callable[[ApifyClient], Awaitable[str]]:
         async def unit(c: ApifyClient) -> str:
-            await overdue(pk, c)
+            await overdue_unit_fn(pk, c)
             return "overdue"
 
         return unit

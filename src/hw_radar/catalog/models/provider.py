@@ -198,6 +198,12 @@ class ProviderRun(models.Model):
     storage_cleanup_due_at = models.DateTimeField()
     storage_cleanup_attempts = models.PositiveIntegerField(default=0)
     storage_deleted_at = models.DateTimeField(null=True, blank=True)
+    # MS2-D-33 `orphaned_start`: set when selector 3 finds the deadline passed on
+    # a row whose start response was never recorded. Such a row has no run id
+    # and no storage ids, so nothing can be aborted or deleted; admitted spend
+    # is untracked, which Slice E's latch trips on and an operator clears by
+    # hand (R21). Once set, the selectors stop handing the row to cleanup.
+    orphaned_start_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "provider_run"

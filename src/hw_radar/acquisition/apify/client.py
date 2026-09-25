@@ -642,11 +642,11 @@ class ApifyClient:
         return KeyValueRecord(content_type=response.headers.get("Content-Type"), body=response.body)
 
     async def delete_dataset(self, dataset_id: str) -> DeleteOutcome:
-        """Delete the dataset; a 404 is success (``"absent"``), not an error."""
+        """Delete the dataset; a 404 is ``"absent"``, not an error (see ``_delete``)."""
         return await self._delete(f"/v2/datasets/{_seg(dataset_id)}")
 
     async def delete_key_value_store(self, store_id: str) -> DeleteOutcome:
-        """Delete the key-value store; a 404 is success (``"absent"``)."""
+        """Delete the key-value store; a 404 is ``"absent"`` (see ``_delete``)."""
         return await self._delete(f"/v2/key-value-stores/{_seg(store_id)}")
 
     async def get_account_limits(self) -> AccountLimits:
@@ -709,9 +709,10 @@ class ApifyClient:
         try:
             await self._request("DELETE", path)
         except ApifyNotFoundError:
-            # Already gone -- by an earlier attempt whose response was lost, or
-            # by Apify's own retention expiry. Either way the storage no longer
-            # accrues cost, which is all a deletion is for (MS2-D-33).
+            # Reported, not judged: a 404 may mean already gone (an earlier
+            # attempt whose response was lost), or a scoped token masking
+            # storage it cannot access. Whether "absent" counts as deleted is
+            # the caller's MS2-D-25 *404 rule* (storage_cleanup, ED-19).
             return "absent"
         return "deleted"
 

@@ -28,7 +28,7 @@ state. Only stage 1 needs the dataset.
   and apply apply_run_outcome exactly once, guarded by the compare-and-set.
 
 SCOPE: selection, backoff scheduling and storage cleanup belong to the jobs
-(D5) and cleanup (D11). This module neither polls the run nor deletes storage;
+(D5) and cleanup (D11, acquisition.apify.storage_cleanup). This module neither polls the run nor deletes storage;
 it honours next_attempt_at only by writing it on retry exhaustion. The overrun
 latch (MS2-D-22 *Overrun blocks repair reads*) is Slice E's and is not
 consulted here yet.
@@ -486,9 +486,18 @@ def _apply_outcome(row: ProviderRun, outcome: RunOutcome, rand: Callable[[], flo
 
 
 def _reject(
-    provider_run_id: int, reason: RejectReason, detail: str, rand: Callable[[], float]
+    provider_run_id: int,
+    reason: RejectReason,
+    detail: str,
+    rand: Callable[[], float],
+    *,
+    only_from: ImportState | None = None,
 ) -> None:
     """Reject the import in one outcome transaction (MS2-D-22 *Reject*).
+
+    `only_from` makes the rejection a compare-and-set: the overdue storage unit
+    (D11) passes PENDING, because MS2-D-33 rejects only an import whose stage 1
+    has not committed, and it reads that state outside this lock.
 
     Lock order provider_run -> SourceConfig -> FULL lane -> the admitted
     scope's row, with the scope row ensured beforehand. A FULL rejection
@@ -510,6 +519,8 @@ def _reject(
             .get(pk=provider_run_id)
         )
         if locked.import_state in _TERMINAL:
+            return
+        if only_from is not None and ImportState(locked.import_state) is not only_from:
             return
         if locked.scraper_run_id is not None:  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType] - django-types has no <fk>_id stubs
             ScraperRun.objects.filter(pk=locked.scraper_run_id).update(  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType]

@@ -59,9 +59,14 @@ Instructions for AI agents:
   **D12 done** (`recovery_probe_job` starts a PROBE Actor run for an `apify` source, never its
   local adapter; one outstanding probe per source; a finalized probe recovers only when
   `complete`/`truncated`, `partial_failure` is `PROBE_FAILURE`).
-  **Next (Slice D core):** D11 → D9; Apify push/build/run (none has occurred yet). D11
-  binds the `cleanup` and `overdue` StorageUnit hooks in `apify_poll_tick` (orphaned_start
-  included); F5a registers the synthetic site's `ActorRunSpec` in `jobs.RUN_SPECS` (empty in
+  **D11 done** (`acquisition.apify.storage_cleanup`: selector-2 cleanup and selector-3
+  overdue units bound as the `apify_poll_tick` defaults; counted attempts with delete-attempt
+  cap → `delete_failed`; terminal-evidence-first abort/confirm; the ED-19 404 rule behind
+  `HW_RADAR_APIFY_DELETE_404_IS_ABSENT`; `provider_run.orphaned_start_at` in `0021`).
+  **Next (Slice D core):** D9; Apify push/build/run (none has occurred yet). E sets the
+  write-once `final_charge_op_at` at the later of the import-terminal and storage-deleted
+  commits (neither barrier writes it yet) and trips the latch on `delete_failed` at the cap and
+  on `orphaned_start_at`; F5a registers the synthetic site's `ActorRunSpec` in `jobs.RUN_SPECS` (empty in
   production, so every `apify` source is refused `no_run_spec`); E5 replaces `BUDGET_ADMISSION`
   and trips the latch on `stage_detail.start_mismatch` / `restart_count` and records probe
   budget denials as ledger rows (D12 only logs them). Open: the start job does not yet refuse
