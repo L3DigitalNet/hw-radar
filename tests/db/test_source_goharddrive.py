@@ -66,3 +66,33 @@ def test_goharddrive_scrapy_stats_on_raw_batch(scrapy_loop: asyncio.AbstractEven
     batch = scrapy_loop.run_until_complete(adapter.fetch())
     assert batch.scrapy_stats is not None
     assert batch.scrapy_stats["item_scraped_count"] == 2
+
+
+CURRENT_MARKUP = FIXTURE.with_name("goharddrive_category_2026-09.html")
+
+
+def test_spider_reads_titles_from_the_current_volusion_markup() -> None:
+    # 2026-09-25 markup: the product name sits in <span itemprop="name"> inside
+    # the title anchor, whose own text is whitespace. The pre-fix selector
+    # returned "" for every block, so the source yielded no usable listings.
+    from scrapy.http import HtmlResponse
+
+    from hw_radar.acquisition.sources.goharddrive import GoHardDriveSpider
+
+    url = "https://www.goharddrive.com/3-5-inch-Desktop-SATA-IDE-SCSI-SAS-Hard-Drive-s/3.htm"
+    response = HtmlResponse(url=url, body=CURRENT_MARKUP.read_bytes(), encoding="utf-8")
+    spider = GoHardDriveSpider(start_url=url)
+    # Scrapy ships no type for Response, so parse()'s signature is partly Unknown.
+    items: list[dict[str, str]] = list(spider.parse(response))  # pyright: ignore[reportUnknownMemberType]
+
+    assert len(items) == 2
+    assert all(item["title"] for item in items)
+    assert items[0]["title"].startswith("White Label 160GB 8MB Cache 7200RPM SATA")
+    assert items[0]["url"].endswith("-p/g01-0057.htm")
+    assert "14.95" in items[0]["price_text"]
+
+
+def test_category_url_is_the_desktop_hard_drive_category() -> None:
+    from hw_radar.acquisition.sources.goharddrive import CATEGORY_URL
+
+    assert CATEGORY_URL.endswith("/3-5-inch-Desktop-SATA-IDE-SCSI-SAS-Hard-Drive-s/3.htm")
