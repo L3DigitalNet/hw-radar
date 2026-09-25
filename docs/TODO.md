@@ -63,15 +63,20 @@ Instructions for AI agents:
   overdue units bound as the `apify_poll_tick` defaults; counted attempts with delete-attempt
   cap → `delete_failed`; terminal-evidence-first abort/confirm; the ED-19 404 rule behind
   `HW_RADAR_APIFY_DELETE_404_IS_ABSENT`; `provider_run.orphaned_start_at` in `0021`).
-  **Next (Slice D core):** D9; Apify push/build/run (none has occurred yet). E sets the
-  write-once `final_charge_op_at` at the later of the import-terminal and storage-deleted
-  commits (neither barrier writes it yet) and trips the latch on `delete_failed` at the cap and
-  on `orphaned_start_at`; F5a registers the synthetic site's `ActorRunSpec` in `jobs.RUN_SPECS` (empty in
-  production, so every `apify` source is refused `no_run_spec`); E5 replaces `BUDGET_ADMISSION`
-  and trips the latch on `stage_detail.start_mismatch` / `restart_count` and records probe
-  budget denials as ledger rows (D12 only logs them). Open: the start job does not yet refuse
-  a new FULL start while a previous run of the same scope is outstanding (only PROBE runs have
-  the one-outstanding rule, D12).
+  **Slice D (core) closed 2026-09-25 (D9):** verifier pass at `4ba8dce` — 10/11 acceptance
+  bullets hold; the storage-deadline bullet holds with the plan's accepted exceptions (a lost
+  start response has no storage ids to delete, residual R21 + E latch; `delete_failed` at the
+  attempt cap; overdue cleanup *starts* at the deadline). No production path can start a live
+  run. Live Actor runs remain owner-gated (scoped runtime token, Slice E admission, operator
+  reservation before any build). Remaining hand-offs to E/F5a: E sets the write-once
+  `final_charge_op_at` at the later of the import-terminal and storage-deleted commits and trips
+  the latch on `delete_failed` at the cap, `orphaned_start_at`, `stage_detail.start_mismatch`,
+  and `restart_count`; E5 replaces `BUDGET_ADMISSION` and records probe budget denials as ledger
+  rows (D12 only logs them); F5a registers the synthetic site's `ActorRunSpec` in
+  `jobs.RUN_SPECS` (empty in production, so every `apify` source is refused `no_run_spec`). Open:
+  the start job does not yet refuse a new FULL start while a previous run of the same scope is
+  outstanding (only PROBE runs have the one-outstanding rule, D12). Apify push/build/run: none
+  has occurred yet.
 - [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
   initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential

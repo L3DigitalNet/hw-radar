@@ -21,7 +21,7 @@
   2026-08-16): Approach-A evaluator, `EvalReport`, `ms1_ratification_gate`, `harvest_corpus`. The
   live harvest/label-draft/audit/ratification/ADR-0019 flip remain the deferred owner-in-the-loop
   step; `tests/db/test_ratification_corpus.py` skips until it lands.
-- Full gate @c31a6d4: 1242 passed/1 skip, 96% cov; Actor 67 passed, 99%; pip-audit clean (`--skip-editable`).
+- Full gate @4ba8dce (D11 leg, integrated): 1546 passed/1 skip, 96% cov; Actor 75 passed, 99%; pip-audit clean (`--skip-editable`).
 - **MS-2 multi-category watch-core plan converged at revision 8**
   (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`). Eight-round Codex
   delegate review lineage: r1-r4 converged rev 4 (session 1); r5 `0469e098` REVISION NEEDED (5) ->
@@ -40,14 +40,21 @@
   `EVALUATOR_VERSION` is `ms2c.2`; implementation-driven clarifications recorded in the plan.
 - **D-prep code complete on `dev`:** D3 collector client; D1 Actor project
   `actors/hw-radar-synthetic-collector` + contract schemas + `classify_run` + CI Actor gates. No
-  Apify push/build/run has occurred. Open: `ProviderRunEvidence.truncation_reason` (MS2-D-11) not
-  yet added; private-helper coupling in `eligibility/service.py`/`shortlist.py` (drift-tested).
+  Apify push/build/run has occurred. Open: private-helper coupling in `eligibility/service.py`/`shortlist.py` (drift-tested).
   gate-runner verified. **Deployed 2026-09-25** (`ac8d608` run 36078378772; now `531916e`, bug 001 fixed): 0018-0020
   applied, sources disabled, no Actor run; evidence in `docs/handoff/deployed.md`.
 - Battery @62e670b green: 1226 passed/1 expected skip, 96% coverage, pip-audit clean; Actor
   project 64 passed, 99% coverage. Migrations empty->head and head->0017->head both OK; A0 oracle
   unchanged. Verifiers: Slice B C1-C9, Slice C/D-prep V1-V10 all CONFIRMED. Post-battery hardening
   (complete-report count checks, Actor wall-clock deadline) landed after it; targeted gates green.
+- **Slice D (core) complete on `dev` 2026-09-25 (`4ba8dce`, not deployed):** plan revisions
+  10–11 (entry-gate + Codex resolution check; owner accepted residual R38); D1 follow-up (Actor
+  wire-byte cap), D2 schema `0021` (undeployed), D3 client follow-up, D4 import provider, D10
+  durable staged import (transactional local path), D5 start job + `apify-poll` selectors, D6–D8
+  AC-4/5/6 fixture proofs, D11 storage cleanup, D12 provider-dispatched probes. Verifier: 10/11
+  acceptance bullets hold, the storage-deadline bullet with the plan's accepted exceptions (R21).
+  Production remains deny-all (`DenyAllAdmission`, empty `RUN_SPECS`, `HW_RADAR_APIFY_ENABLED`
+  false). No Apify push/build/run has occurred. Next: Slice E (budget ledger/admission), then F5a.
 - **Owner decisions 2026-09-25 (OQ25–OQ29 resolved):** Apify credential split — unscoped
   operator key `secret/apps/hw-radar/agent/apify`, scoped runtime token pending; $5.00/cycle
   external-liability bound; no new non-first-party retention class; MS-2 exits on the

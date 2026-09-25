@@ -5064,6 +5064,20 @@ the then-current code. D-prep (D1, D3) is not gated.
     only logged until E records it as a ledger row.
 - **D9 — Close-out.** This runs last in D (core). Gate; TODO/STATUS. Record
   that live Actor runs remain owner-gated.
+  - *Landed 2026-09-25 (`4ba8dce`).* A read-only verifier pass held 10 of the
+    11 acceptance bullets below; the storage-deadline bullet holds with the
+    exceptions this plan already accepts: a start whose response was lost has no
+    storage ids, so selector 3 marks `orphaned_start_at` and rejects the import
+    without deleting (R21, E latch); a row reaching `…_MAX_DELETE_ATTEMPTS` becomes
+    `delete_failed` (E latch, operator-visible); and overdue cleanup begins at
+    the deadline rather than completing by it. Renamed tests: the Actor's
+    `test_byte_cap_is_cumulative_across_responses` and
+    `test_byte_cap_counts_compressed_raw_bytes` are covered by
+    `test_byte_count_is_run_wide_across_responses_including_failed_ones` and the
+    `compressed-*` cases of
+    `test_byte_cap_counts_wire_bytes_and_stops_on_first_crossing_chunk`. D11
+    asserts the reject reasons D10 names (`storage_deadline_passed`,
+    `content_past_ttl`). Live Actor runs remain owner-gated.
 
 **Acceptance:**
 - AC-4, AC-5, and AC-6 are proven against fixtures.
