@@ -1,29 +1,58 @@
 # Dependabot configuration.
 # See the uv-strict-python security-setup reference for advanced options.
+#
+# Branch model: version-update PRs target `dev` (the integration branch; `main`
+# advances only by a dev->main merge-commit PR). Security-update PRs still open
+# against the default branch (`main`) — GitHub ignores `target-branch` for them —
+# so a security PR is landed on `dev` (cherry-pick, author preserved) and
+# closed with a pointer rather than merged into `main` directly.
+#
+# Both `dev` and `main` require GitHub-verified signatures. Dependabot's
+# commits (committer "GitHub") and GitHub's merge / update-branch commits
+# are verified, so neither branch rule blocks this automation.
 
 version: 2
 updates:
-  # Python dependencies (pyproject.toml / uv.lock)
-  - package-ecosystem: pip
-    directory: /
+  # Python dependencies. The `uv` ecosystem (not `pip`) is required for
+  # uv-managed projects: a `pip` entry edits pyproject.toml without refreshing
+  # uv.lock, so every such PR failed CI's `uv sync --locked` (PRs #16/#19).
+  # `/actors/*` covers each self-owned Apify Actor project (separate uv.lock).
+  - package-ecosystem: uv
+    directories:
+      - /
+      - /actors/*
+    target-branch: dev
     schedule:
       interval: weekly
     # 7-day cooldown: don't update packages published < 7 days ago
     # Mitigates supply chain attacks via malicious updates.
     cooldown:
       default-days: 7
-    # Group minor/patch updates to reduce PR noise.
+    # Group routine updates to reduce PR noise. The uv ecosystem does not support
+    # `dependency-type` grouping, so the dev-tool group is matched by name; every
+    # other minor bump (runtime deps included) arrives as its own PR for review.
     groups:
       dev-dependencies:
-        dependency-type: development
+        patterns:
+          - basedpyright
+          - coverage
+          - django-types
+          - pip-audit
+          - pytest
+          - pytest-django
+          - ruff
+          - syrupy
+          - types-*
+          - vcrpy
         update-types: [minor, patch]
-      production-dependencies:
-        dependency-type: production
+      patch-updates:
+        patterns: ["*"]
         update-types: [patch]
 
   # GitHub Actions (keeps the SHA-pinned setup-uv current)
   - package-ecosystem: github-actions
     directory: /
+    target-branch: dev
     schedule:
       interval: weekly
     cooldown:
