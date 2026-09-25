@@ -7108,6 +7108,27 @@ follow-up R12-01).**
      without a committed closing read (revision 8).
   6. Record every §21 item's live evidence (see *Synthetic Actor proof
      acceptance*) in STATUS.
+  **F5a landing (s5, 2026-09-25).** Executed in a non-production proof
+  environment; production untouched. Evidence:
+  `docs/evidence/2026-09-25-f5a-synthetic-proof.md`. Build `1.0.1` via the REST
+  API (15 files from the reviewed commit, so the `apify push` upload-scope
+  question did not arise); eleven admitted runs covering every fault mode, all
+  classified as designed, with zero delistings; live duplicate import made no
+  HTTP call; live Actor ↔ local switch kept identity and history (AC-4, AC-5
+  live); Apify rejected a schema-invalid input with HTTP 400 before any run
+  existed; the R25 probe recorded 403 for inaccessible storage, so the proof
+  environment set `…_DELETE_404_IS_ABSENT=true`. Measurement: run usage is not
+  final at `finishedAt` (about 40% low at 0 s, stable by 30 s; one failed run
+  read 3× low at 8 s), so `…_RUN_USAGE_SETTLEMENT` stays `bound`; dataset reads
+  bill per item returned (as the estimator assumes); the platform's `INPUT`
+  write is billed to the run, which uses up `…_MAX_KV_WRITES=2` (finding F-01,
+  owner decision on raising it to 3); API calls bill through external transfer
+  (R38 observed, still accepted). Account usage rose $0.00527 for the whole
+  proof. The late-older-import scenario is prevented by construction
+  (`scope_run_outstanding`) and keeps its fixture proof. Step 5's drain and
+  handoff remain before any production environment admits paid work this
+  cycle. The kill switch was enabled only per command; the proof environment's
+  configuration keeps it off.
 - **F5b — Production Actor-backed merchant source (owner-gated: OQ24, R1).**
   Not an MS-2 exit condition (revision 9, OQ28); OQ24 may remain open after
   MS-2 closes. After the owner answers OQ24 for a candidate with an `eligible`

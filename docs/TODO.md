@@ -30,18 +30,11 @@ Instructions for AI agents:
   `prepare_run_input`'s `extra=forbid`, but a dedicated nested-key guard is a cleaner fix (low).
 - [ ] Add listing-row fields (`title_raw`, `condition_label_raw`, `is_international`) to the
   eligibility evaluation binding; not currently read by the evaluator (verifier finding, low).
-- [ ] **Blocked on owner:** create the scoped runtime Apify token (OpenBao
-  `secret/apps/hw-radar/apify`, env `HW_RADAR_APIFY_TOKEN`); the unscoped operator/deploy key
-  exists at `secret/apps/hw-radar/agent/apify` (OQ25 resolved 2026-09-25). Permissions needed:
-  run Hardware Radar-owned Actors, read their runs/default storages, **delete** their run storages
-  (MS2-D-33 cleanup), and ideally read `/users/me/limits` + `/users/me/usage/monthly` (MS2-D-40).
-  The empty private Actor resource now exists (2026-09-25), so the token's resource-specific
-  permissions can name it; Apify scopes only to existing resources.
-  **2026-09-25 finding:** the owner-created scoped token authenticates but gets `403
-  insufficient-permissions` on `/v2/users/me`, `/users/me/limits`, and `/users/me/usage/monthly`,
-  and `404` on its own Actor (GET). **Resolved the same day** (owner decision, OQ30): the
-  runtime reads no account state (plan rev 12, MS2-D-48, implemented on `dev`); the token still
-  needs **Read** on the Actor.
+- [x] Scoped runtime Apify token created by the owner (OpenBao `secret/apps/hw-radar/apify`, env
+  `HW_RADAR_APIFY_TOKEN`), restricted to the Hardware Radar Actor (`Read`, `Run`, `List runs`,
+  `Manage runs`, restricted access, default run storages). No account permission is needed: the
+  runtime reads no account state (OQ30, plan rev 12, MS2-D-48). Capability probe recorded
+  2026-09-25 (403 for inaccessible storage, 404 for nonexistent).
 - [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
   saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
   Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.
@@ -58,39 +51,22 @@ Instructions for AI agents:
   categories and both local + self-owned-Apify provider paths. Measure cost, completeness,
   identifier quality, condition/shipping coverage, freshness, and failure recovery before adding
   breadth.
-- [ ] Coordinate one self-owned private Hardware Radar Actor as the integration proof. **Owned
-  and managed in this repo** under `actors/` (not `apify-actors`, session-2 owner decision). Keep
-  Actor output observation-only: no Django model imports, no production DB credentials, no
-  canonical matching/persistence.
-  **F5a prerequisites (all unmet; production stays deny-all until every one holds):**
-  1. Owner: scoped runtime token (item above), including the Actor **Read** grant on the
-     Hardware Radar Actor (the 2026-09-25 token got `404` on its own Actor). The runtime reads no
-     account state (MS2-D-48), so the token needs no account permission; the operator key is
-     never rendered to a runtime. Keep the account usage limit at or below the prepaid credit.
-  1a. Operator verification (MS2-D-48, before enabling): with the operator key, outside the
-     application, read the account's limits and plan and set the five settings
-     `HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR` (the observed `monthlyUsageCycle.startAt`),
-     `…_ACCOUNT_LIMIT_USD` (lesser of the usage limit and the prepaid credit),
-     `…_ACCOUNT_BASE_PRICE_USD`, `…_ACCOUNT_DATA_RETENTION_DAYS`, and `…_ACCOUNT_VERIFIED_ON`;
-     record the check (date, values, no identifiers) in STATUS. None has a default and none goes
-     in a committed environment file; unset denies `cycle_unknown` / `account_state_unobservable`.
-  2. Operator: set the eight unit prices from `apify.com/pricing` (`…_USD_PER_CU`,
-     `…_DATASET_{READS,WRITES}_USD_PER_1000`, `…_DATASET_STORAGE_USD_PER_GB_HOUR`,
-     `…_KV_{READS,WRITES}_USD_PER_1000`, `…_KV_STORAGE_USD_PER_GB_HOUR`,
-     `…_TRANSFER_USD_PER_GB`) plus `…_MARGIN`, `…_MAX_TIMEOUT_S`, `…_MAX_KV_WRITES`,
-     `…_MAX_KV_BYTES` (≤ `…_MAX_API_RESPONSE_BYTES`), `…_STORAGE_MAX_LIFETIME` (≥ 31-day
-     retention), `…_LEDGER_ID`, `…_ACTOR_ID`; confirm `…_ACTOR_BUILD`/`…_ACTOR_NAME`.
-  3. Deploy `0021`/`0022`, then in the non-production proof environment only run
-     `apify_synthetic_setup` (disabled `apify` SourceConfig, never scheduled). The code is in:
-     the synthetic `RUN_SPECS` entry stays inert (`no_run_spec`) until
-     `HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT` is set, and `apify_smoke --fixture-commit <sha>`
-     (default build `candidate`) starts, imports, and reports one run through the ledger.
-     Live AC-4 switch code is in too: `apify_synthetic_setup --provider local|apify` and
-     `synthetic_collect_local` (local adapter over the same pinned pages; set the commit setting
-     to the smoke's `--fixture-commit`).
-  4. Operator: `apify_operator_reserve --kind build` before `apify push`/build; settle it.
-  5. Owner runs `apify_ledger_claim` (it materializes the configured cycle); set
-     `HW_RADAR_APIFY_ENABLED=true`; then the capability probe (R25).
+- [x] Coordinate one self-owned private Hardware Radar Actor as the integration proof. **F5a
+  executed 2026-09-25** in a non-production proof environment (evidence:
+  `docs/evidence/2026-09-25-f5a-synthetic-proof.md`): build `1.0.1`, eleven admitted runs over every
+  fault mode, zero delistings, live AC-4 switch, $0.00527 total account usage.
+- [ ] **Owner decision (F5a finding F-01):** raise `HW_RADAR_APIFY_MAX_KV_WRITES` from 2 to 3 before
+  production; the platform's `INPUT` write is billed to the run, so 2 leaves no spare unit.
+- [ ] F5a step 5 (MS2-D-45): before any production environment admits paid Apify work in the
+  2026-09-05 cycle, keep the proof environment's ticks running until its correction monitoring
+  closes (7-day window), confirm it drained, then `apify_ledger_handoff`. Until then the proof
+  environment holds the cycle's ledger authority.
+- [ ] Production Apify runtime rendering: production secrets come from the Hetzner-side OpenBao
+  peer through the CT's bao-agent template, not the workstation path; add the scoped runtime token
+  there and render `HW_RADAR_APIFY_TOKEN` only when production paid admission is intentionally
+  configured (with the account settings, prices, ledger authority, and `MAX_KV_WRITES` decision).
+- [ ] Promote the synthetic Actor build to the `prod` tag (MS2-D-43 *Deploy*) only if a production
+  smoke is ever wanted; the synthetic Actor is not a production collection source.
 - [x] Keep provider identity separate from marketplace/source identity: proven by D7
   (`test_provider_switch_preserves_identity_history_and_watch_state`, AC-4).
 - [ ] Run the existing MS-1e owner-in-the-loop ratification step for the drive matcher before

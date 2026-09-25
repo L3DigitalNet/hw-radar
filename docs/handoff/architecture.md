@@ -43,8 +43,10 @@ Last updated: 2026-09-25
   drive seeds.
 - `actors/<name>/`: Hardware Radar's own Apify Actors, each a separate uv
   project gated by `scripts/check.py` and CI. First and only Actor so far:
-  `actors/hw-radar-synthetic-collector` (code complete; no Apify
-  push/build/run has occurred).
+  `actors/hw-radar-synthetic-collector` (deployed privately, build `1.0.1`;
+  F5a proof runs 2026-09-25 in a non-production environment only). A local
+  `synthetic` adapter over the same pinned fixtures supports the live
+  provider-switch proof; the site stays disabled and never scheduled.
 - Runtime jobs: APScheduler poller service (UTC-pinned), daily
   maintenance/recovery jobs, monthly refdata refresh, and dead-man heartbeat
   support.
@@ -57,8 +59,9 @@ Last updated: 2026-09-25
   are pending, so all marketplace sources ship disabled)
 - MS-2 multi-category watch core (re-baselined by ADR-0021/ADR-0022, replacing
   the old MS-2a scoring-substrate sequencing): Slices A–E complete on `dev`
-  (migrations 0021/0022 undeployed); Slice F (pilot sources, F5a synthetic
-  Actor proof) remains, gated on the owner prerequisites in `docs/TODO.md`;
+  (migrations 0021/0022 undeployed); plan rev 12 (no runtime account reads)
+  landed; F5a synthetic Actor proof executed 2026-09-25; Slice F pilot sources
+  (F1–F3) and the owner-gated F6 remain;
   OQ25–OQ29 resolved 2026-09-25, OQ24 (production merchant source) still owner-
   gated. ADR-0011's detailed drive-scoring design is accepted but deferred from
   the immediate critical path.

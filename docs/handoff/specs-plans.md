@@ -20,7 +20,7 @@ Last updated: 2026-09-25 (session 4: plan revs 9–11, Slices D and E complete o
 
 | Artifact | Role | Status |
 | --- | --- | --- |
-| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 11 (+ landing notes). Slices A–E complete on `dev` (D9/E7 verifier passes recorded). No Apify push/build/run yet. Next: Slice F — F5a synthetic Actor proof once the owner prerequisites in `docs/TODO.md` hold. |
+| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 12 (+ landing notes). Slices A–E complete on `dev`; rev 12 (no runtime account reads, OQ30) implemented; F5a synthetic Actor proof executed 2026-09-25 (evidence `docs/evidence/2026-09-25-f5a-synthetic-proof.md`). Next: F1–F3 pilot sources; F6 owner-gated. |
 | `docs/research/2026-09-24-ms2-code-dependency-map.md` | Code dependency map supporting the MS-2 plan | Active; keep alongside the plan |
 | `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` | Advanced HDD/SSD scoring design | Revision 14 owner-accepted; **deferred from immediate milestone sequencing by ADR 0022**; retain for later category-local drive scoring |
 | `docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md` | Deferred HDD/SSD scoring-substrate plan | Revision 4 reviewed; **do not execute now**. Rebase schema/migration assumptions before any future owner-authorized activation. |

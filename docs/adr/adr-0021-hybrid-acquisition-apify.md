@@ -370,3 +370,20 @@ therefore chose to drop runtime account reads. The following points are now bind
 The owner accepts one consequence: Hardware Radar can no longer see the shared account's other
 workloads' actual spend, only Apify's hard cap. The residual risks, cycle drift and stale
 configured values, are tracked as R39 in the MS-2 plan.
+
+## Amendment — 2026-09-25 (s5): F5a empirical findings
+
+The first real Actor proof (plan task F5a; evidence in
+[`docs/evidence/2026-09-25-f5a-synthetic-proof.md`](../evidence/2026-09-25-f5a-synthetic-proof.md))
+confirmed the decision's premises and adds these facts. The earlier text stays as the record of what was
+assumed.
+
+**14. Measured provider behavior.** (a) The scoped runtime token now exists, restricted to the Hardware
+Radar Actor (`Read`, `Run`, `List runs`, `Manage runs`, restricted access, default run storages); it
+receives 403 for inaccessible storage and 404 for nonexistent storage. (b) Run usage is not final at
+`finishedAt` (about 40% low at 0 s, stable by 30 s), so settlement stays at the conservative bound.
+(c) Post-run retrieval is billed to the account, not the run: dataset reads bill per item returned, and
+API calls bill through external data transfer (R38, observed). (d) The platform's `INPUT` write is billed
+to the run as a key-value write. (e) Apify rejects a schema-invalid input with HTTP 400 before any run
+exists. (f) A synthetic run costs about $0.0002 against a $0.0348 reservation; the whole proof (one
+build, eleven runs, all reads and probes) raised account usage by $0.00527.

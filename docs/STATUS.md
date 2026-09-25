@@ -34,23 +34,24 @@
   `apify_spend_report` (AC-7), `LedgerAdmission` bound in production, `budget_paused` in the
   shortlist, ledger-settled probe (E8). Verifier: 16/16 acceptance claims hold; its two crash
   windows are fixed (`40b7295`). FULL starts are refused while a same-scope run is outstanding.
-- **MS-2 plan revision 12 (R25, MS2-D-48) implemented on branch `s5-e9`:** the runtime reads no
-  Apify account state; the billing cycle comes from `HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR` and the
-  account limits from four operator-verified settings; a 402 start trips `account_limit_refused`.
-- **Production cannot start or pay for an Actor run:** `RUN_SPECS` empty, kill switch off, no
-  Actor id, unit prices unset. No Apify push/build/run has occurred. F5a prerequisites are in
-  `docs/TODO.md`. 2026-09-25 (F5a preflight): the empty private Actor resource
-  `hw-radar-synthetic-collector` was created (operator key, REST, limited permissions, no
-  source, 0 builds/runs) so the runtime token can be scoped to it; F5a waits on that token.
-- Full gate @40b7295: 1902 passed/1 skip, 95% cov; Actor 75 passed, 99%; pip-audit clean
-  (`--skip-editable`). Open: private-helper coupling in `eligibility/service.py`/`shortlist.py`
-  (drift-tested).
+- **MS-2 plan revision 12 (R25, OQ30, MS2-D-48) on `dev`:** the runtime reads no Apify account
+  state; the cycle comes from `HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR` and four operator-verified
+  account settings; a 402 start trips `account_limit_refused`. Synthetic setup/smoke/local-switch
+  commands landed (`10062f8`, `7bc1f76`).
+- **F5a executed 2026-09-25 (non-production proof env; production untouched):** build `1.0.1` (REST,
+  15 files) + eleven admitted runs over every fault mode, all classified as designed; 0 delistings;
+  live duplicate import 0 HTTP calls; live Actor↔local switch kept identity/history (AC-4/5 live);
+  Apify 400 on invalid input; 403-vs-404 probe passed. Usage not final at finish (keep `bound`);
+  +$0.00527 account usage for the whole proof. Evidence: `docs/evidence/2026-09-25-f5a-synthetic-proof.md`.
+- **Production still cannot start or pay for an Actor run:** migrations `0021`/`0022` undeployed; no
+  Actor id, prices, account settings, ledger authority, or token rendered there; kill switch off.
+- Gate @7bc1f76 leg: 2016 passed/1 skip, 95% cov; Actor 75 passed, 99%; pip-audit clean.
 - **Owner decisions:** session 2 (2026-09-24) — HR Actors live in this repo under `actors/`;
   OQ23 (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12, no PAYG). 2026-09-25 — OQ25–OQ29
-  (unscoped operator key at `secret/apps/hw-radar/agent/apify`, scoped runtime token pending;
+  (unscoped operator key at `secret/apps/hw-radar/agent/apify`; scoped runtime token created;
   $5.00/cycle external liability; no non-first-party retention class; MS-2 exits on F5a;
-  $1.00/cycle operator allowance); R38 accepted. Open: OQ24, MS-1e ratification, category
+  $1.00/cycle operator allowance); R38 accepted; OQ30 (no runtime account reads). Open: OQ24, MS-1e ratification, category
   corpus gate. See `docs/resolved-questions.md`.
-- Verified account state (2026-09-24): Apify STARTER, `maxMonthlyUsageUsd` 19, billing cycle
-  5th 00:00Z -> 4th 23:59:59Z, no settings changed.
+- Verified account state (2026-09-25, operator key, outside the app): Apify STARTER, prepaid credit
+  $19, usage limit $19, base price $19, cycle anchor 2026-09-05T00:00Z, retention 31 d; no settings changed.
 - Project Standards Catalog 5 pinned to 5.29.0 (Agent Handoff 1.17).

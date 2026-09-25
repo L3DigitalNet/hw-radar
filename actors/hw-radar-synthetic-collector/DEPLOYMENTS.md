@@ -6,8 +6,9 @@ recorded here.
 
 | Date (UTC) | Git commit | Actor version | Build number | Build tag | Operator reservation | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
+| 2026-09-25 | `b21471f` | 1.0 | 1.0.1 | candidate | build reservation ($0.4231; actual $0.0033) | REST upload (15 files; tests/fixtures excluded), `useCache=false`; F5a proof builds |
 
-No build has been pushed. D-prep (plan task D1) performs no Apify push, build,
+(D-prep, historical) No build had been pushed. D-prep (plan task D1) performs no Apify push, build,
 or run; the first push is plan task F5a.
 
 2026-09-25: the private Actor resource was created empty through the REST API

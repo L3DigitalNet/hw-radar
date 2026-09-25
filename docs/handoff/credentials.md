@@ -22,7 +22,8 @@ Never store credential values in this repository.
   Read covers `GET /v2/actor-runs/{id}` polls and the `GET /v2/actor-builds/{id}` build reads
   made by the poll job's runtime client, and the 2026-09-25 pre-probe got 404 on both without it.
   It also needs read and delete on those runs' default storages for MS2-D-33 cleanup. The delete
-  403-versus-404 behavior is still to be probed (R25). It needs **no** account limits or usage
+  403-versus-404 behavior was probed 2026-09-25 (403 for inaccessible storage, 404 for nonexistent;
+  R25). The owner's grant also includes `List runs` and `Manage runs` (abort on a start mismatch). It needs **no** account limits or usage
   permission: those reads return 403 for scoped tokens, and the runtime makes none (MS-2 plan
   MS2-D-48, [OQ30](../resolved-questions.md#oq30--runtime-apify-account-reads-r25)). Production
   rendering is deferred until Slice E live admission is ready. `HW_RADAR_APIFY_ENABLED` defaults
