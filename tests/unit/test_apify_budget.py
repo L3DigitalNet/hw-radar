@@ -1035,3 +1035,16 @@ def test_every_derived_cycle_is_at_most_744_hours(day: int) -> None:
         assert start.day == day
         assert end - start <= timedelta(hours=budget.FULL_CYCLE_HOURS)
         now = end + timedelta(milliseconds=1)
+
+
+def test_old_verification_does_not_affect_admission() -> None:
+    # MS2-D-48 / owner R39: ACCOUNT_VERIFIED_ON is evidence, not an expiry. A
+    # verification six cycles old still admits; only the report warns.
+    later = datetime(2027, 3, 10, tzinfo=UTC)
+    anchor = CFG.billing_cycle_anchor
+    assert anchor is not None and CFG.account_verified_on == anchor.date()
+    bounds = budget.billing_cycle_bounds(anchor, later)
+    assert bounds is not None
+    current = snap(cycle_start=bounds[0], cycle_end=bounds[1])
+    assert decide(state=ledger(now=later, snapshot=current)).admitted
+    assert budget.account_setting_problem(CFG, later) is None

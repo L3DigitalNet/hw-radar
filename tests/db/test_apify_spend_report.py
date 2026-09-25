@@ -377,3 +377,31 @@ def test_command_prints_report_read_only_and_limits_cycles() -> None:
     )
     seeded.c2.refresh_from_db()
     assert seeded.c2.account_read_count == 0
+
+
+# ── E9.6: verification-age warning (owner R39 point 1; MS2-D-48) ────────────
+
+
+def _verification_warnings(text: str) -> list[str]:
+    return [line for line in text.splitlines() if "WARNING" in line and "VERIFIED_ON" in line]
+
+
+@pytest.mark.django_db
+def test_report_warns_when_account_verification_predates_current_cycle() -> None:
+    _seed()
+    # Verified on the anchor day (C1); NOW_C2 is in C2, which starts 2026-10-05.
+    _, text = _report()
+    warnings = _verification_warnings(text)
+    assert len(warnings) == 1
+    assert "HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON" in warnings[0]
+    assert "2026-09-05" in warnings[0] and "2026-10-05" in warnings[0]
+    # In the current cycle's header, not in the older cycle's section.
+    assert warnings[0] in _section(text, "Billing cycle 2026-10-05T00:00:00Z")
+
+
+@pytest.mark.django_db
+def test_report_has_no_verification_warning_when_verified_this_cycle() -> None:
+    _seed()
+    fresh = config(budget={"account_verified_on": (C2_START + DAY).date()})
+    _, text = _report(cfg=fresh)
+    assert _verification_warnings(text) == []

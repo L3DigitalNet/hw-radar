@@ -6,7 +6,9 @@ is organised by billing cycle, the authoritative budget period (MS2-D-17):
 each recorded cycle gets its bounds, the project allocation, Hardware Radar's
 consumption split into settled, outstanding, and monitoring debits, the
 remaining project budget, the configured account state (anchor, limit, P,
-base price, retention, verification date), the declared external liability
+base price, retention, verification date, and a non-blocking warning in the
+current cycle's header when that date predates the cycle's start), the
+declared external liability
 and the external-liability headroom `P - HR_cycle - E`, the ledger authority,
 operator consumption by kind, and per-source and per-provider totals. The
 current cycle derived from the configured anchor is printed even before
@@ -219,6 +221,9 @@ class CycleReport:
     account: AccountState
     external_liability: Figure
     external_headroom: Figure
+    # E9.6: set only on the current cycle, when ACCOUNT_VERIFIED_ON predates
+    # its start. Informational: admission never reads it.
+    verification_warning: str | None
     authority: str
     operator_by_kind: dict[str, Totals]
     operator_allowance: Figure
@@ -461,6 +466,16 @@ def _cycle_report(
         if external is not None and external.is_finite() and external >= 0
         else Figure(None, str(DenialReason.EXTERNAL_LIABILITY_UNBOUNDED))
     )
+    verification_warning = None
+    verified = account.verified_on
+    if is_current and verified is not None and verified < y_start.date():
+        # Owner R39: no expiry, warn only. decide_admission, ensure_cycle, and
+        # invariant_breaches never consult the verification's age.
+        verification_warning = (
+            f"WARNING: HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON {verified.isoformat()} predates"
+            f" this cycle's start {y_start.date().isoformat()}; re-verify the configured"
+            " account state (non-blocking, MS2-D-48)"
+        )
     # The external-liability check's remaining room: P - HR_cycle - E.
     headroom = _unavailable(account.usable, external_fig) or Figure(
         (account.usable.value or Decimal(0)) - hr_cycle - (external_fig.value or Decimal(0))
@@ -496,6 +511,7 @@ def _cycle_report(
         account=account,
         external_liability=external_fig,
         external_headroom=headroom,
+        verification_warning=verification_warning,
         authority=authority_text,
         operator_by_kind={
             k: _totals(by_kind[k], kind_rows[k]) for k in sorted(set(by_kind) | set(kind_rows))
@@ -722,8 +738,10 @@ def _render_cycle(c: CycleReport) -> list[str]:
         allocation += f" (recorded at cycle open: {_dollars(c.recorded_allocation)})"
     acct = c.account
     retention = f"{acct.retention_days} days" if acct.retention_days is not None else None
-    lines = [
-        f"Billing cycle {_ts(c.cycle_start)} -> {_ts(c.cycle_end)}{marker}",
+    lines = [f"Billing cycle {_ts(c.cycle_start)} -> {_ts(c.cycle_end)}{marker}"]
+    if c.verification_warning is not None:
+        lines.append(f"  {c.verification_warning}")
+    lines += [
         f"  project allocation (A):          {allocation}",
         f"  consumed (settled usage):        {_dollars(c.consumed_settled)}",
         f"  outstanding reservations:        {_dollars(c.outstanding)}",
