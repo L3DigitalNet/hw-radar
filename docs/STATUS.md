@@ -36,7 +36,9 @@
   windows are fixed (`40b7295`). FULL starts are refused while a same-scope run is outstanding.
 - **Production cannot start or pay for an Actor run:** `RUN_SPECS` empty, kill switch off, no
   Actor id, unit prices unset. No Apify push/build/run has occurred. F5a prerequisites are in
-  `docs/TODO.md`.
+  `docs/TODO.md`. 2026-09-25 (F5a preflight): the empty private Actor resource
+  `hw-radar-synthetic-collector` was created (operator key, REST, limited permissions, no
+  source, 0 builds/runs) so the runtime token can be scoped to it; F5a waits on that token.
 - Full gate @40b7295: 1902 passed/1 skip, 95% cov; Actor 75 passed, 99%; pip-audit clean
   (`--skip-editable`). Open: private-helper coupling in `eligibility/service.py`/`shortlist.py`
   (drift-tested).

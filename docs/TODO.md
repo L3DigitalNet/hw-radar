@@ -35,6 +35,8 @@ Instructions for AI agents:
   exists at `secret/apps/hw-radar/agent/apify` (OQ25 resolved 2026-09-25). Permissions needed:
   run Hardware Radar-owned Actors, read their runs/default storages, **delete** their run storages
   (MS2-D-33 cleanup), and ideally read `/users/me/limits` + `/users/me/usage/monthly` (MS2-D-40).
+  The empty private Actor resource now exists (2026-09-25), so the token's resource-specific
+  permissions can name it; Apify scopes only to existing resources.
 - [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
   saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
   Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.
