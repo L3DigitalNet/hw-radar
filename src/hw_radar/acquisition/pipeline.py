@@ -53,6 +53,7 @@ from pydantic import ValidationError
 from hw_radar.acquisition import fx
 from hw_radar.acquisition.classify import classify_exception, classify_response
 from hw_radar.acquisition.contracts import (
+    SCOPE_OUTCOMES_KEY,
     CollectionProvider,
     DelistScope,
     ListingResolver,
@@ -408,7 +409,7 @@ async def run_collection(
             "provider": evidence.model_dump(mode="json"),
         }
         if scope_outcomes is not None:
-            run.detail_json["scopes"] = scope_outcomes
+            run.detail_json[SCOPE_OUTCOMES_KEY] = scope_outcomes
         if batch.scrapy_stats:
             run.detail_json["scrapy_stats"] = _filter_scrapy_stats(batch.scrapy_stats)
         run.status = RunStatus.SUCCESS

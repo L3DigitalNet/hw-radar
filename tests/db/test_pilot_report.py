@@ -28,6 +28,7 @@ from django.utils import timezone
 from hw_radar.acquisition.apify.provider import (
     _raw_item,  # pyright: ignore[reportPrivateUsage] - pins the endpoint-prefix contract
 )
+from hw_radar.acquisition.contracts import SCOPE_OUTCOMES_KEY
 from hw_radar.acquisition.pilot_report import (
     APIFY_RAW_ENDPOINT_PREFIX,
     NO_DIRECT_COST,
@@ -75,9 +76,8 @@ APIFY = "pilotapify"
 GPU = f"{LOCAL}:gpu:q1"
 RAM = f"{LOCAL}:ram:q1"
 AGPU = f"{APIFY}:gpu:q1"
-# The per-scope list key is deliberately not one F1 is known to use: the
-# report must find the list structurally (see pilot_report._scope_entries).
-SCOPES_KEY = "scope_outcomes"
+# The pipeline's own key, so the report reads exactly what F1 writes.
+SCOPES_KEY = SCOPE_OUTCOMES_KEY
 
 
 def _site(key: str, provider: ProviderKind) -> SourceSite:

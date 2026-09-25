@@ -36,6 +36,10 @@ from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG
 # back. ParsedListing rejects it in `attrs` so the two can never disagree.
 CATEGORY_HINT_ATTR: Final = "category_hint"
 
+# F1: the ScraperRun.detail_json key under which the pipeline records one
+# outcome object per swept collection scope; pilot_report (F3) reads it.
+SCOPE_OUTCOMES_KEY: Final = "scopes"
+
 # MS2-D-12 collection scope key, "<site_key>:<category>:<query_id>". It is
 # provider-independent, so a local sweep and an Actor sweep of the same query
 # share one key and one continuity record. Cross-file contract: the Actor

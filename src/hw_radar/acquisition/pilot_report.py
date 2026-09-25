@@ -36,11 +36,11 @@ complete / runs. A run is *successful* when its data landed (local SUCCESS,
 remote FINALIZED); freshness gaps and failure recovery are measured between
 successful runs only.
 
-Per-scope local outcomes (F1): the pipeline's per-scope record key was not
-fixed when this module was written, so `_scope_entries` accepts any top-level
-detail_json list whose items are all objects carrying a "scope_key". Each entry
-may carry `completeness` (a RunCompleteness value) or a boolean `complete`, and
-an integer `pages`. A run with such a list counts once in each scope it swept.
+Per-scope local outcomes (F1): the pipeline records them under
+`detail_json["scopes"]` (contracts.SCOPE_OUTCOMES_KEY), one
+object per swept scope carrying "scope_key" and a boolean `complete` or a
+`completeness` value, plus an integer `pages`. A run with such a list counts
+once in each scope it swept.
 
 JSON schema (`schema` = "hw-radar/pilot-report/v1"; money is a decimal string,
 durations are seconds, timestamps ISO-8601, rates 0..1 floats; `null` always
@@ -120,7 +120,7 @@ from typing import Final, cast
 
 from django.db.models import Max
 
-from hw_radar.acquisition.contracts import CATEGORY_HINT_ATTR
+from hw_radar.acquisition.contracts import CATEGORY_HINT_ATTR, SCOPE_OUTCOMES_KEY
 from hw_radar.catalog.models import (
     ListingResolution,
     OfferSnapshot,
@@ -551,18 +551,17 @@ def _base_cost(provider: str) -> CostReport:
 def _scope_entries(detail: Mapping[str, object]) -> list[Mapping[str, object]] | None:
     """Return the run's per-scope outcome list, or None when none is recorded.
 
-    Deliberately structural rather than keyed: F1 adds the list in parallel
-    with this module and its key name was not fixed. Any top-level list whose
-    items are all objects carrying "scope_key" qualifies; an empty list does
-    not (a run that swept nothing records no scopes).
+    Reads the pipeline's `detail_json["scopes"]` (F1). A list whose items are
+    not all objects carrying "scope_key" is treated as not recorded rather than
+    guessed at; an empty list is too (a run that swept nothing records no scopes).
     """
-    for value in detail.values():
-        if not isinstance(value, list) or not value:
-            continue
-        items = cast("list[object]", value)
-        if all(isinstance(i, dict) and "scope_key" in i for i in items):
-            return [cast("Mapping[str, object]", i) for i in items]
-    return None
+    value = detail.get(SCOPE_OUTCOMES_KEY)
+    if not isinstance(value, list) or not value:
+        return None
+    items = cast("list[object]", value)
+    if not all(isinstance(i, dict) and "scope_key" in i for i in items):
+        return None
+    return [cast("Mapping[str, object]", i) for i in items]
 
 
 def _entry_outcome(entry: Mapping[str, object]) -> str | None:
