@@ -143,6 +143,10 @@ Also: Apify rejects a schema-invalid input itself — `POST …/runs` with missi
 
 Operator: build $0.4231 (reconciled at bound $0.4209 after the one-hour guard), inspections $0.0077 × 4 and probe
 $0.0024 (each reconciled at its envelope). Runtime: eleven run reservations at $0.0348 (+ $0.0022 monitoring),
-settled at their bound after the guard (`bound` mode returns no capacity). Correction monitoring stays open for
+each reconciled at the unmargined execution bound $0.0278 once an eligible read existed (runs 1–10 at 20:31Z,
+run 11 at 21:08Z; `bound` mode returns no capacity). Final spend report: settled $0.7599, outstanding $0.0000,
+monitoring $0.0264, remaining project budget $10.67 of $11.00, operator allowance remaining $0.5437, no overrun
+rows, no latch trips, one denial (`apify_disabled`, the intended kill-switch check). Ledger debits exceed the
+provider-measured spend (≈ $0.0052) by about 150×. Correction monitoring stays open for
 `…_CORRECTION_WINDOW_S` (7 days); per F5a step 5 the proof environment must drain and hand off before any
 production environment admits paid work in this cycle.
