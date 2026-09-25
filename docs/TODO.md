@@ -82,7 +82,7 @@ Instructions for AI agents:
 - [ ] Adopt Django 6.1 as its own gated change (Dependabot PR #19 closed: it could not update
   `uv.lock`). 6.0 mainstream support ended 2026-08-04; security fixes run to April 2027.
 - [ ] Confirm the first uv-ecosystem Dependabot run opens PRs against `dev` and that one merges
-  under the `dev` signed-commit rule (config `001a5b6` takes effect once it reaches `main`).
+  under the `dev` signed-commit rule (config `001a5b6` live on `main` since PR #27, `96ce005`).
 - [ ] Give the Seller table a retention policy before merchant usernames enter IR-002 redaction.
 - [ ] Decide the WD Purple recert opt-in question.
 - [ ] **Deferred:** MS-2a scoring-substrate execution

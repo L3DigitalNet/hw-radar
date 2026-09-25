@@ -4,11 +4,12 @@ Last updated: 2026-09-25
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `ac8d608` (PR #26,
-  includes PR #25), run 36078378772, succeeded 2026-09-25T08:50:08Z. The
+- Deploys run from `main` via the Deploy workflow. Latest: `96ce005` (PR #27;
+  CI/docs/build-bound only), run 36116766253, 2026-09-25T09:13:56Z. Before it,
+  `ac8d608` (PRs #25+#26) run 36078378772 at 08:50:08Z shipped the schema; the
   superseded `c728613` run 36077354704 was cancelled unapproved.
-- Host-verified after the run: `RELEASE` and `/healthz` (local + public) report
-  `ac8d608`, `database: true`; login 200; web, poller, bao-agent, nginx, and
+- Host-verified after each run: `RELEASE` and `/healthz` (local + public) report
+  the run's SHA, `database: true`; login 200; web, poller, bao-agent, nginx,
   PostgreSQL active, 0 restarts; no warning-level journal entries.
 - Migrations 0018-0020 applied 2026-09-25T08:50Z: spec satellites, category
   rows (`gpu`, `ram`, `cpu`, `nic`, `hba`, `motherboard`, `server` beside
@@ -23,7 +24,7 @@ Last updated: 2026-09-25
 - The production environment needs a reviewer approval per push to `main`; an
   unapproved run dies at GitHub's 30-day cap (production sat stale at MS-1b
   2026-07-05 until PR #20). The owner's account can approve via the
-  `pending_deployments` API (runs 34056023371, 36078378772).
+  `pending_deployments` API (e.g. runs 34056023371, 36078378772, 36116766253).
 
 ## Public-Safe Boundary
 
