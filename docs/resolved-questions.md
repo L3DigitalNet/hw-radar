@@ -49,6 +49,11 @@
     - [OQ22 — Retention class and `expires_at` policy for resolver-learned (`listing_derived`) `ProductAlias` rows](#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows)
     - [OQ23 — Apify paid-plan base fee vs the $20/month Hardware Radar ceiling](#oq23--apify-paid-plan-base-fee-vs-the-20month-hardware-radar-ceiling)
     - [OQ24 (part a) — First Actor proof uses a controlled synthetic source](#oq24-part-a--first-actor-proof-uses-a-controlled-synthetic-source)
+    - [OQ25 — Hardware Radar Apify credential and MCP tool scope](#oq25--hardware-radar-apify-credential-and-mcp-tool-scope)
+    - [OQ26 — External-liability bound for the shared Apify account](#oq26--external-liability-bound-for-the-shared-apify-account)
+    - [OQ27 — Retention class for non-first-party reference data](#oq27--retention-class-for-non-first-party-reference-data)
+    - [OQ28 — Can MS-2 exit on the synthetic proof alone?](#oq28--can-ms-2-exit-on-the-synthetic-proof-alone)
+    - [OQ29 — Operator allowance size](#oq29--operator-allowance-size)
 
 ---
 
@@ -570,3 +575,52 @@ _Recommendation ratified as presented (2026-07-04): `dependency-review-action` g
 - **Consequence:** Newegg's exclusion and every merchant question move to the narrowed OQ24.
 
 **My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-24 session-2 direction.)_
+
+### OQ25 — Hardware Radar Apify credential and MCP tool scope
+
+**✅ Resolved (owner, 2026-09-25) — recorded here; [ADR 0021's 2026-09-25 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-25-credential-namespace-runtimeoperator-authority-split-and-policy-values-owner-clarification) carries the architectural rule.** Raised by the MS-2 session-2 review (R24, R25), which asked how to provision a Hardware Radar-scoped Apify credential and whether to widen `.mcp.json`.
+
+- **Decision: two credentials in a dedicated Hardware Radar namespace, never the `apify-actors` venture's credential.** The **operator/deploy** key is unscoped, at OpenBao `secret/apps/hw-radar/agent/apify` (fields `token`, `org_id`); Apify does not allow a scoped token to create or modify Actors, so operator work (push/build, operator inspection) needs it. It is exported per-command as `APIFY_TOKEN` and is never rendered to the production application environment.
+- The **runtime** role needs a separate **scoped** token at OpenBao `secret/apps/hw-radar/apify`, env `HW_RADAR_APIFY_TOKEN`, limited to running Hardware Radar-owned Actors and reading their runs/storages. The owner has not yet created this token; production rendering is deferred until Slice E live admission is ready. `HW_RADAR_APIFY_ENABLED=false` (default) remains the fail-closed kill switch regardless.
+- **`.mcp.json` is unchanged** (four anonymous read-only tools). It widens only once a scoped read credential and operator reservations (MS2-D-46) exist, to the read-only tool list MS2-D-43 names (`get-actor-run`, `get-actor-run-list`, `get-actor-log`, `get-dataset`, `get-dataset-items`, `get-dataset-schema`, `get-key-value-store`, `get-key-value-store-keys`, `get-key-value-store-record`). `call-actor`, the RAG web browser, abort, and task tools stay excluded — MCP is an operator surface, not the runtime protocol.
+- **Verification (orchestrator, no value exposed):** the operator key's `GET /v2/users/me` and `/users/me/limits` succeed (STARTER plan, current cycle $0.09 of $19); `POST /v2/acts` with an invalid body reaches schema validation, confirming create permission and therefore unscoped status. sha comparison confirms the key is distinct from the `apify-actors` agent token.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-25 direction.)_
+
+### OQ26 — External-liability bound for the shared Apify account
+
+**✅ Resolved (owner, 2026-09-25) — recorded here; [ADR 0021's 2026-09-25 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-25-credential-namespace-runtimeoperator-authority-split-and-policy-values-owner-clarification) carries the architectural rule.** Raised by the MS-2 session-2 review (R33). Before this decision the bound had no default, so live paid admission was denied while it was unset (MS2-D-40 check 2 failed closed). Now an absent variable selects the 5.00 default, while a present-but-empty or invalid value still denies every class.
+
+- **Decision: `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD = 5.00` per Apify billing cycle.** Hardware Radar reserves up to $5.00 of the shared account's prepaid usage for consumption outside its own ledger, which it does not control or observe; its paid admission fails closed when the account snapshot or the external-liability invariant can't be satisfied.
+- This is a conservative Hardware Radar accounting bound, not permission for another project to spend $5 from the shared account.
+- An owner-tunable policy value inside the cash-ceiling/attributable-consumption architecture (ADR 0021 item 2), not an architecture change; it may be revised without an ADR change.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-25 direction.)_
+
+### OQ27 — Retention class for non-first-party reference data
+
+**✅ Resolved (owner, 2026-09-25) — no ADR change; recorded here.** Raised by the MS-2 session-2 review (R32) over the retention class for non-first-party reference data, such as the three Micron RAM PDFs hosted on third-party domains.
+
+- **Decision: no new production retention class for non-first-party reference data in MS-2.** Authoritative reference-catalog seeds come only from first-party/manufacturer-authoritative sources. Non-first-party PDFs or pages may inform research or manual review but never automatically seed authoritative aliases or specs; there is no `third_party_reference` class and no retention-CHECK rewrite.
+- The Slice B work whose sole purpose was admitting the three third-party-hosted Micron PDFs is removed. Existing first-party RAM coverage (2 rows) is preserved.
+- **Reopen only** with a concrete source, intended use, provenance model, and actual need — not speculatively.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-25 direction.)_
+
+### OQ28 — Can MS-2 exit on the synthetic proof alone?
+
+**✅ Resolved (owner, 2026-09-25) — recorded here; [ADR 0021's 2026-09-25 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-25-credential-namespace-runtimeoperator-authority-split-and-policy-values-owner-clarification) carries the architectural rule.** Raised by the MS-2 session-2 review (R31).
+
+- **Decision: yes — the controlled synthetic Actor proof (task F5a) is sufficient for the Apify portion of MS-2 exit.** The production Actor-backed merchant pilot (task F5b) is not required to close MS-2; it stays source/legal-gated by [OQ24](open-questions.md#oq24--production-actor-backed-merchant-source-admission), which may remain open after MS-2 closes.
+- MS-1e's owner-in-the-loop drive-matcher ratification remains a distinct gate: MS-2's deploys and the synthetic proof do not ratify ADR 0019.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-25 direction.)_
+
+### OQ29 — Operator allowance size
+
+**✅ Resolved (owner, 2026-09-25) — recorded here; [ADR 0021's 2026-09-25 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-25-credential-namespace-runtimeoperator-authority-split-and-policy-values-owner-clarification) carries the architectural rule.** Raised by the MS-2 session-2 review (R36) as an optional/advisory decision.
+
+- **Decision: `HW_RADAR_APIFY_OPERATOR_ALLOWANCE_USD = 1.00` per Apify billing cycle.** Covers the ledger class for Actor builds, bounded operator inspection, and other explicitly accounted operator Apify operations; stays inside the Hardware Radar cycle target and account-headroom checks. No build or paid operator inspection proceeds without an operator reservation once that machinery is active.
+- Replaces the plan's earlier $0.50 assumption.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-25 direction.)_

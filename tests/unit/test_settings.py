@@ -6,7 +6,7 @@ import pytest
 from django.conf import settings
 
 SETTINGS_PATH = Path(__file__).resolve().parents[2] / "src" / "hw_radar" / "settings.py"
-_ENV_KEYS = ("HW_RADAR_ENV", "DJANGO_SECRET_KEY", "HW_RADAR_ALLOWED_HOSTS")
+_ENV_KEYS = ("HW_RADAR_ENV", "DJANGO_SECRET_KEY", "HW_RADAR_ALLOWED_HOSTS", "HW_RADAR_STATIC_ROOT")
 
 
 def _load_settings(monkeypatch: pytest.MonkeyPatch, **env: str) -> ModuleType:
@@ -113,6 +113,36 @@ def test_production_allowed_hosts_strips_whitespace(monkeypatch: pytest.MonkeyPa
         "https://radar.example.net",
         "https://radar.example.org",
     ]
+
+
+def test_production_static_root_defaults_outside_app_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Bug 001: nginx cannot read under the hwradar-only /opt/hw-radar, so the
+    # production default must be the dedicated directory nginx is configured for.
+    prod = _load_settings(
+        monkeypatch,
+        HW_RADAR_ENV="production",
+        DJANGO_SECRET_KEY="x" * 50,
+        HW_RADAR_ALLOWED_HOSTS="radar.example.net",
+    )
+    assert Path("/var/lib/hw-radar/staticfiles") == prod.STATIC_ROOT
+    assert prod.STATIC_ROOT == prod.PRODUCTION_STATIC_ROOT
+    assert not prod.STATIC_ROOT.is_relative_to("/opt/hw-radar")
+
+
+def test_dev_static_root_default_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    dev = _load_settings(monkeypatch)
+    assert SETTINGS_PATH.parents[2] / "staticfiles" == dev.STATIC_ROOT
+
+
+def test_static_root_env_override_wins_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    prod = _load_settings(
+        monkeypatch,
+        HW_RADAR_ENV="production",
+        DJANGO_SECRET_KEY="x" * 50,
+        HW_RADAR_ALLOWED_HOSTS="radar.example.net",
+        HW_RADAR_STATIC_ROOT="/srv/static-override",
+    )
+    assert Path("/srv/static-override") == prod.STATIC_ROOT
 
 
 def test_no_deployment_hostname_hardcoded() -> None:

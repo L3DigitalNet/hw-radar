@@ -287,3 +287,49 @@ account usage limit $19; billing cycle 2026-09-05T00:00:00Z →
 2026-10-04T23:59:59.999Z; current cycle usage about $0.09 from other workloads
 sharing the account; 31-day data retention; residential proxy available on the
 account (so policy, not the account, prevents its use).
+
+## Amendment — 2026-09-25: Credential namespace, runtime/operator authority split, and policy values (owner clarification)
+
+Owner decisions of 2026-09-25 (owner-pasted brief), resolving
+[OQ25](../resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope),
+[OQ26](../resolved-questions.md#oq26--external-liability-bound-for-the-shared-apify-account),
+[OQ28](../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone), and
+[OQ29](../resolved-questions.md#oq29--operator-allowance-size). This amendment clarifies the
+2026-09-24 amendment; the text above stays as the record of what was first decided.
+
+**10. Dedicated credential namespace (sharpens item 9).** Hardware Radar's Apify credentials
+live under their own OpenBao namespace and are never the `apify-actors` venture's credential,
+matching the workstation's `secret/apps/<project>/agent/<provider>` convention. Two roles, two
+credentials:
+
+- **Operator/deploy role:** an **unscoped** key at OpenBao `secret/apps/hw-radar/agent/apify`
+  (fields `token`, `org_id`). Apify does not allow a scoped token to create or modify Actors, so
+  operator work — `apify push`/build, and operator inspection under operator reservations —
+  needs this key. It is exported per-command as `APIFY_TOKEN` for the Apify CLI/API and is
+  **never rendered to the production application environment**.
+- **Runtime role:** a separate, **scoped** token at OpenBao `secret/apps/hw-radar/apify`, env
+  `HW_RADAR_APIFY_TOKEN` — limited to running Hardware Radar-owned Actors and reading their runs
+  and default storages. The owner has not yet created this token; production rendering is
+  deferred until Slice E live admission is ready, and `HW_RADAR_APIFY_ENABLED=false` (default)
+  remains the fail-closed kill switch regardless of credential state.
+- `.mcp.json` is unchanged (four anonymous read-only tools). It stays an operator surface, not
+  the runtime protocol, and widens only once a scoped read credential and operator reservations
+  exist.
+
+**11. External-liability bound and operator allowance are owner-set policy values, not
+architecture (resolves OQ26, OQ29).** `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD = 5.00` and
+`HW_RADAR_APIFY_OPERATOR_ALLOWANCE_USD = 1.00`, both per Apify billing cycle, are owner-tunable
+settings inside the cash ceiling and attributable-consumption rule item 2 already states; they
+are not part of the architecture itself and may be revised without an ADR change. The
+external-liability bound reserves headroom in the shared account's prepaid usage for workloads
+Hardware Radar does not control or observe; paid admission, including the F5a synthetic
+proof, still fails closed whenever the account snapshot or the external-liability invariant
+cannot be satisfied. The $5.00 is a Hardware Radar accounting bound, not permission for any
+other workload to spend that amount. The operator allowance is the ledger class item 6
+reserves for Actor builds and bounded operator inspection.
+
+**12. MS-2's Apify exit is the synthetic proof (resolves OQ28, sharpens item 8).** The
+controlled synthetic Actor proof (task F5a) is sufficient to close the Apify portion of MS-2.
+The production Actor-backed merchant pilot (task F5b) is not required to close MS-2; it stays
+source/legal-gated by [OQ24](../open-questions.md#oq24--production-actor-backed-merchant-source-admission),
+which may remain open after MS-2 closes.

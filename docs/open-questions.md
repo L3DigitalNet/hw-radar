@@ -17,8 +17,10 @@
 
 ## Open questions
 
-Six decisions remain open, raised by the 2026-09-24 MS-2 multi-category watch-core plan
-and its session-2 owner review.
+One decision remains open, raised by the 2026-09-24 MS-2 multi-category watch-core plan
+and its session-2 owner review. OQ25–OQ29, the other five questions from that review, were
+owner-resolved 2026-09-25 and relocated to
+[`resolved-questions.md`](resolved-questions.md).
 
 ### OQ24 — Production Actor-backed merchant source admission
 
@@ -49,96 +51,6 @@ _(none yet)_
 
 ---
 
-### OQ25 — Hardware Radar Apify credential and MCP tool scope
-
-**From:** MS-2 session-2 review (R24, R25). **Decision needed:** provision a Hardware
-Radar-scoped Apify API token (proposed OpenBao path `secret/apps/hw-radar/apify`, env
-`HW_RADAR_APIFY_TOKEN`) and decide whether/how to widen the project's `.mcp.json` beyond
-the current 4 anonymous read-only Apify tools to a spend-capable tool such as `call-actor`.
-Hardware Radar has no Apify token of its own today; the only existing token belongs to the
-apify-actors agent namespace.
-
-#### Agent notes
-
-- Recommendation (from the plan): provision the token at the proposed path/env now; widen
-  `.mcp.json` only after OQ26–OQ28 admit at least one live paid Actor run, since a
-  spend-capable MCP tool without an admitted use is unnecessary exposure.
-
-#### My Comments
-
-_(none yet)_
-
----
-
-### OQ26 — External-liability bound for the shared Apify account
-
-**From:** MS-2 session-2 review (R33). **Decision needed:** set an owner-supplied external-
-liability bound for the shared Apify account. Live paid admission — including the Slice D
-synthetic proof run — is denied while this is unset (MS2-D-40 check 2 fails closed).
-
-#### Agent notes
-
-- Recommendation (from the plan): set a conservative bound now so the synthetic proof run
-  can proceed; the bound can be tightened later without a plan revision.
-
-#### My Comments
-
-_(none yet)_
-
----
-
-### OQ27 — Retention class for non-first-party reference data
-
-**From:** MS-2 session-2 review (R32). **Decision needed:** decide the retention class for
-non-first-party reference data (e.g., the three Micron RAM PDFs hosted on third-party
-domains). Non-first-party seeds are refused until this is decided.
-
-#### Agent notes
-
-- Recommendation (from the plan): treat non-first-party reference data as a bounded-
-  retention class pending a source-admission-style record, consistent with OQ24's
-  bounded-retention handling.
-
-#### My Comments
-
-_(none yet)_
-
----
-
-### OQ28 — Can MS-2 exit on the synthetic proof alone?
-
-**From:** MS-2 session-2 review (R31). **Decision needed:** whether MS-2 may exit on the
-Slice D synthetic proof run alone, with the Actor-backed merchant pilot (task F5b) left
-waiting on OQ24's production-source fork, or whether F5b must land first.
-
-#### Agent notes
-
-- Recommendation (from the plan): allow MS-2 to exit on the synthetic proof; F5b is
-  gated on OQ24 regardless and should not block the milestone.
-
-#### My Comments
-
-_(none yet)_
-
----
-
-### OQ29 — Operator allowance size
-
-**From:** MS-2 session-2 review (R36). **Decision needed (optional/advisory):** the size of
-the operator allowance (build + inspection reservation class) inside the $20/month ceiling.
-
-#### Agent notes
-
-- Recommendation (from the plan): a small fixed advisory allowance (e.g., low single-digit
-  dollars) is sufficient for build/inspection use observed so far; revisit if F5a
-  measurements show otherwise.
-
-#### My Comments
-
-_(none yet)_
-
----
-
 All five questions raised by the **2026-07-04 spec gap analysis**
 (OQ16–OQ20) were owner-resolved 2026-07-04 and relocated to
 [`resolved-questions.md`](resolved-questions.md) (OQ17 and OQ20 research-backed). OQ21
@@ -150,7 +62,11 @@ owner-resolved 2026-09-06 and relocated to
 $20/month ceiling) was owner-resolved 2026-09-24 and relocated to
 [`resolved-questions.md`](resolved-questions.md#oq23--apify-paid-plan-base-fee-vs-the-20month-hardware-radar-ceiling);
 OQ24 was split the same day, with its first-proof half relocated there and only the
-production-source fork left open above.
+production-source fork left open above. OQ25 (Apify credential and MCP tool scope), OQ26
+(external-liability bound), OQ27 (retention class for non-first-party reference data), OQ28
+(MS-2 exit on the synthetic proof alone), and OQ29 (operator allowance size) were
+owner-resolved 2026-09-25 and relocated to
+[`resolved-questions.md`](resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope).
 
 ## How to maintain this document
 
