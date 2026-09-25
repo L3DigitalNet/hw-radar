@@ -1586,10 +1586,11 @@ admission (Slice E; review F-08).** This decision amends MS2-D-17.
   a bound is admitted only if it is derived from documented billing units,
   enforced by an hw-radar ceiling, or covered by a named residual the owner
   has accepted. The one such residual is R38 (per-call multiplicity and the
-  metered-byte basis). Until the owner accepts it,
-  `HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED` is unset and every paid
-  admission, `operator` included, is denied with
-  `call_billing_residual_unaccepted`. The acceptance is an owner decision
+  metered-byte basis). **The owner accepted R38 on 2026-09-25**, so
+  `HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED` defaults to `2026-09-25`
+  (applied only when the variable is absent, like the external-liability
+  default). A present-but-empty or invalid value denies every paid admission,
+  `operator` included, with `call_billing_residual_unaccepted`. The acceptance is an owner decision
   recorded outside this plan, not F5a evidence, so it does not make F5a wait
   on itself.
 - **Ceiling** (revision 5, **owner-overridden**; OQ23 resolved). Revision 4's
@@ -5046,10 +5047,11 @@ the then-current code. D-prep (D1, D3) is not gated.
     `…_API_CALL_OVERHEAD_BYTES` (262144), `…_MAX_DATASET_PAGE_BYTES`
     (1048576), `…_MAX_DISCOVERY_READS` (24),
     `…_DISCOVERY_READ_INTERVAL_S` (300), `…_OPERATOR_PROBE_MAX_CALLS` (10),
-    and `…_CALL_BILLING_RESIDUAL_ACCEPTED`. The last has **no default**: it
-    holds the date of the owner's recorded acceptance of R38, and while it is
-    unset or not a valid date every paid admission is denied with
-    `call_billing_residual_unaccepted`. The numeric defaults are
+    and `…_CALL_BILLING_RESIDUAL_ACCEPTED`. The last holds the date of the
+    owner's recorded acceptance of R38 and defaults to `2026-09-25` (owner
+    accepted R38 that day; the default applies only when the variable is
+    absent). A present-but-empty value or one that is not a valid date denies
+    every paid admission with `call_billing_residual_unaccepted`. The numeric defaults are
     assumptions; an unset or invalid value denies live admission
     (`unbounded_component`). Code constants, not settings:
     `HTTP_RECEIVE_BUFFER_BYTES` (65536), `HTTP_READ_CHUNK_BYTES` (65536),
@@ -5635,7 +5637,7 @@ succeeded (revision 5).
   `…_DELETE_404_IS_ABSENT` stays false, which fails closed and does not block
   admission. Revision 11 (R10-01, R10-02, R10-06) adds three gates, none of
   which waits on F5a's own evidence. First, the owner's recorded acceptance
-  of R38, set as `…_CALL_BILLING_RESIDUAL_ACCEPTED`. Second, the D1 follow-up
+  of R38, set as `…_CALL_BILLING_RESIDUAL_ACCEPTED` (given 2026-09-25). Second, the D1 follow-up
   landed in the deployed Actor build. Third, the capability probe run under
   an operator `probe` reservation (MS2-D-46).
   1. Create the synthetic site with its idempotent setup command, in a
@@ -5759,7 +5761,7 @@ drive matcher (ADR 0019, R5).
 | R35 | The first ledger authority in a cycle (`apify_ledger_claim --origin`, MS2-D-45) rests on an owner attestation that no other environment admitted paid work that cycle; every later authority is machine-checked (continuation, or a drained handoff bound to one destination ledger, revision 7). Residual: a handoff record is a digest-keyed file, not a cryptographically signed one, so the checks protect against mistakes, not against deliberate hand-editing. | Attest only when true | E live admission |
 | R36 | Operator reservations (MS2-D-46) are a procedural control: the Console, CLI, and MCP cannot be intercepted, so an operation run without a reservation is unaccounted. Revision 9 (owner decision, 2026-09-25; [OQ29](../../resolved-questions.md#oq29--operator-allowance-size)): the allowance defaults to 1.00 per cycle, replacing the 0.50 assumption under which one build bound ($0.41) nearly filled it. Revision 11 (R10-12) states the fit by formula. One build reservation is `build_reservation = …_OPERATOR_BUILD_BOUND_USD + (…_MAX_RUN_POLLS + …_MAX_CORRECTION_READS) × api_call_bound` (MS2-D-46). Two fit when `2 × build_reservation ≤ …_OPERATOR_ALLOWANCE_USD < 3 × build_reservation`. At the defaults and Starter prices (approximate; `api_call_bound ≈ $0.000181`, MS2-D-32), one is about $0.423, two about $0.846 (about $0.154 left for inspection and probe envelopes), and a third, about $1.269, does not fit. Revision 9's "$0.82 … leaving $0.18 … $1.23" omitted the call allowance. Under the default `bound` settlement a settled build returns little capacity, so at most two builds fit per cycle, fewer when inspection envelopes are reserved, until F5a evidence allows `stable_reads`. | Reserve before every build or inspection; changing the allowance is an owner decision | F5a deployment cadence |
 | R37 | (Revision 7; revised in revision 8.) Correction monitoring (MS2-D-41, selector 4) runs for a fixed window after a row's last charge (default seven days, an assumption) and closes only when a successful closing read at or after the deadline commits. A provider correction that arises after that closing read is not observed by any environment; window closure is not provider finality. Under the default `bound` settlement the settled amount already equals the enforced execution bound, so the exposure matters mainly under `stable_reads`. The window delays a drained handoff by at least one window (MS2-D-45). Revision 8 residual: a closing read that can never succeed (for example, a run or build record no longer returned) keeps its obligation open, visible as `correction_close_overdue`, and blocks handoff indefinitely; that fails closed, and any release of such an obligation would need a plan revision. | Choose `stable_reads` only if F5a's read trail shows no correction after half the window | E accuracy under `stable_reads`; handoff timing |
-| R38 | **Owner acceptance required (revision 11, R10-01).** Apify's documents name the billing units: compute, data transfer, proxy, and storage reads, writes, lists, and timed storage (`docs.apify.com/platform/actors/running/usage-and-resources`, `apify.com/pricing`, retrieved 2026-09-25). They do not state (a) how many operations one API call is metered as, (b) which bytes are metered as transfer, or (c) the per-call overhead of the Actor SDK's platform calls inside a run. MS2-D-32 *Per-call bound* derives everything the documents support and enforces wire-byte ceilings: a response-body cap, httpcore's response-header limit, a request-body cap, and a pinned socket receive buffer. For the rest it assumes (a) at most one operation per item or record a call returns or deletes, and one for a call that returns none; (b) at most the call's wire bytes; and (c) that the run's own usage breakdown, settled at `max(execution bound, every observed read)`, reveals the overhead, with an actual above the reservation tripping the latch. If an assumption fails, the enforced call counts limit the damage, but no documented monetary ceiling exists. Snapshot check 1 and `external_liability_exceeded` (MS2-D-40) detect it after the fact, because the account figure contains any under-priced charge. At the defaults, the modeled per-run call and transfer bounds come to a few cents (MS2-D-32 illustrative figures). | Accept or reject R38; on acceptance set `…_CALL_BILLING_RESIDUAL_ACCEPTED` to the decision date. Until then every paid admission is denied (`call_billing_residual_unaccepted`) | E live admission; F5a |
+| R38 | **Owner acceptance required (revision 11, R10-01).** Apify's documents name the billing units: compute, data transfer, proxy, and storage reads, writes, lists, and timed storage (`docs.apify.com/platform/actors/running/usage-and-resources`, `apify.com/pricing`, retrieved 2026-09-25). They do not state (a) how many operations one API call is metered as, (b) which bytes are metered as transfer, or (c) the per-call overhead of the Actor SDK's platform calls inside a run. MS2-D-32 *Per-call bound* derives everything the documents support and enforces wire-byte ceilings: a response-body cap, httpcore's response-header limit, a request-body cap, and a pinned socket receive buffer. For the rest it assumes (a) at most one operation per item or record a call returns or deletes, and one for a call that returns none; (b) at most the call's wire bytes; and (c) that the run's own usage breakdown, settled at `max(execution bound, every observed read)`, reveals the overhead, with an actual above the reservation tripping the latch. If an assumption fails, the enforced call counts limit the damage, but no documented monetary ceiling exists. Snapshot check 1 and `external_liability_exceeded` (MS2-D-40) detect it after the fact, because the account figure contains any under-priced charge. At the defaults, the modeled per-run call and transfer bounds come to a few cents (MS2-D-32 illustrative figures). | **Accepted by the owner 2026-09-25** (`…_CALL_BILLING_RESIDUAL_ACCEPTED` defaults to that date). Re-review if F5a's measurements contradict an assumption | E live admission; F5a |
 
 No new ADR or OQ file is created by this plan. Revision 5: OQ23 is resolved and
 OQ24 split by the owner's 2026-09-24 decisions, recorded in
