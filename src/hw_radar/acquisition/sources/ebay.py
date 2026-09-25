@@ -88,6 +88,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Final, Literal, cast
 
 import httpx
+from pydantic import ValidationError
 
 from hw_radar.acquisition import http
 from hw_radar.acquisition.contracts import (
@@ -677,8 +678,8 @@ class EbayAdapter:
             except InvalidOperation:
                 skipped += 1
                 continue
-            out.append(
-                ParsedListing(
+            try:
+                listing = ParsedListing(
                     source_listing_key=str(item_id),
                     url=str(summary.get("itemWebUrl", "")),
                     title=str(summary.get("title", "")),
@@ -696,7 +697,17 @@ class EbayAdapter:
                     category_hint=None if sweep is None else sweep.slug,
                     collection_scope=None if sweep is None else sweep.scope_key,
                 )
-            )
+            except ValidationError, InvalidOperation:
+                # A category page's malformed summary (e.g. a zero price, a bad
+                # currency code, an unreadable shipping cost) is that sweep's parse
+                # drop, which already makes the sweep incomplete. It must not fail
+                # the run and take the drive search with it. The legacy drive page
+                # keeps its MS-1 behavior: the error propagates (PARSER_ROT).
+                if sweep is None:
+                    raise
+                skipped += 1
+                continue
+            out.append(listing)
         return out, skipped
 
     def parse(self, batch: RawBatch) -> list[ParsedListing]:

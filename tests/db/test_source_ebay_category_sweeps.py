@@ -640,6 +640,30 @@ def test_any_category_page_exception_fails_only_its_sweep(
     assert Listing.objects.filter(source_listing_key__in=["drive-a", "cpu-1"]).count() == 2
 
 
+def test_malformed_category_summary_is_a_parse_drop_not_a_run_failure(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    # A zero price fails ParsedListing validation (price > 0). On a category page
+    # that is the sweep's parse drop; it must not fail the run as PARSER_ROT and
+    # take the drive search with it (verifier finding, 2026-09-25).
+    bad = _summary("gpu-bad")
+    bad["price"] = {"value": "0", "currency": "USD"}
+    page = _page(["gpu-1"], total=2)
+    summaries = cast("list[dict[str, object]]", page["itemSummaries"])
+    summaries.append(bad)
+    browse = Browse(_legacy("drive-a"), {GPU: [page], CPU: [_page(["cpu-1"], total=1)]})
+    run = _run(loop, browse.adapter([GPU, CPU]))
+
+    assert run.status == RunStatus.SUCCESS, run.error
+    outcomes = _scopes(run)
+    assert outcomes[GPU.scope_key]["complete"] is False
+    assert outcomes[GPU.scope_key]["reason"] == "parse_drop"
+    assert outcomes[CPU.scope_key]["complete"] is True
+    keys = set(Listing.objects.values_list("source_listing_key", flat=True))
+    assert {"drive-a", "gpu-1", "cpu-1"} <= keys
+    assert "gpu-bad" not in keys
+
+
 def test_scheduled_adapter_sweeps_every_category() -> None:
     # The registry entry is what the poller and harvest_corpus build.
     adapter = ADAPTERS["ebay"]()
