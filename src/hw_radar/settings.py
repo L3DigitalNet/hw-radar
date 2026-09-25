@@ -15,6 +15,9 @@ Environment contract (see .env.example for dev values):
                             optional; byte cap of one Apify dataset page body
                             (default 1048576). The importer derives its page size
                             from it (MS2-D-32 *Dataset page size*)
+  HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES
+                            optional; byte cap of every other Apify response body
+                            (control calls and KV records; default 262144)
 Production values arrive via the bao-agent tmpfs render (systemd
 EnvironmentFile=/run/bao-agent/hw-radar.env) - never a plaintext file at rest.
 """
@@ -152,10 +155,19 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # MS2-D-32 *Response caps*: the most bytes one Apify dataset page body may hold
 # (1 MiB, an assumption). Cross-file contract: acquisition.apify.provider sends
 # page_limit(this, MAX_LISTING_ROW_BYTES) as every page's `limit`, so a
-# contract-valid dataset can never produce a page over this cap; the client's
-# dataset-page body cap (plan D3 follow-up) must read this same setting.
+# contract-valid dataset can never produce a page over this cap; and
+# acquisition.apify.client reads this same setting as its dataset-page body cap.
 HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES = int(
     os.environ.get("HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES", "1048576")
+)
+# MS2-D-32 *Response caps*: the most bytes any other Apify response body may
+# hold (256 KiB, an assumption) -- run, build, abort, account, delete, and KV
+# record calls. Valid content never reaches it, so the client raises on a
+# larger body and E4 trips the latch (`api_response_over_cap`). Cross-file
+# contract: acquisition.apify.client reads this setting at construction, and
+# Slice E prices every API call at wire_bytes(this).
+HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES = int(
+    os.environ.get("HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES", "262144")
 )
 
 LOGIN_URL = "login"

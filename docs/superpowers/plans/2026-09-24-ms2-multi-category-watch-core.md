@@ -4611,6 +4611,11 @@ the then-current code. D-prep (D1, D3) is not gated.
     every string field at `maxLength` in 4-byte code points, serialized with
     `ensure_ascii=True` and indented, fits `max_item_bytes`) and
     `test_page_limit_derived_from_row_bound_and_page_cap`.
+  - Landed 2026-09-25 (revisions 10 and 11, client side; the contract items
+    landed with D4). `/v2/actors/…/runs` re-verified against the OpenAPI
+    document (`v2-2026-09-24T114302Z`). Its `RunOptions` omit
+    `restartOnError`, so the echo is nullable and the client also exposes
+    `stats.restartCount` as the observed-restart signal for E4.
 - **D1 follow-up (revision 11, R10-02).** The Actor's byte check runs after a
   chunk arrives (`actors/hw-radar-synthetic-collector/src/synthetic_collector/core.py:344-353`),
   and `tests/test_limits.py:158-175` accepts a 100-byte chunk under

@@ -52,7 +52,9 @@ Instructions for AI agents:
   `provider_run`, `scope_sweep_continuity`, `SourceConfig.collection_provider`, listing scope and
   ordering watermarks, NULL-scope lane watermarks, scope-filtered `_apply_delist`). **D4 done**
   (`ApifyImportProvider`, `provider_run.run_output` in `0021`, `source_retention` registry,
-  derived dataset `page_limit`, remote runs skip the soft-block classifier). **Next (Slice D
+  derived dataset `page_limit`, remote runs skip the soft-block classifier). **D3 follow-up
+  done** (`/v2/actors` start with `restartOnError=false`, surfaced unparseable usage,
+  `dataRetentionDays`, response/page/request byte caps, pinned `SO_RCVBUF`). **Next (Slice D
   core):** D10 → D5 → D6 → D7 → D8 → D11 → D12 → D9; Apify push/build/run (none has occurred
   yet); truncation_reason on the evidence model (above). D4 hand-offs: D10 counts dataset/KV
   reads against the MS2-D-32 caps around `ApifyImportProvider.fetch`, rejects `failed` runs

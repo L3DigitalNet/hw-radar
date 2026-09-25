@@ -22,7 +22,9 @@ them to TRANSIENT; any non-2xx answer raises
 Cost-safety contract (MS2-D-15, MS2-D-26):
 
 * ``start_run`` sends only the ``memory`` (MB) and ``timeout`` (s) run options,
-  plus an optional ``build``. It never sends ``maxItems`` or
+  an explicit ``restartOnError=false``, and an optional ``build``. A platform
+  restart could run past ``memory x timeout``, so it is refused rather than left
+  to the Actor's default (ED-20). It never sends ``maxItems`` or
   ``maxTotalChargeUsd``: both apply only to pay-per-result / pay-per-event
   Actors and would give a false sense of a cost bound for our own Actors.
 * No proxy option is ever sent, and a run input with a top-level proxy key is
@@ -34,6 +36,34 @@ Cost-safety contract (MS2-D-15, MS2-D-26):
 * Money is parsed as ``Decimal`` straight from the JSON text, never through
   ``float``, and ``usage_total_usd`` stays ``None`` when Apify omits or nulls
   it: a missing figure must never read as a zero-cost run (MS2-D-41).
+* A ``usage`` / ``usageUsd`` entry whose value is not a number is never
+  silently dropped: its name lands in ``unparseable_usage``, because the
+  MS2-D-26 allowlist latch must trip on it (ED-10).
+
+Wire ceiling (MS2-D-32 *Per-call bound*). Slice E prices every call from a
+fixed byte bound, so this client enforces the bound's parts rather than
+trusting Apify to stay small:
+
+* Every body is streamed and read only up to its cap: a dataset page up to
+  ``settings.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES``, every other body (control
+  calls, error bodies, KV records) up to
+  ``settings.HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES``. A larger body raises
+  ``ApifyResponseTooLargeError`` and the connection is dropped unread. Valid
+  content never reaches a cap, so the caller treats the error as a latch trip
+  (``api_response_over_cap``), not a retry. Both the wire (possibly compressed)
+  and the decoded byte counts are held to the cap: the wire count bounds
+  transfer, the decoded count bounds memory against a compression bomb.
+* Every socket sets ``SO_RCVBUF`` to ``HTTP_RECEIVE_BUFFER_BYTES``. Stopping
+  reading does not stop the sender, and whatever the kernel has already
+  accepted is billed transfer; Linux doubles the value, so at most
+  ``2 x HTTP_RECEIVE_BUFFER_BYTES`` arrive after an abandoned response, where
+  the autotuned default can grow to megabytes.
+* A request body above ``MAX_API_REQUEST_BODY_BYTES`` is refused before
+  anything is sent (only ``start_run`` has a body).
+* The rest of the per-call overhead (response headers, TLS handshake) is
+  bounded by httpcore itself: ``MAX_INCOMPLETE_EVENT_SIZE`` (100 KiB) for the
+  header block. ``tests/unit/test_apify_client.py`` pins that constant and
+  ``READ_NUM_BYTES`` so an httpcore upgrade that changes either fails the gate.
 
 Token handling: the token comes from the constructor or, when omitted, from the
 ``HW_RADAR_APIFY_TOKEN`` environment variable at construction time (never at
@@ -51,13 +81,25 @@ F5a's live reads remain the final check:
 
 * Envelope ``{"data": ...}``, error ``{"error": {"type", "message"}}``, and
   ``Authorization: Bearer``: https://docs.apify.com/api/v2
-* Start run (201; ``memory``, ``timeout``, ``build``; documents ``invalid-input``
-  and ``invalid-input-schema`` as synchronous 400s):
+* Start run (201; ``memory``, ``timeout``, ``build``, boolean
+  ``restartOnError``; documents ``invalid-input`` and ``invalid-input-schema``
+  as synchronous 400s). The path is ``POST /v2/actors/{actorId}/runs``; the old
+  ``/v2/acts/`` prefix is "deprecated but still fully functional" (API
+  introduction). Re-verified 2026-09-25 against the published OpenAPI document
+  (``https://docs.apify.com/api/openapi.json``, version
+  ``v2-2026-09-24T114302Z``), which lists no ``/v2/acts/`` path at all:
   https://docs.apify.com/api/v2/actors-runs-post
 * Run object (``usageTotalUsd``, ``usageUsd``, ``usage``, ``buildNumber``,
-  ``finishedAt``, ``options.memoryMbytes``/``timeoutSecs``/``maxItems``; the
-  first read after completion may be preliminary):
-  https://docs.apify.com/api/v2/actor-run-get
+  ``finishedAt``, ``options.memoryMbytes``/``timeoutSecs``/``maxItems``,
+  ``stats.restartCount``; the first read after completion may be preliminary):
+  https://docs.apify.com/api/v2/actor-run-get. The ``usage`` / ``usageUsd``
+  component keys (``ACTOR_COMPUTE_UNITS``, ``DATASET_READS``,
+  ``DATASET_WRITES``, ``KEY_VALUE_STORE_READS``, ``KEY_VALUE_STORE_WRITES``,
+  ``KEY_VALUE_STORE_LISTS``, ``REQUEST_QUEUE_READS``, ``REQUEST_QUEUE_WRITES``,
+  ``DATA_TRANSFER_INTERNAL_GBYTES``, ``DATA_TRANSFER_EXTERNAL_GBYTES``,
+  ``PROXY_RESIDENTIAL_TRANSFER_GBYTES``, ``PROXY_SERPS``; each a nullable
+  number) are confirmed 2026-09-25 from the OpenAPI ``RunUsage`` /
+  ``RunUsageUsd`` schemas.
 * Abort run: https://docs.apify.com/api/v2/actor-run-abort-post (the optional
   ``gracefully`` flag is not sent).
 * Dataset items (``offset``, ``limit``, ``format``; ``X-Apify-Pagination-Total``):
@@ -70,7 +112,9 @@ F5a's live reads remain the final check:
   ``usageUsd``, ``usageTotalUsd``; usage hidden from unauthenticated reads):
   https://docs.apify.com/api/v2/actor-build-get
 * Limits (``monthlyUsageCycle.startAt/endAt``, ``limits.maxMonthlyUsageUsd``,
-  ``current.monthlyUsageUsd``): https://docs.apify.com/api/v2/users-me-limits-get
+  ``limits.dataRetentionDays`` (a required integer in the OpenAPI ``Limits``
+  schema, 2026-09-25), ``current.monthlyUsageUsd``):
+  https://docs.apify.com/api/v2/users-me-limits-get
 * Monthly usage (``date`` as ``YYYY-MM-DD``, ``usageCycle``,
   ``monthlyServiceUsage.*.amountAfterVolumeDiscountUsd``,
   ``dailyServiceUsages[].{date, serviceUsage, totalUsageCreditsUsd}``,
@@ -78,12 +122,16 @@ F5a's live reads remain the final check:
   https://docs.apify.com/api/v2/users-me-usage-monthly-get
 
 UNCONFIRMED at this revision (parsing is tolerant, so a wrong guess yields
-``None`` or a dropped item, never a crash or a fabricated number; F5a settles
-these live):
+``None``, a dropped monthly-usage item, or an ``unparseable_usage`` entry, never
+a crash or a fabricated number; F5a settles these live):
 
-* Exact casing of the ``usage``/``usageUsd`` item keys (e.g.
-  ``PROXY_RESIDENTIAL_TRANSFER_GBYTES``, ``PROXY_SERPS``) and of the build and
-  monthly-usage sub-fields: taken from page summaries, not verbatim schemas.
+* Exact casing of the build and monthly-usage sub-fields: taken from page
+  summaries, not verbatim schemas.
+* Whether a run's ``options`` echoes ``restartOnError``. The OpenAPI
+  ``RunOptions`` schema does not list it (2026-09-25), so
+  ``RunOptions.restart_on_error`` is usually ``None``; an observed restart is
+  visible as ``ApifyRun.restart_count`` (``stats.restartCount``), which is
+  documented.
 * The ``GET /v2/users/me`` plan block (``plan.id``,
   ``plan.monthlyBasePriceUsd``, ``plan.monthlyUsageCreditsUsd``): names match the
   owner's live account read, not a reference page. That the limits response
@@ -96,20 +144,25 @@ these live):
 
 from __future__ import annotations
 
+import json
 import os
+import socket
 from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-from typing import Literal, Self, cast, override
+from typing import Final, Literal, Self, cast, override
 from urllib.parse import quote
 
 import httpx
+from django.conf import settings
 
 __all__ = [
     "APIFY_TOKEN_ENV",
     "DEFAULT_BASE_URL",
     "DEFAULT_DATASET_PAGE_SIZE",
+    "HTTP_RECEIVE_BUFFER_BYTES",
+    "MAX_API_REQUEST_BODY_BYTES",
     "AccountLimits",
     "AccountPlan",
     "ApifyApiError",
@@ -117,7 +170,9 @@ __all__ = [
     "ApifyClient",
     "ApifyError",
     "ApifyNotFoundError",
+    "ApifyRequestTooLargeError",
     "ApifyResponseError",
+    "ApifyResponseTooLargeError",
     "ApifyRun",
     "ApifyTokenMissingError",
     "DailyUsage",
@@ -138,6 +193,14 @@ DEFAULT_DATASET_PAGE_SIZE = 1000
 # the start call returns as soon as the run is queued (no waitForFinish).
 DEFAULT_REQUEST_TIMEOUT = httpx.Timeout(30.0)
 
+# Code constants of the MS2-D-32 wire ceiling, not settings: Slice E's
+# request_wire_overhead is priced from them, so changing either here without
+# the estimator would under-reserve every call. The synthetic Actor pins its
+# own HTTP_RECEIVE_BUFFER_BYTES to the same value for the same reason
+# (actors/hw-radar-synthetic-collector/src/synthetic_collector/core.py).
+HTTP_RECEIVE_BUFFER_BYTES: Final = 65536
+MAX_API_REQUEST_BODY_BYTES: Final = 16384
+
 # Top-level input keys that would configure Apify Proxy. Matched
 # case-insensitively as substrings so `proxyConfiguration`, `proxy`, and
 # `useApifyProxy` are all caught.
@@ -157,6 +220,27 @@ class ApifyTokenMissingError(ApifyError):
 
 class ApifyResponseError(ApifyError):
     """A 2xx response whose body does not have the shape the client relies on."""
+
+
+class ApifyResponseTooLargeError(ApifyResponseError):
+    """A response body (of any status) exceeded its MS2-D-32 byte cap.
+
+    Raised as soon as the declared ``Content-Length`` or the bytes read so far
+    pass ``limit_bytes``; the rest of the body is never read. A contract-valid
+    Apify answer cannot trigger it, so callers trip the overrun latch
+    (``api_response_over_cap``) instead of retrying.
+    """
+
+    def __init__(self, limit_bytes: int, path: str) -> None:
+        self.limit_bytes = limit_bytes
+        super().__init__(f"Apify response body for {path} exceeds {limit_bytes} bytes")
+
+
+class ApifyRequestTooLargeError(ApifyError, ValueError):
+    """A request body above ``MAX_API_REQUEST_BODY_BYTES``; nothing was sent.
+
+    Also a ``ValueError``, like ``start_run``'s other pre-request refusals.
+    """
 
 
 class ApifyApiError(ApifyError):
@@ -187,6 +271,9 @@ class RunOptions:
     build: str | None
     # Reported so a caller can assert it is unset; the client never sends it.
     max_items: int | None
+    # ``options.restartOnError`` when Apify echoes it; the documented run
+    # options omit it, so ``None`` means "not reported", never "false".
+    restart_on_error: bool | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,6 +286,14 @@ class ApifyRun:
     ``usage_usd``, and ``usage`` are ``None`` whenever Apify omits or nulls
     them; right after a terminal status they may be preliminary (MS2-D-41), so
     callers re-read rather than settle on the first value.
+
+    ``unparseable_usage`` names every usage entry the maps could not hold, as
+    ``"usage.<KEY>"`` / ``"usageUsd.<KEY>"`` for a non-numeric value, or the
+    bare field name when the field itself is present but not an object. A
+    ``null`` component is the documented "no figure" and is omitted from the
+    map without being listed. ``restart_count`` is ``stats.restartCount``:
+    ``None`` when unreported, and non-zero means the platform restarted the
+    run, which MS2-D-26 treats as a start-option mismatch.
     """
 
     id: str
@@ -215,6 +310,8 @@ class ApifyRun:
     usage_total_usd: Decimal | None
     usage_usd: Mapping[str, Decimal] | None
     usage: Mapping[str, Decimal] | None
+    unparseable_usage: tuple[str, ...]
+    restart_count: int | None
 
     def detail(self) -> dict[str, object]:
         """Return a JSON-safe dict of the parsed fields for ``detail_json``."""
@@ -234,16 +331,19 @@ class ApifyRun:
                 "timeout_secs": self.options.timeout_secs,
                 "build": self.options.build,
                 "max_items": self.options.max_items,
+                "restart_on_error": self.options.restart_on_error,
             },
+            "restart_count": self.restart_count,
             "usage_total_usd": _money_str(self.usage_total_usd),
             "usage_usd": _money_map_str(self.usage_usd),
             "usage": _money_map_str(self.usage),
+            "unparseable_usage": list(self.unparseable_usage),
         }
 
 
 @dataclass(frozen=True, slots=True)
 class ApifyBuild:
-    """One Actor build (MS2-D-46); usage is nullable exactly as for a run."""
+    """One Actor build (MS2-D-46); usage is parsed exactly as for a run."""
 
     id: str
     act_id: str | None
@@ -254,6 +354,7 @@ class ApifyBuild:
     usage_total_usd: Decimal | None
     usage_usd: Mapping[str, Decimal] | None
     usage: Mapping[str, Decimal] | None
+    unparseable_usage: tuple[str, ...]
 
     def detail(self) -> dict[str, object]:
         """Return a JSON-safe dict of the parsed fields for ``detail_json``."""
@@ -267,6 +368,7 @@ class ApifyBuild:
             "usage_total_usd": _money_str(self.usage_total_usd),
             "usage_usd": _money_map_str(self.usage_usd),
             "usage": _money_map_str(self.usage),
+            "unparseable_usage": list(self.unparseable_usage),
         }
 
 
@@ -298,13 +400,17 @@ class AccountLimits:
 
     The cycle bounds are required: without them MS2-D-40 cannot place spend in
     a period, so their absence raises ``ApifyResponseError`` instead of
-    defaulting. The dollar figures are nullable.
+    defaulting. The dollar figures are nullable. ``data_retention_days`` is
+    ``None`` when ``limits.dataRetentionDays`` is missing or not a positive
+    integer; the client does not raise, because the consequence (admission
+    denies with ``unbounded_component``, MS2-D-40) is the caller's.
     """
 
     cycle_start: datetime
     cycle_end: datetime
     max_monthly_usage_usd: Decimal | None
     monthly_usage_usd: Decimal | None
+    data_retention_days: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,7 +473,9 @@ class ApifyClient:
 
     Use as ``async with ApifyClient() as client:`` or call ``aclose()``.
     ``transport`` is the test seam (``httpx.MockTransport``); production uses
-    httpx's default transport.
+    an ``httpx.AsyncHTTPTransport`` whose sockets pin ``SO_RCVBUF``. The two
+    body caps are read from Django settings at construction and must be
+    positive (``ValueError`` otherwise).
     """
 
     def __init__(
@@ -382,6 +490,18 @@ class ApifyClient:
         if not resolved:
             raise ApifyTokenMissingError(f"Apify token missing: set {APIFY_TOKEN_ENV}")
         self._token = resolved
+        self._max_response_bytes = _positive_cap(
+            "HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES", settings.HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES
+        )
+        self._max_dataset_page_bytes = _positive_cap(
+            "HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES", settings.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES
+        )
+        if transport is None:
+            # Read at construction, not bound at import, so the Linux loopback
+            # test can prove the option reaches the socket with a second value.
+            transport = httpx.AsyncHTTPTransport(
+                socket_options=[(socket.SOL_SOCKET, socket.SO_RCVBUF, HTTP_RECEIVE_BUFFER_BYTES)]
+            )
         self._http = httpx.AsyncClient(
             base_url=base_url,
             auth=_BearerAuth(resolved),
@@ -418,20 +538,26 @@ class ApifyClient:
         as the ``memory`` and ``timeout`` query parameters (the MS2-D-15 naming
         trap); they have nothing to do with the HTTP request timeout. The caller
         must compare ``run.options`` with what it asked for and abort on a
-        mismatch (MS2-D-26). Raises ``ValueError`` before any request when the
-        input carries a top-level proxy key or the options are not positive.
+        mismatch (MS2-D-26); ``restartOnError=false`` is always sent. Raises
+        ``ValueError`` before any request when the input carries a top-level
+        proxy key, the options are not positive, or the serialized input exceeds
+        ``MAX_API_REQUEST_BODY_BYTES`` (``ApifyRequestTooLargeError``).
         """
         if memory_mbytes <= 0 or timeout_secs <= 0:
             raise ValueError("memory_mbytes and timeout_secs must be positive")
         proxy_keys = sorted(k for k in run_input if _PROXY_KEY_MARKER in k.lower())
         if proxy_keys:
             raise ValueError(f"run input must not configure Apify Proxy: {proxy_keys}")
-        params: dict[str, str | int] = {"memory": memory_mbytes, "timeout": timeout_secs}
+        params: dict[str, str | int] = {
+            "memory": memory_mbytes,
+            "timeout": timeout_secs,
+            "restartOnError": "false",
+        }
         if build is not None:
             params["build"] = build
         payload = await self._request_json(
             "POST",
-            f"/v2/acts/{_actor_path_id(actor_id)}/runs",
+            f"/v2/actors/{_actor_path_id(actor_id)}/runs",
             params=params,
             json=dict(run_input),
         )
@@ -467,6 +593,7 @@ class ApifyClient:
             "GET",
             f"/v2/datasets/{_seg(dataset_id)}/items",
             params={"offset": offset, "limit": limit, "format": "json"},
+            max_body_bytes=self._max_dataset_page_bytes,
         )
         body = _json(response)
         if not isinstance(body, list):
@@ -512,9 +639,7 @@ class ApifyClient:
             )
         except ApifyNotFoundError:
             return None
-        return KeyValueRecord(
-            content_type=response.headers.get("Content-Type"), body=response.content
-        )
+        return KeyValueRecord(content_type=response.headers.get("Content-Type"), body=response.body)
 
     async def delete_dataset(self, dataset_id: str) -> DeleteOutcome:
         """Delete the dataset; a 404 is success (``"absent"``), not an error."""
@@ -539,6 +664,9 @@ class ApifyClient:
                 _mapping(data.get("limits")).get("maxMonthlyUsageUsd")
             ),
             monthly_usage_usd=_opt_money(_mapping(data.get("current")).get("monthlyUsageUsd")),
+            data_retention_days=_opt_positive_int(
+                _mapping(data.get("limits")).get("dataRetentionDays")
+            ),
         )
 
     async def get_monthly_usage(self, on: date | None = None) -> MonthlyUsage:
@@ -604,17 +732,46 @@ class ApifyClient:
         *,
         params: Mapping[str, str | int] | None = None,
         json: object = None,
-    ) -> httpx.Response:
-        response = await self._http.request(method, path, params=params, json=json)
-        if response.is_success:
-            return response
-        raise self._api_error(response)
+        max_body_bytes: int | None = None,
+    ) -> _Reply:
+        """Send one request and return its body read under a byte cap.
 
-    def _api_error(self, response: httpx.Response) -> ApifyApiError:
+        ``max_body_bytes`` defaults to the control-response cap; only the
+        dataset-page read passes the larger page cap. The cap applies to
+        error bodies too: an oversized error answer raises
+        ``ApifyResponseTooLargeError``, not ``ApifyApiError``.
+        """
+        request = self._http.build_request(method, path, params=params, json=json)
+        # httpx serializes a json= body eagerly, so .content is the exact
+        # bytes that would go on the wire -- checked before anything is sent.
+        if len(request.content) > MAX_API_REQUEST_BODY_BYTES:
+            raise ApifyRequestTooLargeError(
+                f"Apify request body for {path} exceeds {MAX_API_REQUEST_BODY_BYTES} bytes"
+            )
+        cap = self._max_response_bytes if max_body_bytes is None else max_body_bytes
+        response = await self._http.send(request, stream=True)
+        try:
+            body = await _read_capped(response, cap, path)
+        finally:
+            # On the over-cap path this closes the connection with the body
+            # unread (httpcore does not drain), so no further bytes are pulled
+            # beyond what SO_RCVBUF already admitted.
+            await response.aclose()
+        reply = _Reply(
+            status_code=response.status_code,
+            reason_phrase=response.reason_phrase,
+            headers=response.headers,
+            body=body,
+        )
+        if response.is_success:
+            return reply
+        raise self._api_error(reply)
+
+    def _api_error(self, response: _Reply) -> ApifyApiError:
         message = response.reason_phrase
         envelope: Mapping[str, object]
         try:
-            envelope = _mapping(_mapping(response.json()).get("error"))
+            envelope = _mapping(_mapping(json.loads(response.body)).get("error"))
         except ValueError:
             envelope = {}
         error_type = _opt_str(envelope.get("type"))
@@ -625,6 +782,40 @@ class ApifyClient:
         message = message.replace(self._token, "***")[:_MAX_ERROR_MESSAGE_CHARS]
         cls = ApifyNotFoundError if response.status_code == 404 else ApifyApiError
         return cls(response.status_code, error_type, message)
+
+
+@dataclass(frozen=True, slots=True)
+class _Reply:
+    """A fully read, size-capped response; the stream is already closed."""
+
+    status_code: int
+    reason_phrase: str
+    headers: httpx.Headers
+    body: bytes
+
+
+async def _read_capped(response: httpx.Response, cap: int, path: str) -> bytes:
+    declared = _header_int(response.headers.get("Content-Length"))
+    if declared is not None and declared > cap:
+        raise ApifyResponseTooLargeError(cap, path)
+    chunks: list[bytes] = []
+    decoded = 0
+    async for chunk in response.aiter_bytes():
+        decoded += len(chunk)
+        # num_bytes_downloaded counts raw (pre-decompression) bytes, so a
+        # gzip body is held to the cap on the wire as well as after decoding.
+        # Content-Length alone is not enough: it may be absent (chunked) or
+        # describe the compressed form.
+        if decoded > cap or response.num_bytes_downloaded > cap:
+            raise ApifyResponseTooLargeError(cap, path)
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _positive_cap(name: str, value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{name} must be a positive integer byte count")
+    return value
 
 
 def _actor_path_id(actor_id: str) -> str:
@@ -640,11 +831,11 @@ def _seg(value: str) -> str:
     return quote(value, safe="~-._")
 
 
-def _json(response: httpx.Response) -> object:
+def _json(response: _Reply) -> object:
     try:
         # parse_float=Decimal keeps dollar amounts exact from the JSON text;
         # routing them through float first would bake in binary rounding.
-        return response.json(parse_float=Decimal)
+        return json.loads(response.body, parse_float=Decimal)
     except ValueError as exc:
         raise ApifyResponseError("Apify response is not valid JSON") from exc
 
@@ -664,6 +855,9 @@ def _mapping(value: object) -> Mapping[str, object]:
 
 def _parse_run(data: Mapping[str, object]) -> ApifyRun:
     options = _mapping(data.get("options"))
+    restart_on_error = options.get("restartOnError")
+    usage_usd, bad_usd = _usage_map(data, "usageUsd")
+    usage, bad_usage = _usage_map(data, "usage")
     return ApifyRun(
         id=_req_str(data, "id"),
         act_id=_opt_str(data.get("actId")),
@@ -680,14 +874,19 @@ def _parse_run(data: Mapping[str, object]) -> ApifyRun:
             timeout_secs=_opt_int(options.get("timeoutSecs")),
             build=_opt_str(options.get("build")),
             max_items=_opt_int(options.get("maxItems")),
+            restart_on_error=restart_on_error if isinstance(restart_on_error, bool) else None,
         ),
         usage_total_usd=_opt_money(data.get("usageTotalUsd")),
-        usage_usd=_opt_money_map(data.get("usageUsd")),
-        usage=_opt_money_map(data.get("usage")),
+        usage_usd=usage_usd,
+        usage=usage,
+        unparseable_usage=bad_usd + bad_usage,
+        restart_count=_opt_int(_mapping(data.get("stats")).get("restartCount")),
     )
 
 
 def _parse_build(data: Mapping[str, object]) -> ApifyBuild:
+    usage_usd, bad_usd = _usage_map(data, "usageUsd")
+    usage, bad_usage = _usage_map(data, "usage")
     return ApifyBuild(
         id=_req_str(data, "id"),
         act_id=_opt_str(data.get("actId")),
@@ -696,8 +895,9 @@ def _parse_build(data: Mapping[str, object]) -> ApifyBuild:
         started_at=_opt_dt(data.get("startedAt")),
         finished_at=_opt_dt(data.get("finishedAt")),
         usage_total_usd=_opt_money(data.get("usageTotalUsd")),
-        usage_usd=_opt_money_map(data.get("usageUsd")),
-        usage=_opt_money_map(data.get("usage")),
+        usage_usd=usage_usd,
+        usage=usage,
+        unparseable_usage=bad_usd + bad_usage,
     )
 
 
@@ -733,15 +933,39 @@ def _opt_money(value: object) -> Decimal | None:
     return None
 
 
-def _opt_money_map(value: object) -> Mapping[str, Decimal] | None:
+def _opt_positive_int(value: object) -> int | None:
+    parsed = _opt_int(value)
+    return parsed if parsed is not None and parsed > 0 else None
+
+
+def _usage_map(
+    data: Mapping[str, object], field: str
+) -> tuple[Mapping[str, Decimal] | None, tuple[str, ...]]:
+    """Parse one usage field into (amounts, names of unparseable entries).
+
+    Absent or ``null`` means "no figure" (``None``, nothing flagged). Every
+    other value that cannot be held as a Decimal is reported, never dropped:
+    the MS2-D-26 allowlist latch keys on component names, and a dropped
+    entry -- say a ``PROXY_SERPS`` amount sent as a string -- would pass it
+    unseen (ED-10).
+    """
+    value = data.get(field)
+    if value is None:
+        return None, ()
     if not isinstance(value, Mapping):
-        return None
+        return None, (field,)
     parsed: dict[str, Decimal] = {}
-    for key, amount in cast(Mapping[object, object], value).items():
+    bad: list[str] = []
+    for key, amount in cast(Mapping[str, object], value).items():
+        if amount is None:
+            # Documented as a nullable number; no figure is not a bad figure.
+            continue
         money = _opt_money(amount)
-        if isinstance(key, str) and money is not None:
+        if money is None:
+            bad.append(f"{field}.{key}")
+        else:
             parsed[key] = money
-    return parsed
+    return parsed, tuple(bad)
 
 
 def _service_usd(value: object) -> Mapping[str, Decimal]:

@@ -5,24 +5,36 @@ Response bodies are hand-built in Apify's documented ``{"data": ...}`` shape.
 """
 
 import asyncio
+import gzip
 import inspect
 import json
 import logging
-from collections.abc import Callable, Coroutine
+import os
+import socket
+import sys
+from collections.abc import AsyncIterator, Callable, Coroutine
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
+import httpcore
 import httpx
 import pytest
+from django.test import override_settings
 
+from hw_radar.acquisition.apify import client as client_module
 from hw_radar.acquisition.apify.client import (
     APIFY_TOKEN_ENV,
     DEFAULT_REQUEST_TIMEOUT,
+    HTTP_RECEIVE_BUFFER_BYTES,
+    MAX_API_REQUEST_BODY_BYTES,
     ApifyApiError,
     ApifyClient,
     ApifyNotFoundError,
+    ApifyRequestTooLargeError,
     ApifyResponseError,
+    ApifyResponseTooLargeError,
     ApifyTokenMissingError,
 )
 
@@ -90,8 +102,12 @@ def test_start_sends_memory_and_timeout_run_options() -> None:
     (request,) = seen
     assert request.method == "POST"
     # `user/name` is rewritten to the REST path form `user~name`.
-    assert request.url.path == "/v2/acts/hw-radar~synthetic-collector/runs"
-    assert dict(request.url.params) == {"memory": "512", "timeout": "3600"}
+    assert request.url.path == "/v2/actors/hw-radar~synthetic-collector/runs"
+    assert dict(request.url.params) == {
+        "memory": "512",
+        "timeout": "3600",
+        "restartOnError": "false",
+    }
     assert json.loads(request.content) == {"pages": ["a.html"]}
     # The httpx request timeout is the client's fixed tier, not the Actor's
     # 3600 s run timeout: conflating them is the MS2-D-15 naming trap.
@@ -138,7 +154,7 @@ def test_client_never_sends_max_items_or_max_total_charge() -> None:
         assert "maxitems" not in sent
         assert "maxtotalchargeusd" not in sent
         assert "waitforfinish" not in sent
-        assert set(request.url.params.keys()) <= {"memory", "timeout", "build"}
+        assert set(request.url.params.keys()) <= {"memory", "timeout", "restartOnError", "build"}
 
 
 def test_no_proxy_parameters_ever_sent() -> None:
@@ -658,3 +674,316 @@ def test_iter_dataset_items_requires_an_explicit_page_size() -> None:
     parameter = inspect.signature(ApifyClient.iter_dataset_items).parameters["page_size"]
     assert parameter.default is inspect.Parameter.empty
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+# ── D3 follow-up (plan revisions 10 and 11; MS2-D-26, MS2-D-32) ──
+
+
+def _capped_client(
+    handler: Handler, *, response_cap: int = 1024, page_cap: int = 4096
+) -> ApifyClient:
+    # Small caps keep the fixtures readable; the production defaults are only
+    # sizes, and the cap logic is identical at any size.
+    with override_settings(
+        HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES=response_cap,
+        HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES=page_cap,
+    ):
+        return _client(handler)
+
+
+def _padded_json(body: object, size: int) -> bytes:
+    # Leading whitespace is valid JSON, so a fixture can hit an exact size.
+    raw = json.dumps(body).encode()
+    assert len(raw) <= size
+    return b" " * (size - len(raw)) + raw
+
+
+def test_start_uses_actors_path_and_sends_restart_on_error_false() -> None:
+    seen: list[httpx.Request] = []
+    bodies = [
+        _run_body(
+            options={
+                "memoryMbytes": 256,
+                "timeoutSecs": 300,
+                "build": "latest",
+                "restartOnError": False,
+            },
+            stats={"restartCount": 0},
+        ),
+        # The documented RunOptions omit restartOnError; an unreported value
+        # must stay distinguishable from an echoed false.
+        _run_body(stats={"restartCount": 2}),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return _json_response(bodies.pop(0), 201)
+
+    async def go() -> None:
+        async with _client(handler) as client:
+            echoed = await client.start_run("user/actor", {}, memory_mbytes=256, timeout_secs=300)
+            silent = await client.start_run("act456", {}, memory_mbytes=256, timeout_secs=300)
+        assert echoed.options.restart_on_error is False
+        assert echoed.restart_count == 0
+        assert silent.options.restart_on_error is None
+        assert silent.restart_count == 2
+        detail = silent.detail()
+        options = detail["options"]
+        assert isinstance(options, dict)
+        assert options["restart_on_error"] is None
+        assert detail["restart_count"] == 2
+
+    _run(go())
+    assert [r.url.path for r in seen] == ["/v2/actors/user~actor/runs", "/v2/actors/act456/runs"]
+    for request in seen:
+        assert request.url.params["restartOnError"] == "false"
+        assert "/v2/acts/" not in str(request.url)
+
+
+def test_unparseable_usage_component_is_surfaced_not_dropped() -> None:
+    run_usage = {
+        "ACTOR_COMPUTE_UNITS": 0.0035,
+        "PROXY_SERPS": "3",
+        "REQUEST_QUEUE_READS": True,
+        "DATASET_READS": None,
+    }
+    build = {
+        "id": "build789",
+        "status": "SUCCEEDED",
+        "usage": {"ACTOR_COMPUTE_UNITS": {"nested": 1}},
+        "usageUsd": {"ACTOR_COMPUTE_UNITS": 0.0041},
+    }
+    bodies: list[dict[str, object]] = [
+        _run_body(usage=run_usage, usageUsd=["not", "an", "object"]),
+        _run_body(usage={"ACTOR_COMPUTE_UNITS": 0.0035}, usageUsd=None),
+        {"data": build},
+    ]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return _json_response(bodies.pop(0))
+
+    async def go() -> None:
+        async with _client(handler) as client:
+            dirty = await client.get_run("run123")
+            clean = await client.get_run("run123")
+            built = await client.get_build("build789")
+        # A string, a boolean, and a non-object field are all named; only the
+        # documented null ("no figure") is omitted without a flag.
+        assert dirty.unparseable_usage == (
+            "usageUsd",
+            "usage.PROXY_SERPS",
+            "usage.REQUEST_QUEUE_READS",
+        )
+        assert dirty.usage == {"ACTOR_COMPUTE_UNITS": Decimal("0.0035")}
+        assert dirty.usage_usd is None
+        assert dirty.detail()["unparseable_usage"] == [
+            "usageUsd",
+            "usage.PROXY_SERPS",
+            "usage.REQUEST_QUEUE_READS",
+        ]
+        assert clean.unparseable_usage == ()
+        assert built.unparseable_usage == ("usage.ACTOR_COMPUTE_UNITS",)
+        assert built.detail()["unparseable_usage"] == ["usage.ACTOR_COMPUTE_UNITS"]
+
+    _run(go())
+
+
+@pytest.mark.parametrize(
+    ("retention", "expected"),
+    [
+        (31, 31),
+        (7.0, 7),
+        (None, None),
+        ("31", None),
+        (True, None),
+        (0, None),
+        (-1, None),
+        (31.5, None),
+    ],
+)
+def test_account_limits_parse_data_retention_days(retention: object, expected: int | None) -> None:
+    limits: dict[str, object] = {"maxMonthlyUsageUsd": 19}
+    if retention is not None:
+        limits["dataRetentionDays"] = retention
+    body = {
+        "data": {
+            "monthlyUsageCycle": {
+                "startAt": "2026-09-05T00:00:00.000Z",
+                "endAt": "2026-10-04T23:59:59.999Z",
+            },
+            "limits": limits,
+            "current": {},
+        }
+    }
+
+    async def go() -> None:
+        async with _client(lambda _r: _json_response(body)) as client:
+            parsed = await client.get_account_limits()
+        # Missing or invalid is None, not an error: admission owns the denial
+        # (MS2-D-40), and the cycle bounds above must still be readable.
+        assert parsed.data_retention_days == expected
+
+    _run(go())
+
+
+def test_oversized_response_body_raises() -> None:
+    cap = 1024
+    run_json = json.dumps(_run_body()).encode()
+    yielded: list[int] = []
+
+    async def chunked() -> AsyncIterator[bytes]:
+        # No Content-Length: the cap must be enforced while reading, and the
+        # read must stop instead of draining the rest of the stream.
+        for index in range(100):
+            yielded.append(index)
+            yield b" " * 512
+
+    responses = [
+        # Exactly at the cap: allowed.
+        lambda: httpx.Response(200, content=_padded_json(_run_body(), cap)),
+        # One byte over, declared up front.
+        lambda: httpx.Response(200, content=_padded_json(_run_body(), cap + 1)),
+        lambda: httpx.Response(200, content=chunked()),
+        # Small on the wire, over the cap once decoded (a compression bomb).
+        lambda: httpx.Response(
+            200,
+            content=gzip.compress(b" " * (cap * 50) + run_json),
+            headers={"Content-Encoding": "gzip"},
+        ),
+        # An error status is capped too, and the cap wins over ApifyApiError.
+        lambda: httpx.Response(500, content=b" " * (cap * 2)),
+    ]
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return responses.pop(0)()
+
+    async def go() -> None:
+        async with _capped_client(handler, response_cap=cap) as client:
+            assert (await client.get_run("run123")).id == "run123"
+            for _ in range(4):
+                with pytest.raises(ApifyResponseTooLargeError) as info:
+                    await client.get_run("run123")
+                assert info.value.limit_bytes == cap
+                assert isinstance(info.value, ApifyResponseError)
+
+    _run(go())
+    assert responses == []
+    assert len(yielded) <= cap // 512 + 1
+
+
+@pytest.mark.parametrize("cap", [0, -1])
+def test_non_positive_body_cap_rejected_at_construction(cap: int) -> None:
+    with pytest.raises(ValueError, match="HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES"):
+        _capped_client(lambda _r: httpx.Response(204), response_cap=cap)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="SO_RCVBUF doubling is Linux semantics")
+def test_client_sets_receive_buffer_socket_option(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Read back from a real loopback connection made by the production
+    # transport (no MockTransport). The client's own socket is found in
+    # /proc/self/fd by the address the server sees as its peer. 65536 doubles
+    # to 131072, which is also a common kernel default, so a second,
+    # distinctive value proves the option really reaches the socket.
+    observed: list[int] = []
+    reply = json.dumps(_run_body()).encode()
+
+    def client_socket_rcvbuf(address: object) -> int:
+        for entry in Path("/proc/self/fd").iterdir():
+            try:
+                dup = os.dup(int(entry.name))
+            except OSError:
+                continue
+            try:
+                sock = socket.socket(fileno=dup)
+            except OSError:
+                os.close(dup)
+                continue
+            with sock:
+                try:
+                    if sock.getsockname() == address:
+                        return sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+                except OSError:
+                    continue
+        raise AssertionError("client socket not found")
+
+    async def serve_once(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readuntil(b"\r\n\r\n")
+        observed.append(client_socket_rcvbuf(writer.get_extra_info("peername")))
+        head = f"HTTP/1.1 200 OK\r\nContent-Length: {len(reply)}\r\n\r\n".encode()
+        writer.write(head + reply)
+        await writer.drain()
+        writer.close()
+
+    async def one_call() -> None:
+        server = await asyncio.start_server(serve_once, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            async with ApifyClient(TOKEN, base_url=f"http://127.0.0.1:{port}") as client:
+                assert (await client.get_run("run123")).id == "run123"
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    asyncio.run(one_call())
+    monkeypatch.setattr(client_module, "HTTP_RECEIVE_BUFFER_BYTES", 12288)
+    asyncio.run(one_call())
+    assert observed == [2 * HTTP_RECEIVE_BUFFER_BYTES, 2 * 12288]
+
+
+def test_request_body_over_cap_refused_before_send() -> None:
+    seen: list[int] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(len(request.content))
+        return _json_response(_run_body(), 201)
+
+    # httpx sends json= compactly, so {"p":"..."} is 8 bytes plus the string.
+    at_cap = {"p": "x" * (MAX_API_REQUEST_BODY_BYTES - 8)}
+    over_cap = {"p": "x" * (MAX_API_REQUEST_BODY_BYTES - 7)}
+
+    async def go() -> None:
+        async with _client(handler) as client:
+            await client.start_run("act456", at_cap, memory_mbytes=256, timeout_secs=300)
+            with pytest.raises(ApifyRequestTooLargeError):
+                await client.start_run("act456", over_cap, memory_mbytes=256, timeout_secs=300)
+            # Also a ValueError, like start_run's other pre-request refusals.
+            with pytest.raises(ValueError):
+                await client.start_run("act456", over_cap, memory_mbytes=256, timeout_secs=300)
+
+    _run(go())
+    assert seen == [MAX_API_REQUEST_BODY_BYTES]
+
+
+def test_dataset_page_cap_distinct_from_control_response_cap() -> None:
+    response_cap, page_cap = 1024, 4096
+    # One body size between the two caps: fine as a dataset page, over the cap
+    # as a KV record (a control/KV body), which proves the caps are separate.
+    between = _padded_json([{"i": 1}], 3000)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v2/datasets/over/items":
+            return httpx.Response(200, content=_padded_json([], page_cap + 1))
+        return httpx.Response(200, content=between)
+
+    async def go() -> None:
+        async with _capped_client(handler, response_cap=response_cap, page_cap=page_cap) as client:
+            page = await client.list_dataset_items("ds1", limit=10)
+            assert page.items == [{"i": 1}]
+            with pytest.raises(ApifyResponseTooLargeError) as control:
+                await client.get_record("kv1", "OUTPUT")
+            assert control.value.limit_bytes == response_cap
+            with pytest.raises(ApifyResponseTooLargeError) as oversized_page:
+                await client.list_dataset_items("over", limit=10)
+            assert oversized_page.value.limit_bytes == page_cap
+
+    _run(go())
+
+
+def test_httpcore_constants_match_wire_ceiling() -> None:
+    # MS2-D-32 prices one abandoned read as READ_NUM_BYTES and the response
+    # header block as MAX_INCOMPLETE_EVENT_SIZE; an httpcore upgrade that
+    # changes either must fail here, not silently widen the priced bound.
+    assert httpcore.AsyncHTTP11Connection.READ_NUM_BYTES == 65536
+    assert httpcore.AsyncHTTP11Connection.MAX_INCOMPLETE_EVENT_SIZE == 102400
+    assert HTTP_RECEIVE_BUFFER_BYTES == 65536
+    assert MAX_API_REQUEST_BODY_BYTES == 16384
