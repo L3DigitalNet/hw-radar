@@ -93,6 +93,7 @@ from hw_radar.catalog.models import (
     ScopeSweepContinuity,
     ScraperRun,
     SourceConfig,
+    TruncationReason,
 )
 from hw_radar.catalog.models.provider import ImportState
 from hw_radar.eligibility import ListingEvaluator, WatchEvaluator
@@ -316,12 +317,18 @@ async def _stage1(row: ProviderRun, *, client: ApifyClient, actor_name: str) -> 
 
 
 def _evidence(row: ProviderRun) -> ProviderRunEvidence:
+    # Rebuilt from the row, not the provider, because stages 2 and 5 may run in
+    # a later invocation than the fetch that classified the run. The row's
+    # coherence CHECK guarantees a reason exactly when completeness is TRUNCATED.
     return ProviderRunEvidence(
         provider_kind=ProviderKind.APIFY,
         provider_key=IMPORT_PROVIDER_KEY,
         completeness=RunCompleteness(row.completeness),
         completeness_reason=row.completeness_reason,
         stale_absence_eligible=False,
+        truncation_reason=TruncationReason(row.truncation_reason)
+        if row.truncation_reason
+        else None,
     )
 
 

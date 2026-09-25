@@ -9,8 +9,10 @@ The provider is exercised through run_collection where the pipeline's own
 behavior is the point (soft-block classification, persisted scope and hint), and
 directly where the provider's contract is the point (scope, evidence, paging).
 
-The D10 section at the end drives the durable stage machine
-(acquisition.apify.importer) through crashes, read caps, and in-memory retries.
+The D10 section drives the durable stage machine (acquisition.apify.importer)
+through crashes, read caps, and in-memory retries. The D6 (idempotency, AC-6),
+D7 (provider switch, AC-4), and D8 (truncation and emptiness, AC-5) sections
+after it prove the MS-2 exit criteria end to end through the same importer.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from django.conf import settings
 from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
+from ordering_support import listing, observe, record, sweep
 
 from hw_radar.acquisition import pipeline
 from hw_radar.acquisition.apify import importer
@@ -56,6 +59,7 @@ from hw_radar.acquisition.contracts import (
     RawItem,
 )
 from hw_radar.acquisition.pipeline import MEDIAN_BODY_WINDOW, run_collection, run_source
+from hw_radar.acquisition.providers import LocalCollectionProvider
 from hw_radar.acquisition.retention_policy import UnknownSourceRetention, source_retention
 from hw_radar.acquisition.scheduling.apply import apply_run_outcome
 from hw_radar.catalog.models import (
@@ -1167,3 +1171,494 @@ def test_max_size_valid_batch_imports_without_tripping_response_cap(
     # The rows really are near the worst case, not a trivially small batch.
     assert max(page_bytes) > settings.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES // 2
     assert row.dataset_read_count == 1
+
+
+# ── D6: idempotency (AC-6; MS2-D-13 *Idempotent import*) ──────────────────────
+#
+# D5's poll job is built on a parallel leg, so "a poll tick" here is one
+# import_provider_run call: that call is exactly what a tick hands a terminal
+# row to, and the stage machine's compare-and-set is the idempotency boundary
+# under test, not the selector in front of it.
+
+
+def _import_totals(site: SourceSite) -> tuple[int, int, int, int]:
+    """(listings, snapshots, raw payloads, scraper runs) on `site`."""
+    return (*_counts(site), ScraperRun.objects.filter(source_site=site).count())
+
+
+def test_duplicate_completion_is_noop(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+) -> None:
+    site, row, fixture = crash_setup
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+    before = _import_totals(site)
+    row.refresh_from_db()
+    detail_before = dict(row.stage_detail)
+
+    fake = _fake(fixture)
+    assert _importer_run(row, fake) is ImportState.FINALIZED
+
+    assert _import_totals(site) == before
+    row.refresh_from_db()
+    assert row.stage_detail == detail_before
+    # A finalized row is a no-op before any fetch (MS2-D-13 step 1).
+    assert fake.dataset_requests == []
+    assert row.dataset_read_count == 1
+    _assert_imported_once(site, row, fixture)
+
+
+def test_crash_between_persist_and_mark_replays_once(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site, row, fixture = crash_setup
+    watch = _drive_watch()
+    # after=True: every listing, snapshot, and raw payload of the batch is
+    # written inside the stage-1 transaction, then the process is lost before
+    # the same transaction marks the row observations_committed.
+    monkeypatch.setattr(
+        importer, "persist_observations", _FailOnce(importer.persist_observations, after=True)
+    )
+
+    with pytest.raises(Crash):
+        _importer_run(row, _fake(fixture))
+    row.refresh_from_db()
+    assert row.import_state == ImportState.PENDING
+    assert row.import_listing_ids == []
+    assert _counts(site) == (0, 0, 0)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+    _assert_imported_once(site, row, fixture, watch)
+
+
+def test_replayed_dataset_read_does_not_duplicate_snapshots(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+) -> None:
+    # A second provider_run reading the same dataset at the same startedAt is
+    # the replay at its most adversarial: the row-level compare-and-set cannot
+    # see it, so only persistence's insert-if-absent on (listing_id,
+    # observed_at) stands between it and duplicated price history.
+    site, first, fixture = crash_setup
+    assert _importer_run(first, _fake(fixture)) is ImportState.FINALIZED
+    listing_pks = set(Listing.objects.filter(source_site=site).values_list("pk", flat=True))
+    snapshots = OfferSnapshot.objects.filter(listing__source_site=site).count()
+    replay = _provider_run(site, {**fixture, "fixture": "complete-replay"})
+
+    assert _importer_run(replay, _fake(fixture)) is ImportState.FINALIZED
+
+    replay.refresh_from_db()
+    assert replay.stage_detail["snapshots_appended"] == 0
+    assert OfferSnapshot.objects.filter(listing__source_site=site).count() == snapshots
+    assert set(Listing.objects.filter(source_site=site).values_list("pk", flat=True)) == (
+        listing_pks
+    )
+    assert set(replay.import_listing_ids) == listing_pks
+
+
+def test_retry_reuses_scraper_run(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    site, row, fixture = crash_setup
+    monkeypatch.setattr(importer, "persist_observations", _FailOnce(importer.persist_observations))
+    monkeypatch.setattr(importer, "_stage2", _FailOnce(importer._stage2))  # pyright: ignore[reportPrivateUsage]
+    run_pks: set[int] = set()
+
+    for expected in (ImportState.PENDING, ImportState.OBSERVATIONS_COMMITTED):
+        with pytest.raises(Crash):
+            _importer_run(row, _fake(fixture))
+        row.refresh_from_db()
+        assert row.import_state == expected
+        assert row.scraper_run is not None
+        run_pks.add(row.scraper_run.pk)
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+
+    row.refresh_from_db()
+    assert row.import_attempts == 3
+    assert row.scraper_run is not None
+    run_pks.add(row.scraper_run.pk)
+    assert len(run_pks) == 1
+    run = _assert_imported_once(site, row, fixture)
+    # started_at is the run's startedAt from the first claim, not a retry's clock.
+    assert run.started_at == datetime.fromisoformat(fixture["startedAt"])
+
+
+def test_duplicated_dataset_import_is_noop(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+) -> None:
+    # Two executors claim the same pending row and BOTH read the dataset before
+    # either commits (the barrier holds each dataset read until the other has
+    # arrived). The later stage-1 commit must stop at the compare-and-set and
+    # discard its batch rather than persist the same dataset a second time.
+    site, row, fixture = crash_setup
+    watch = _drive_watch()
+    barrier = asyncio.Barrier(2)
+    served = _fake(fixture)
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == f"/v2/datasets/{DATASET}/items":
+            async with asyncio.timeout(10):
+                await barrier.wait()
+        return served(request)
+
+    async def both() -> list[ImportState]:
+        client = ApifyClient(TOKEN, transport=httpx.MockTransport(handler))
+        return list(
+            await asyncio.gather(
+                *(
+                    import_provider_run(
+                        row.pk, client=client, actor_name=ACTOR, resolver=NullResolver()
+                    )
+                    for _ in range(2)
+                )
+            )
+        )
+
+    states = _run(both())
+
+    assert ImportState.FINALIZED in states
+    row.refresh_from_db()
+    assert row.import_attempts == 2
+    assert len(served.dataset_requests) == 2
+    assert row.dataset_read_count == 2
+    _assert_imported_once(site, row, fixture, watch)
+
+
+def test_duplicated_remote_completion_observed_twice_imports_once(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+) -> None:
+    site, row, fixture = crash_setup
+    watch = _drive_watch()
+    first_tick = _fake(fixture)
+    second_tick = _fake(fixture)
+
+    assert _importer_run(row, first_tick) is ImportState.FINALIZED
+    row.refresh_from_db()
+    attempts = row.import_attempts
+    assert _importer_run(row, second_tick) is ImportState.FINALIZED
+
+    row.refresh_from_db()
+    assert first_tick.dataset_requests != []
+    # The second observation of SUCCEEDED neither reads nor claims.
+    assert second_tick.dataset_requests == []
+    assert row.import_attempts == attempts
+    assert row.dataset_read_count == 1
+    _assert_imported_once(site, row, fixture, watch)
+
+
+# ── D7: provider switch (AC-4) ────────────────────────────────────────────────
+
+
+class _ScopedLocalAdapter:
+    """Local SourceAdapter emitting fixed keys in one scope at a chosen observation time."""
+
+    name = "synthetic-local-scoped"
+    site_key = SITE
+    run_kind = RunKind.FULL
+    expects_json = True
+    last_parse_skipped = 0
+
+    def __init__(
+        self, keys: list[str], *, at: datetime, scope: str | None = SCOPE, price: str = "90.00"
+    ) -> None:
+        self._keys = keys
+        self._at = at
+        self._scope = scope
+        self._price = Decimal(price)
+
+    async def fetch(self) -> RawBatch:
+        return RawBatch(
+            source=self.name,
+            fetched_at=self._at,
+            items=[RawItem(url="https://synthetic.invalid/list", payload_text="x" * 200)],
+        )
+
+    def parse(self, batch: RawBatch) -> list[ParsedListing]:
+        return [
+            ParsedListing(
+                source_listing_key=key,
+                url=f"https://synthetic.invalid/{key}",
+                title="Synthetic 8TB",
+                price=self._price,
+                raw_url="https://synthetic.invalid/list",
+                category_hint="drive",
+                collection_scope=self._scope,
+            )
+            for key in self._keys
+        ]
+
+
+def _local_run(adapter: _ScopedLocalAdapter) -> ScraperRun:
+    # The local path through run_collection, exactly as run_source composes it.
+    run, _ = _run(run_collection(LocalCollectionProvider(adapter), NullResolver()))
+    assert run.status == RunStatus.SUCCESS, run.error
+    return run
+
+
+def test_provider_switch_preserves_identity_history_and_watch_state(
+    synthetic_site: SourceSite,
+) -> None:
+    fixture = _drive_fixture()
+    keys = sorted(row["sourceListingKey"] for row in fixture["datasetItems"])
+    started = datetime.fromisoformat(fixture["startedAt"])
+    local_before = started - timedelta(hours=1)
+    local_after = started + timedelta(hours=1)
+    watch = _drive_watch()
+
+    # 1. Local collection establishes identity and the first evaluations.
+    _local_run(_ScopedLocalAdapter(keys, at=local_before))
+    listing_pks = dict(
+        Listing.objects.filter(source_site=synthetic_site).values_list("source_listing_key", "pk")
+    )
+    assert sorted(listing_pks) == keys
+    evaluation_pks = set(WatchEvaluation.objects.filter(watch=watch).values_list("pk", flat=True))
+    assert len(evaluation_pks) == len(keys)
+
+    # 2. The same source switches to an Actor import with the same keys and scope.
+    row = _provider_run(synthetic_site, fixture)
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+    row.refresh_from_db()
+    assert row.completeness == RunCompleteness.COMPLETE
+    assert row.stage_detail["listings_delisted"] == 0
+
+    # 3. ...and back to local.
+    _local_run(_ScopedLocalAdapter(keys, at=local_after, price="80.00"))
+
+    listings = Listing.objects.filter(source_site=synthetic_site)
+    assert dict(listings.values_list("source_listing_key", "pk")) == listing_pks
+    assert all(current.delisted_at is None for current in listings)
+    assert {current.collection_scope for current in listings} == {SCOPE}
+    # Contiguous price history: every snapshot, local and imported, lies on the
+    # one listing pk per key, in observation order across both switches.
+    for key, pk in listing_pks.items():
+        history = list(
+            OfferSnapshot.objects.filter(listing__source_site=synthetic_site, listing__pk=pk)
+            .order_by("observed_at")
+            .values_list("observed_at", flat=True)
+        )
+        assert history == [local_before, started, local_after], key
+    assert OfferSnapshot.objects.filter(listing__source_site=synthetic_site).count() == 3 * len(
+        keys
+    )
+    # Watch state survives: the same rows, re-bound to the newest observation.
+    evaluations = WatchEvaluation.objects.filter(watch=watch)
+    assert set(evaluations.values_list("pk", flat=True)) == evaluation_pks
+    assert {e.snapshot_observed_at for e in evaluations} == {local_after}
+    # No remote run identity leaks into listing or snapshot identity. A
+    # snapshot's key is (listing_id, observed_at), so its identity is the
+    # listing's key columns plus the observation time, both checked here.
+    remote_ids = [row.external_run_id, row.import_idempotency_key, DATASET]
+    assert all(remote_ids)
+    for current in listings:
+        key_columns = (
+            current.source_listing_key,
+            current.canonical_url,
+            current.url_hash,
+            current.listing_fingerprint,
+        )
+        for column in key_columns:
+            assert not any(str(remote_id) in column for remote_id in remote_ids), column
+    snapshot_keys = set(
+        OfferSnapshot.objects.filter(listing__source_site=synthetic_site).values_list(
+            "listing_id", "observed_at"
+        )
+    )
+    assert snapshot_keys == {
+        (pk, at) for pk in listing_pks.values() for at in (local_before, started, local_after)
+    }
+
+
+# ── D8: truncation and emptiness (AC-5, ADR 0021 :100) ────────────────────────
+#
+# Each case seeds the admitted scope with an active listing the Actor fixture
+# does not contain (`syn-absent`), plus live continuity for that scope, so any
+# path that read the run as absence evidence, directly or through continuity,
+# would show up as a delist or as continuity left standing.
+
+ABSENT_KEY: Final = "syn-absent"
+OTHER_SCOPE: Final = "synthetic:hdd:other"
+
+
+def _seed_absence_bait(site: SourceSite, started: datetime) -> None:
+    observe(site, started - timedelta(days=1), [record(ABSENT_KEY, scope=SCOPE)])
+    sweep(
+        site,
+        started - timedelta(days=1),
+        scope_key=SCOPE,
+        seen={ABSENT_KEY},
+        delist=False,
+    )
+    assert _scope_row(site).continuous_since is not None
+
+
+def _scope_row(site: SourceSite, scope: str = SCOPE) -> ScopeSweepContinuity:
+    return ScopeSweepContinuity.objects.get(source_site=site, collection_scope=scope)
+
+
+def _assert_no_absence_and_continuity_broken(site: SourceSite, started: datetime) -> None:
+    bait = listing(site, ABSENT_KEY)
+    assert (bait.delisted_at, bait.delist_reason) == (None, "")
+    continuity = _scope_row(site)
+    assert continuity.continuous_since is None
+    assert continuity.continuity_broken_at == started
+    assert continuity.last_complete_sweep_at is None
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("truncated-by-items", TruncationReason.ITEM_LIMIT),
+        ("truncated-by-pages", TruncationReason.PAGE_LIMIT),
+        ("truncated-by-time", TruncationReason.TIME_LIMIT),
+        ("truncated-by-bytes", TruncationReason.RESOURCE_LIMIT),
+        ("timed-out", TruncationReason.TIME_LIMIT),
+    ],
+)
+def test_truncated_actor_fixture_cannot_delist(
+    synthetic_site: SourceSite, name: str, expected: TruncationReason
+) -> None:
+    fixture = _fixture(name)
+    started = datetime.fromisoformat(fixture["startedAt"])
+    _seed_absence_bait(synthetic_site, started)
+    row = _provider_run(synthetic_site, fixture)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+
+    row.refresh_from_db()
+    assert row.completeness == RunCompleteness.TRUNCATED
+    assert row.truncation_reason == expected
+    assert row.stage_detail["listings_delisted"] == 0
+    _assert_no_absence_and_continuity_broken(synthetic_site, started)
+    # The truncated rows themselves were still imported as observations.
+    assert len(row.import_listing_ids) == len(fixture["datasetItems"])
+    evidence = _evidence_json(ScraperRun.objects.get(pk=row.scraper_run_id))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType] - django-types has no <fk>_id stubs
+    assert evidence["completeness"] == "truncated"
+    assert evidence["truncation_reason"] == expected.value
+    assert evidence["stale_absence_eligible"] is False
+
+
+@pytest.mark.parametrize(
+    ("name", "finalizes"),
+    [
+        ("partial-with-errors", True),
+        ("failed-with-items", True),
+        ("missing-output", False),
+        ("unknown-schema", False),
+    ],
+)
+def test_partial_failure_and_failed_actor_fixtures_cannot_delist(
+    synthetic_site: SourceSite, name: str, *, finalizes: bool
+) -> None:
+    fixture = _fixture(name)
+    started = datetime.fromisoformat(fixture["startedAt"])
+    _seed_absence_bait(synthetic_site, started)
+    row = _provider_run(synthetic_site, fixture)
+
+    state = _importer_run(row, _fake(fixture))
+
+    row.refresh_from_db()
+    assert row.completeness == FIXTURE_COMPLETENESS[name]
+    assert row.truncation_reason == ""
+    if finalizes:
+        # A partial failure still imports its rows as observations.
+        assert state is ImportState.FINALIZED
+        assert row.stage_detail["listings_delisted"] == 0
+        evidence = _evidence_json(ScraperRun.objects.get(pk=row.scraper_run_id))  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType] - django-types has no <fk>_id stubs
+        assert "truncation_reason" not in evidence
+    else:
+        assert state is ImportState.REJECTED
+        assert row.stage_detail["reject_reason"] == "failed_run"
+    _assert_no_absence_and_continuity_broken(synthetic_site, started)
+
+
+@pytest.mark.parametrize("name", ["count-mismatch", "complete-with-limit-hit", "status-mismatch"])
+def test_contradictory_report_rejected_and_breaks_continuity(
+    synthetic_site: SourceSite, name: str
+) -> None:
+    fixture = _fixture(name)
+    started = datetime.fromisoformat(fixture["startedAt"])
+    _seed_absence_bait(synthetic_site, started)
+    row = _provider_run(synthetic_site, fixture)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.REJECTED
+
+    row.refresh_from_db()
+    assert row.completeness == RunCompleteness.FAILED
+    assert row.completeness_reason.startswith("contradictory_report: ")
+    assert row.stage_detail["reject_reason"] == "failed_run"
+    # Rejected before persistence: only the seeded bait exists.
+    assert list(
+        Listing.objects.filter(source_site=synthetic_site).values_list(
+            "source_listing_key", flat=True
+        )
+    ) == [ABSENT_KEY]
+    assert ScraperRun.objects.get(pk=row.scraper_run_id).status == RunStatus.FAILED  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType] - django-types has no <fk>_id stubs
+    _assert_no_absence_and_continuity_broken(synthetic_site, started)
+
+
+def test_complete_empty_run_delists_scope_end_to_end(synthetic_site: SourceSite) -> None:
+    fixture = _fixture("complete-empty")
+    started = datetime.fromisoformat(fixture["startedAt"])
+    earlier = started - timedelta(days=1)
+    observe(
+        synthetic_site,
+        earlier,
+        [
+            record("syn-in-scope", scope=SCOPE),
+            record("syn-other-scope", scope=OTHER_SCOPE),
+            record("syn-null-scope"),
+        ],
+    )
+    row = _provider_run(synthetic_site, fixture)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+
+    row.refresh_from_db()
+    assert (row.completeness, row.completeness_reason) == (
+        RunCompleteness.COMPLETE,
+        "complete_empty",
+    )
+    run = ScraperRun.objects.get(pk=row.scraper_run_id)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType] - django-types has no <fk>_id stubs
+    # The empty batch passed the zero-record guard: a SUCCESS, not PARSER_ROT.
+    assert (run.status, run.records_fetched) == (RunStatus.SUCCESS, 0)
+    assert run.detail_json["listings_delisted"] == 1
+    swept = listing(synthetic_site, "syn-in-scope")
+    assert (swept.delist_reason, swept.delisted_at) == ("absent_from_sweep", started)
+    for untouched in ("syn-other-scope", "syn-null-scope"):
+        assert listing(synthetic_site, untouched).delisted_at is None, untouched
+    assert _scope_row(synthetic_site).last_complete_sweep_at == started
+
+
+def _assert_failed_fixture_rejected_without_absence(
+    site: SourceSite, name: str, reason: str
+) -> None:
+    fixture = _fixture(name)
+    started = datetime.fromisoformat(fixture["startedAt"])
+    _seed_absence_bait(site, started)
+    row = _provider_run(site, fixture)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.REJECTED
+
+    row.refresh_from_db()
+    assert row.completeness == RunCompleteness.FAILED
+    assert row.completeness_reason.startswith(reason)
+    assert row.stage_detail["reject_reason"] == "failed_run"
+    assert Listing.objects.filter(source_site=site).count() == 1
+    assert ScraperRun.objects.get(pk=row.scraper_run_id).status == RunStatus.FAILED  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownArgumentType] - django-types has no <fk>_id stubs
+    _assert_no_absence_and_continuity_broken(site, started)
+
+
+def test_ambiguous_empty_run_cannot_delist(synthetic_site: SourceSite) -> None:
+    # An empty dataset whose OUTPUT does not prove the sweep complete is not
+    # complete-empty: it must never read as "the scope is now empty".
+    _assert_failed_fixture_rejected_without_absence(
+        synthetic_site, "ambiguous-empty", "ambiguous_empty"
+    )
+
+
+def test_nonempty_unusable_run_is_rejected_and_cannot_delist(synthetic_site: SourceSite) -> None:
+    # Every row refused at admission leaves zero usable rows; read as an empty
+    # complete sweep it would delist the whole scope.
+    _assert_failed_fixture_rejected_without_absence(
+        synthetic_site, "nonempty-unusable", "no_usable_items"
+    )

@@ -24,13 +24,6 @@ Instructions for AI agents:
   rules/registry/acceptance policy, corpus category-hint round trip). CPU 9 / GPU 8 / RAM 2
   first-party rows seeded; no further RAM expansion is planned in MS-2 (OQ27 resolved
   2026-09-25 — no new retention class for non-first-party reference data).
-- [ ] Add `ProviderRunEvidence.truncation_reason` (MS2-D-11), deferred out of D1. The DB side
-  landed in D2 (`provider_run.truncation_reason`, migration `0021`, with a CHECK that it is set
-  iff completeness is `truncated`); the evidence-model field and its None-omitting serializer
-  remain, needed by D8. D4 records the reason on `provider_run.truncation_reason` only. Conflict
-  to resolve first: MS2-D-11's validator ("required for non-local truncated evidence") would fail
-  the frozen `tests/db/test_collection_provider.py` remote fakes, which build non-local
-  `truncated` evidence without a reason.
 - [ ] Split the committed input contract into a common schema + synthetic extension so a future
   merchant Actor can't inherit `faultMode` (verifier finding, low priority).
 - [ ] Harden D3 client's proxy guard: currently top-level only; nested proxy config is blocked via
@@ -58,9 +51,10 @@ Instructions for AI agents:
   (`acquisition.stages`: transactional persist/delist with the MS2-D-35 lock order and in-memory
   retry, `observe_listing` ordering guards, per-observation snapshot retention, per-scope ordered
   continuity; `acquisition.apify.importer`: MS2-D-22 state machine, read caps, Reject). D10
-  remainder: the restart tests in `test_apify_poll_job.py` (land with D5's selectors). **Next (Slice D core):** D5 → D6 → D7 →
-  D8 → D11 → D12 → D9; Apify push/build/run (none has occurred yet); truncation_reason on the
-  evidence model (above). D5 must write `provider_run.query_scope` as the camelCase
+  remainder: the restart tests in `test_apify_poll_job.py` (land with D5's selectors). **D6–D8
+  done** (AC-4/5/6 fixture proofs in `tests/db/test_apify_import.py`;
+  `ProviderRunEvidence.truncation_reason`, optional on the model, DB CHECK enforces it).
+  **Next (Slice D core):** D5 → D11 → D12 → D9; Apify push/build/run (none has occurred yet). D5 must write `provider_run.query_scope` as the camelCase
   `QueryScope` wire JSON the run was started with, supply the admitted Actor name the provider
   checks OUTPUT against, and drive `import_provider_run` from the outstanding selector.
 - [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,

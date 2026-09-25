@@ -4740,6 +4740,17 @@ the then-current code. D-prep (D1, D3) is not gated.
     `test_nonempty_unusable_run_is_rejected_and_cannot_delist`: each FULL
     run is rejected, delists nothing, and breaks continuity for its scope.
     The PROBE counterparts are in D12.
+- **D6–D8 landed 2026-09-25** in `tests/db/test_apify_import.py` (the file
+  the traceability rows name), end to end through `import_provider_run` over
+  the real `ApifyClient` with `httpx.MockTransport`; the local legs of D7 run
+  through `run_collection`. D5's poll job was on a parallel leg, so each "poll
+  tick" in D6 is one `import_provider_run` call. MS2-D-11's
+  `ProviderRunEvidence.truncation_reason` landed with them, as a documented
+  deviation: it is forbidden for local and non-truncated evidence but
+  **optional** for non-local truncated evidence, because the frozen remote
+  fakes in `test_collection_provider.py` build that evidence without one. The
+  `provider_run_truncation_reason_coherent` CHECK enforces the requirement, and
+  both Apify evidence builders copy the reason from the classification.
 - **D10 — Durable staged import (MS2-D-22, MS2-D-23).** Extract the stage
   functions from `run_collection`. The frozen pipeline tests must stay green.
   Then implement the importer state machine.

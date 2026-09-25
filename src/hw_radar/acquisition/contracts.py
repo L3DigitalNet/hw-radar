@@ -13,9 +13,22 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Final, Literal, Protocol, Self, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
-from hw_radar.catalog.models import ProviderKind, RetentionClass, RunCompleteness, RunKind
+from hw_radar.catalog.models import (
+    ProviderKind,
+    RetentionClass,
+    RunCompleteness,
+    RunKind,
+    TruncationReason,
+)
 from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG_RE
 
 # Reserved OfferSnapshot.attrs_json key under which persist.append_snapshot stores
@@ -230,6 +243,18 @@ class ProviderRunEvidence(BaseModel):
         contract, whereas a remote run's truncation is set by budget and item
         limits it reports after the fact, so it is never absence evidence of any
         strength (ADR 0021).
+    truncation_reason — which cap cut a TRUNCATED remote run short (revision 5).
+        Optional, and forbidden for every other completeness and for local
+        evidence, whose truncation is an adapter's honest incomplete scope rather
+        than a cap. It is deliberately NOT required for non-local TRUNCATED
+        evidence, although the plan's MS2-D-11 text asks for that: the frozen
+        remote fakes in tests/db/test_collection_provider.py build non-local
+        TRUNCATED evidence without one. The requirement is enforced where the
+        cause is actually recorded instead, by the provider_run CHECK
+        provider_run_truncation_reason_coherent (catalog.models.provider), and
+        both Apify evidence builders copy the reason from that row's
+        classification. A None reason is omitted from the serialized JSON, so
+        every local detail_json["provider"] stays byte-identical to Slice A's.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -240,6 +265,7 @@ class ProviderRunEvidence(BaseModel):
     completeness: RunCompleteness
     completeness_reason: str = Field(min_length=1)
     stale_absence_eligible: bool
+    truncation_reason: TruncationReason | None = None
 
     @model_validator(mode="after")
     def _check_invariants(self) -> Self:
@@ -249,7 +275,21 @@ class ProviderRunEvidence(BaseModel):
             raise ValueError("completeness_reason must be non-blank")
         if self.stale_absence_eligible and self.provider_kind is not ProviderKind.LOCAL:
             raise ValueError("only a local provider may be stale-absence eligible")
+        if self.truncation_reason is not None:
+            if self.completeness is not RunCompleteness.TRUNCATED:
+                raise ValueError("truncation_reason qualifies truncated evidence only")
+            if self.provider_kind is ProviderKind.LOCAL:
+                raise ValueError("local truncated evidence carries no truncation_reason")
         return self
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_truncation_reason(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if self.truncation_reason is None:
+            data.pop("truncation_reason", None)
+        return data
 
 
 class CollectionProvider(Protocol):

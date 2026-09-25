@@ -321,4 +321,5 @@ class ApifyImportProvider:
             completeness=classification.completeness,
             completeness_reason=classification.reason,
             stale_absence_eligible=False,
+            truncation_reason=classification.truncation_reason,
         )
