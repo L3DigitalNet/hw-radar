@@ -102,6 +102,13 @@ CFG: Final = BudgetSettings(
     max_account_reads_per_cycle=3000,
     account_snapshot_max_age_s=900,
     cycle_boundary_guard_s=3600,
+    # The verified account state of 2026-09-25 (MS2-D-48): the observed cycle
+    # start, the $19 limit (= the prepaid credit), Starter base, retention 31.
+    billing_cycle_anchor=datetime(2026, 9, 5, tzinfo=UTC),
+    account_limit_usd=D("19.00"),
+    account_base_price_usd=D("19.00"),
+    account_data_retention_days=31,
+    account_verified_on=date(2026, 9, 5),
 )
 
 NOW: Final = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
@@ -903,3 +910,95 @@ def test_load_budget_settings_reflects_django_settings() -> None:
     assert loaded.call_billing_residual_accepted == date(2026, 9, 25)
     assert loaded.enabled is False
     assert_denied(decide(settings=dataclasses.replace(loaded, enabled=True)), R.PRICING_UNVERIFIED)
+
+
+# ── Configured billing cycle (MS2-D-48 *Cycle*, E9.1) ───────────────────────
+
+
+def _utc(year: int, month: int, day: int, *rest: int) -> datetime:
+    return datetime(year, month, day, *rest, tzinfo=UTC)
+
+
+def _ms_before(value: datetime) -> datetime:
+    return value - timedelta(milliseconds=1)
+
+
+@pytest.mark.parametrize(
+    ("anchor", "now", "expected"),
+    [
+        # The observed cycle of 2026-09-25 (MS2-D-48 *Evidence*).
+        pytest.param(
+            _utc(2026, 9, 5),
+            _utc(2026, 9, 25),
+            (_utc(2026, 9, 5), _utc(2026, 10, 4, 23, 59, 59, 999000)),
+            id="observed-cycle",
+        ),
+        pytest.param(
+            _utc(2026, 9, 5),
+            _utc(2026, 10, 5),
+            (_utc(2026, 10, 5), _ms_before(_utc(2026, 11, 5))),
+            id="now-at-next-start-is-next-cycle",
+        ),
+        pytest.param(
+            _utc(2026, 9, 5),
+            _utc(2026, 10, 4, 23, 59, 59, 999000),
+            (_utc(2026, 9, 5), _utc(2026, 10, 4, 23, 59, 59, 999000)),
+            id="now-at-cycle-end-is-current-cycle",
+        ),
+        pytest.param(
+            _utc(2027, 1, 28),
+            _utc(2027, 2, 10),
+            (_utc(2027, 1, 28), _ms_before(_utc(2027, 2, 28))),
+            id="day-28-jan-to-feb",
+        ),
+        pytest.param(
+            _utc(2027, 1, 28),
+            _utc(2027, 3, 1),
+            (_utc(2027, 2, 28), _ms_before(_utc(2027, 3, 28))),
+            id="day-28-feb-to-mar-2027",
+        ),
+        pytest.param(
+            _utc(2028, 1, 28),
+            _utc(2028, 2, 29),
+            (_utc(2028, 2, 28), _ms_before(_utc(2028, 3, 28))),
+            id="day-28-feb-to-mar-leap-2028",
+        ),
+        pytest.param(
+            _utc(2026, 9, 5),
+            _utc(2027, 1, 2),
+            (_utc(2026, 12, 5), _ms_before(_utc(2027, 1, 5))),
+            id="dec-to-jan-across-a-year",
+        ),
+    ],
+)
+def test_billing_cycle_bounds_from_anchor(
+    anchor: datetime, now: datetime, expected: tuple[datetime, datetime]
+) -> None:
+    assert budget.billing_cycle_bounds(anchor, now) == expected
+
+
+def test_billing_cycle_bounds_are_computed_from_the_anchor_not_iterated() -> None:
+    # 61 months on, the start is still exactly day 28: a derivation that stepped
+    # by a fixed duration, or carried any per-step error forward, would have
+    # drifted off the anchor day long before.
+    anchor = _utc(2026, 1, 28)
+    bounds = budget.billing_cycle_bounds(anchor, _utc(2031, 2, 28, 12))
+    assert bounds == (_utc(2031, 2, 28), _ms_before(_utc(2031, 3, 28)))
+
+
+def test_billing_cycle_before_anchor_is_unknown() -> None:
+    anchor = _utc(2026, 9, 5)
+    assert budget.billing_cycle_bounds(anchor, _ms_before(anchor)) is None
+
+
+@pytest.mark.parametrize("day", [1, 28])
+def test_every_derived_cycle_is_at_most_744_hours(day: int) -> None:
+    anchor = _utc(2026, 1, day)
+    now = anchor
+    for _ in range(48):
+        bounds = budget.billing_cycle_bounds(anchor, now)
+        assert bounds is not None
+        start, end = bounds
+        assert start.day == day
+        assert end - start <= timedelta(hours=budget.FULL_CYCLE_HOURS)
+        now = end + timedelta(milliseconds=1)

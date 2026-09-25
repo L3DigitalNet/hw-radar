@@ -1,5 +1,5 @@
 import importlib.util
-from datetime import date
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
@@ -171,6 +171,11 @@ _BUDGET_DEFAULTS: dict[str, object] = {
     "HW_RADAR_APIFY_WATCH_REFRESH_RESERVE_USD": Decimal("3.00"),
     "HW_RADAR_APIFY_CASH_CEILING_USD": Decimal("20.00"),
     "HW_RADAR_APIFY_ACCOUNT_MARGIN_USD": None,
+    "HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR": None,
+    "HW_RADAR_APIFY_ACCOUNT_LIMIT_USD": None,
+    "HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD": None,
+    "HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS": None,
+    "HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON": None,
     "HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD": Decimal("5.00"),
     "HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED": date(2026, 9, 25),
     "HW_RADAR_APIFY_OPERATOR_BUILD_BOUND_USD": Decimal("0.41"),
@@ -287,3 +292,49 @@ def test_unknown_settlement_mode_parses_to_none(monkeypatch: pytest.MonkeyPatch)
     )
     assert loaded.HW_RADAR_APIFY_POST_RUN_COST_MODE is None
     assert loaded.HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT is None
+
+
+# ── Configured account state (MS2-D-48) ─────────────────────────────────────
+
+_ACCOUNT_KEYS = (
+    "HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR",
+    "HW_RADAR_APIFY_ACCOUNT_LIMIT_USD",
+    "HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD",
+    "HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS",
+    "HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON",
+)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("2026-09-05T00:00:00Z", datetime(2026, 9, 5, tzinfo=UTC)),
+        ("2026-09-05T00:00:00+00:00", datetime(2026, 9, 5, tzinfo=UTC)),
+        (" 2026-09-01T00:00:00Z ", datetime(2026, 9, 1, tzinfo=UTC)),
+        ("2026-02-28T00:00:00Z", datetime(2026, 2, 28, tzinfo=UTC)),
+        ("", None),
+        ("garbage", None),
+        ("2026-09-05T00:00:00", None),  # naive
+        ("2026-09-05T00:00:00+02:00", None),
+        ("2026-09-05T00:00:01Z", None),
+        ("2026-09-05T00:00:00.000001Z", None),
+        ("2026-09-29T00:00:00Z", None),
+        ("2026-09-30T00:00:00Z", None),
+        ("2026-08-31T00:00:00Z", None),
+        ("2026-09-05", None),  # date-only: no zone, so refused like a naive value
+    ],
+)
+def test_billing_cycle_anchor_parsing(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: datetime | None
+) -> None:
+    loaded = _load_budget(monkeypatch, HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR=raw)
+    anchor = loaded.HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR
+    assert anchor == expected
+    if expected is not None:
+        assert anchor.tzinfo is UTC
+
+
+def test_account_settings_have_no_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded = _load_budget(monkeypatch)
+    for key in _ACCOUNT_KEYS:
+        assert getattr(loaded, key) is None, key

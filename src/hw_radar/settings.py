@@ -56,7 +56,7 @@ EnvironmentFile=/run/bao-agent/hw-radar.env) - never a plaintext file at rest.
 """
 
 import os
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -305,7 +305,7 @@ def _env_choice(name: str, default: str, choices: tuple[str, ...]) -> str | None
     return value if value in choices else None
 
 
-def _env_date(name: str, default: date) -> date | None:
+def _env_date(name: str, default: date | None = None) -> date | None:
     raw = os.environ.get(name)
     if raw is None:
         return default
@@ -313,6 +313,41 @@ def _env_date(name: str, default: date) -> date | None:
         return date.fromisoformat(raw.strip())
     except ValueError:
         return None
+
+
+# Billing-cycle anchors above day 28 are refused, not clamped: Apify does not
+# document how an anniversary cycle anchored on day 29-31 runs through a shorter
+# month, and a wrong guess would move a boundary by up to three days (MS2-D-48
+# *Month-length edge cases*). On days 1-28 every month has the anchor day.
+_MAX_CYCLE_ANCHOR_DAY = 28
+
+
+def _env_cycle_anchor(name: str) -> datetime | None:
+    """Return a UTC-midnight cycle anchor on day 1-28, or None (MS2-D-48 *Cycle*).
+
+    None for an absent, empty, or unparseable value, a naive one, one at any
+    UTC offset other than zero, one not exactly 00:00:00.000000, or one on a
+    day above 28. A date-only value parses as a naive datetime and so is
+    refused too: the anchor is the observed `monthlyUsageCycle.startAt`
+    timestamp, and guessing its zone would be exactly the silent boundary
+    shift the anchor exists to prevent. Never a default: the value belongs
+    to one account.
+    """
+    raw = os.environ.get(name)
+    if raw is None:
+        return None
+    try:
+        value = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+    offset = value.utcoffset()
+    if offset is None or offset != timedelta(0):
+        return None
+    if (value.hour, value.minute, value.second, value.microsecond) != (0, 0, 0, 0):
+        return None
+    if value.day > _MAX_CYCLE_ANCHOR_DAY:
+        return None
+    return value.replace(tzinfo=UTC)
 
 
 # Unit prices (MS2-D-26). No live default: an absent, empty, or invalid price
@@ -389,6 +424,25 @@ def _env_account_margin() -> Decimal | None:
 
 
 HW_RADAR_APIFY_ACCOUNT_MARGIN_USD = _env_account_margin()
+
+# Configured Apify account state (MS2-D-48). The runtime token cannot read the
+# account endpoints, so every value below is operator-verified outside the
+# application (operator key, CLI or Console) and rendered here; the runtime never
+# reads account state. None has a default, because each value belongs to one
+# account: absent or invalid parses to None, and admission denies every class
+# (`cycle_unknown` for the anchor, `account_state_unobservable` for the rest).
+# MS2-D-48 *Cycle*: one observed `monthlyUsageCycle.startAt`, UTC midnight, day 1-28.
+HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR = _env_cycle_anchor("HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR")
+# MS2-D-48: the operator-verified lesser of the account usage limit and the
+# prepaid usage credit; P is derived from it, so admission never plans overage.
+HW_RADAR_APIFY_ACCOUNT_LIMIT_USD = _env_decimal("HW_RADAR_APIFY_ACCOUNT_LIMIT_USD")
+# MS2-D-48: the plan's operator-verified monthly base price (cash-ceiling guard).
+HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD = _env_decimal("HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD")
+# MS2-D-48: the account's operator-verified dataRetentionDays (retention check).
+HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS = _env_int("HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS")
+# MS2-D-48: the UTC date of the operator verification that produced the four
+# values above. Evidence, not an expiry: admission never ages it out.
+HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON = _env_date("HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON")
 # OQ26 (owner, 2026-09-25): 5.00 per billing cycle, applied ONLY when the
 # variable is absent. Empty, non-numeric, negative, or non-finite parses to None,
 # and budget denies every class with `external_liability_unbounded`: a

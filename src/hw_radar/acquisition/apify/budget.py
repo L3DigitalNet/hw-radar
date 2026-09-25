@@ -33,7 +33,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import ROUND_CEILING, Decimal
 from enum import StrEnum
 from typing import Final
@@ -67,6 +67,7 @@ __all__ = [
     "account_margin_usd",
     "actor_fetch_bytes",
     "api_call_bound",
+    "billing_cycle_bounds",
     "dataset_page_bound",
     "decide_admission",
     "estimate_operator_cost",
@@ -217,6 +218,12 @@ class BudgetSettings:
     max_account_reads_per_cycle: int | None
     account_snapshot_max_age_s: int | None
     cycle_boundary_guard_s: int | None
+    # Operator-verified account state (MS2-D-48); None is unset or invalid.
+    billing_cycle_anchor: datetime | None
+    account_limit_usd: Decimal | None
+    account_base_price_usd: Decimal | None
+    account_data_retention_days: int | None
+    account_verified_on: date | None
 
 
 def load_budget_settings() -> BudgetSettings:
@@ -263,6 +270,11 @@ def load_budget_settings() -> BudgetSettings:
         max_account_reads_per_cycle=s.HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE,
         account_snapshot_max_age_s=s.HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S,
         cycle_boundary_guard_s=s.HW_RADAR_APIFY_CYCLE_BOUNDARY_GUARD_S,
+        billing_cycle_anchor=s.HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR,
+        account_limit_usd=s.HW_RADAR_APIFY_ACCOUNT_LIMIT_USD,
+        account_base_price_usd=s.HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD,
+        account_data_retention_days=s.HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS,
+        account_verified_on=s.HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON,
     )
 
 
@@ -639,6 +651,39 @@ def project_allocation(cfg: BudgetSettings) -> Decimal:
             DenialReason.BUDGET_SETTING_INVALID, "OPERATOR_ALLOWANCE_USD exceeds the target"
         )
     return target - allowance
+
+
+# ── Billing cycle (MS2-D-48 *Cycle*) ─────────────────────────────────────────
+
+# A cycle ends this long before its successor starts, matching Apify's own
+# `...T23:59:59.999Z` end stamps (and ledger._CYCLE_END_EPSILON's clamp).
+_CYCLE_END_EPSILON: Final = timedelta(milliseconds=1)
+
+
+def _cycle_start(anchor: datetime, k: int) -> datetime:
+    """UTC midnight on the anchor's day, `k` months after the anchor's month."""
+    months = anchor.month - 1 + k
+    return datetime(anchor.year + months // 12, months % 12 + 1, anchor.day, tzinfo=UTC)
+
+
+def billing_cycle_bounds(anchor: datetime, now: datetime) -> tuple[datetime, datetime] | None:
+    """The configured billing cycle `[start, end]` containing `now`, or None before the anchor.
+
+    `anchor` is settings' validated value (UTC midnight, day 1-28). The end is
+    the next cycle's start minus 1 ms. A `now` in the sub-millisecond gap after
+    that end still maps to this cycle, and admission's `start <= now <= end`
+    test then denies it `cycle_unknown`, which fails closed.
+    """
+    # Every start is computed from the anchor directly, never by stepping from
+    # the previous cycle: stepping would carry any one-off error into every
+    # later boundary, while this form cannot drift however far `now` is.
+    at = now.astimezone(UTC)
+    if at < anchor:
+        return None
+    k = 12 * (at.year - anchor.year) + (at.month - anchor.month)
+    if _cycle_start(anchor, k) > at:
+        k -= 1
+    return _cycle_start(anchor, k), _cycle_start(anchor, k + 1) - _CYCLE_END_EPSILON
 
 
 def account_margin_usd(cfg: BudgetSettings, prepaid_credit_usd: Decimal) -> Decimal:

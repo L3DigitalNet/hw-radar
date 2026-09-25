@@ -113,6 +113,11 @@ BUDGET: Final = BudgetSettings(
     max_account_reads_per_cycle=3000,
     account_snapshot_max_age_s=900,
     cycle_boundary_guard_s=int(GUARD.total_seconds()),
+    billing_cycle_anchor=C1_START,
+    account_limit_usd=D("19.00"),
+    account_base_price_usd=D("19.00"),
+    account_data_retention_days=31,
+    account_verified_on=C1_START.date(),
 )
 CONFIG: Final = LedgerConfig(
     budget=BUDGET,
