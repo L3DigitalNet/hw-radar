@@ -34,9 +34,10 @@ from hw_radar.matching.mpn import extract_candidates
 from hw_radar.matching.normalize import canonicalize_title
 from hw_radar.matching.types import TokenKind
 
-# The five real registry keys of SA-002. `demo` is in ADAPTERS but is a fixture
-# source, and corpus schema validation rejects any key outside this tuple — a
-# demo entry would be unloadable by the evaluator.
+# The five real registry keys of SA-002. `demo` and `synthetic` are in ADAPTERS
+# but are fixture sources (FIXTURE_SOURCE_KEYS), and corpus schema validation
+# rejects any key outside this tuple — a fixture entry would be unloadable by
+# the evaluator.
 HARVEST_SOURCES: tuple[str, ...] = (
     "serverpartdeals",
     "goharddrive",

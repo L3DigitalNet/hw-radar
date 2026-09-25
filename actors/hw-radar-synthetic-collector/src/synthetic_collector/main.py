@@ -17,6 +17,7 @@ constructed (MS2-D-26; tests/test_boundaries.py scans for it).
 
 from __future__ import annotations
 
+import socket
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -26,7 +27,12 @@ import httpx
 from apify import Actor
 
 from synthetic_collector.contract import ACTOR_NAME, ACTOR_VERSION, OUTPUT_KEY
-from synthetic_collector.core import InputRejected, collect, validate_input
+from synthetic_collector.core import (
+    HTTP_RECEIVE_BUFFER_BYTES,
+    InputRejected,
+    collect,
+    validate_input,
+)
 
 
 class ActorRuntime(Protocol):
@@ -52,7 +58,16 @@ class ActorRuntime(Protocol):
 def new_http_client() -> httpx.AsyncClient:
     # follow_redirects=False: raw.githubusercontent.com serves pinned-commit
     # paths directly; a redirect would mean the fetch left the pinned content.
+    # SO_RCVBUF is pinned because the byte check can only stop reading, not stop
+    # the sender: whatever the kernel has already accepted for an abandoned
+    # response (over maxBytes, past the deadline, or a non-200 body never read)
+    # is still billed transfer. A fixed buffer bounds that to 2x the constant
+    # on Linux; the default autotuned buffer can grow to megabytes.
+    transport = httpx.AsyncHTTPTransport(
+        socket_options=[(socket.SOL_SOCKET, socket.SO_RCVBUF, HTTP_RECEIVE_BUFFER_BYTES)]
+    )
     return httpx.AsyncClient(
+        transport=transport,
         trust_env=False,
         follow_redirects=False,
         headers={"User-Agent": f"{ACTOR_NAME}/{ACTOR_VERSION}"},

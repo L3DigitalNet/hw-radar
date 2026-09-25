@@ -295,6 +295,19 @@ class Listing(RetentionGoverned):
     delist_reason = models.CharField(
         max_length=20, choices=DelistReason.choices, blank=True, default=""
     )
+    # MS2-D-12 collection scope ("<site_key>:<category>:<query_id>") of the sweep
+    # that last wrote this row. NULL is the legacy NULL scope, not "unknown": the
+    # delist stage acts on exactly one scope, and a None DelistScope.scope_key
+    # selects the NULL rows (acquisition.pipeline._apply_delist).
+    collection_scope = models.CharField(max_length=100, null=True, blank=True)
+    # Ordering watermarks for out-of-order imports (MS2-D-30, -35), each only
+    # ever raised. NULL means "none recorded since the column existed", which
+    # the guards read as "no bound", so deployed rows need no backfill:
+    # last_observed_at is the observed_at of the newest observation applied to
+    # current state; last_absence_at is the newest delist evidence time, kept
+    # separately from delisted_at because mark_relisted clears that column.
+    last_observed_at = models.DateTimeField(null=True, blank=True)
+    last_absence_at = models.DateTimeField(null=True, blank=True)
 
     objects: ClassVar[ListingManager] = ListingManager()
 
@@ -324,6 +337,12 @@ class Listing(RetentionGoverned):
                 condition=models.Q(delisted_at__isnull=True),
                 name="listing_active_by_site_key",
             ),
+            # The scoped delist candidate query (source, scope, still active).
+            models.Index(
+                fields=["source_site", "collection_scope"],
+                condition=models.Q(delisted_at__isnull=True),
+                name="listing_active_by_site_scope",
+            ),
             *retention_indexes("listing_expires"),
         ]
 
@@ -352,6 +371,9 @@ class Listing(RetentionGoverned):
         merchant content in the same transaction (see REDACTED_CONTENT_FIELDS).
         The three writes are atomic so a crash cannot leave a listing marked
         terminal while still holding content the mark says we have retired.
+
+        Also raises last_absence_at to the delist instant (MS2-D-35); the
+        acquisition ordering guards read it through persist.effective_absence.
         """
         if self.delisted_at is not None:
             return False
@@ -360,6 +382,13 @@ class Listing(RetentionGoverned):
             self.delisted_at = stamp
             self.delist_reason = reason
             fields = ["delisted_at", "delist_reason"]
+            # MS2-D-35 absence watermark: raised here, never lowered, and never
+            # cleared by mark_relisted, so the ordering guards still see this
+            # delist after a relist clears delisted_at. Raising it on every delist
+            # path is why it lives in this method rather than in one caller.
+            if self.last_absence_at is None or self.last_absence_at < stamp:
+                self.last_absence_at = stamp
+                fields.append("last_absence_at")
             bounded = self.retention_class in {c.value for c in BOUNDED_RETENTION_CLASSES}
             # A bounded row always has a non-NULL expires_at (retention_ttl_coherent),
             # so this comparison is safe; only ever pull the TTL forward, never extend.

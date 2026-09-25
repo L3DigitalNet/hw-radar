@@ -333,3 +333,57 @@ controlled synthetic Actor proof (task F5a) is sufficient to close the Apify por
 The production Actor-backed merchant pilot (task F5b) is not required to close MS-2; it stays
 source/legal-gated by [OQ24](../open-questions.md#oq24--production-actor-backed-merchant-source-admission),
 which may remain open after MS-2 closes.
+
+## Amendment — 2026-09-25 (s5): The runtime reads no account state (owner decision, R25)
+
+This amendment records the owner's decision of 2026-09-25 (session s5), resolving
+[OQ30](../resolved-questions.md#oq30--runtime-apify-account-reads-r25). It sharpens items 3, 4, and 11
+and the revision-6 addendum's first two bullets. The text above stays as the record of what was decided
+first. The design is MS2-D-48 in the MS-2 plan (revision 12).
+
+**13. The runtime reads no Apify account state.** The scoped runtime token got `403
+insufficient-permissions` from every account endpoint (`/v2/users/me`, `/limits`,
+`/usage/monthly`), and Apify offers no account or usage permission for scoped tokens. The owner
+therefore chose to drop runtime account reads. The following points are now binding:
+
+- **Budget period (sharpens item 4).** The period is still the account's actual Apify billing
+  cycle. The runtime derives it from a configured anchor (one observed cycle start) instead of
+  discovering it from the API. The operator verifies the anchor with the operator key, outside
+  the application, before enabling paid work, and again after any plan or billing change.
+- **Account state.** The account usage limit (the lesser of the limit and the prepaid credit),
+  the plan base price, and the data retention become operator-verified settings with an evidence
+  date. An unset or invalid value denies paid admission.
+- **Headroom (sharpens the addendum and item 11).** Admission keeps Hardware Radar's own ledger,
+  the $12 target, the operator allowance, and the $5 external-liability bound: Hardware Radar's
+  cycle debits plus the new reservation plus the bound must fit within the configured limit less
+  the margin. The observed-usage check and the observed breach of the external-liability bound are
+  withdrawn, because the runtime cannot see them.
+- **Account backstop (sharpens item 3).** Apify's own account usage limit ($19, equal to the
+  prepaid credit, verified) is now the only runtime-independent cap on the other workloads'
+  spend. It stays approximate (enforcement deviation of about 10%). A run start that Apify
+  refuses at the limit pauses paid work until the owner resets it. The project-level controls
+  still apply in full.
+- **Credential boundary (sharpens item 10).** The unscoped operator key is never rendered to any
+  application runtime, production or proof. Every account read happens outside the application,
+  and its result enters Hardware Radar only as configuration.
+
+The owner accepts one consequence: Hardware Radar can no longer see the shared account's other
+workloads' actual spend, only Apify's hard cap. The residual risks, cycle drift and stale
+configured values, are tracked as R39 in the MS-2 plan.
+
+## Amendment — 2026-09-25 (s5): F5a empirical findings
+
+The first real Actor proof (plan task F5a; evidence in
+[`docs/evidence/2026-09-25-f5a-synthetic-proof.md`](../evidence/2026-09-25-f5a-synthetic-proof.md))
+confirmed the decision's premises and adds these facts. The earlier text stays as the record of what was
+assumed.
+
+**14. Measured provider behavior.** (a) The scoped runtime token now exists, restricted to the Hardware
+Radar Actor (`Read`, `Run`, `List runs`, `Manage runs`, restricted access, default run storages); it
+receives 403 for inaccessible storage and 404 for nonexistent storage. (b) Run usage is not final at
+`finishedAt` (about 40% low at 0 s, stable by 30 s), so settlement stays at the conservative bound.
+(c) Post-run retrieval is billed to the account, not the run: dataset reads bill per item returned, and
+API calls bill through external data transfer (R38, observed). (d) The platform's `INPUT` write is billed
+to the run as a key-value write. (e) Apify rejects a schema-invalid input with HTTP 400 before any run
+exists. (f) A synthetic run costs about $0.0002 against a $0.0348 reservation; the whole proof (one
+build, eleven runs, all reads and probes) raised account usage by $0.00527.

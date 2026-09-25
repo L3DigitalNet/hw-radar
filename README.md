@@ -36,7 +36,8 @@ Hardware Radar Apify ceiling.
 with every marketplace source still disabled: GPU/RAM/CPU first-class
 categories, category-specific `match | no_match | unknown` requirement
 evaluation, and Hardware Radar's first self-owned Apify Actor project
-(`actors/hw-radar-synthetic-collector`; nothing pushed to or run on Apify yet).
+(`actors/hw-radar-synthetic-collector`, deployed privately and proven by eleven admitted runs in a
+non-production proof environment on 2026-09-25).
 
 ## Documentation
 

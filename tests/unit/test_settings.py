@@ -1,4 +1,6 @@
 import importlib.util
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
 from types import ModuleType
 
@@ -148,3 +150,202 @@ def test_static_root_env_override_wins_in_production(monkeypatch: pytest.MonkeyP
 def test_no_deployment_hostname_hardcoded() -> None:
     # Public-repo guard (AGENTS.md): the settings module must embed no real host.
     assert "l3digital" not in SETTINGS_PATH.read_text(encoding="utf-8")
+
+
+# ── Slice E budget keys: absent / empty / invalid semantics ─────────────────
+
+_BUDGET_DEFAULTS: dict[str, object] = {
+    "HW_RADAR_APIFY_USD_PER_CU": None,
+    "HW_RADAR_APIFY_DATASET_READS_USD_PER_1000": None,
+    "HW_RADAR_APIFY_DATASET_WRITES_USD_PER_1000": None,
+    "HW_RADAR_APIFY_DATASET_STORAGE_USD_PER_GB_HOUR": None,
+    "HW_RADAR_APIFY_KV_READS_USD_PER_1000": None,
+    "HW_RADAR_APIFY_KV_WRITES_USD_PER_1000": None,
+    "HW_RADAR_APIFY_KV_STORAGE_USD_PER_GB_HOUR": None,
+    "HW_RADAR_APIFY_TRANSFER_USD_PER_GB": None,
+    "HW_RADAR_APIFY_MARGIN": None,
+    "HW_RADAR_APIFY_ESTIMATOR_VERSION": "1",
+    "HW_RADAR_APIFY_MAX_TIMEOUT_S": None,
+    "HW_RADAR_APIFY_CYCLE_TARGET_USD": Decimal("12.00"),
+    "HW_RADAR_APIFY_OPERATOR_ALLOWANCE_USD": Decimal("1.00"),
+    "HW_RADAR_APIFY_WATCH_REFRESH_RESERVE_USD": Decimal("3.00"),
+    "HW_RADAR_APIFY_CASH_CEILING_USD": Decimal("20.00"),
+    "HW_RADAR_APIFY_ACCOUNT_MARGIN_USD": None,
+    "HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR": None,
+    "HW_RADAR_APIFY_ACCOUNT_LIMIT_USD": None,
+    "HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD": None,
+    "HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS": None,
+    "HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON": None,
+    "HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD": Decimal("5.00"),
+    "HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED": date(2026, 9, 25),
+    "HW_RADAR_APIFY_OPERATOR_BUILD_BOUND_USD": Decimal("0.41"),
+    "HW_RADAR_APIFY_OPERATOR_INSPECT_MAX_ITEMS": 1000,
+    "HW_RADAR_APIFY_OPERATOR_INSPECT_MAX_RECORD_READS": 20,
+    "HW_RADAR_APIFY_OPERATOR_INSPECT_MAX_BYTES": 10_000_000,
+    "HW_RADAR_APIFY_OPERATOR_PROBE_MAX_CALLS": 10,
+    "HW_RADAR_APIFY_MAX_KV_WRITES": None,
+    "HW_RADAR_APIFY_MAX_KV_BYTES": None,
+    "HW_RADAR_APIFY_STORAGE_MAX_LIFETIME": None,
+    "HW_RADAR_APIFY_API_CALL_OVERHEAD_BYTES": 262144,
+    "HW_RADAR_APIFY_MAX_CORRECTION_READS": 12,
+    "HW_RADAR_APIFY_CYCLE_BOUNDARY_GUARD_S": 3600,
+    "HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S": 10,
+    "HW_RADAR_APIFY_USAGE_STABLE_READS": 2,
+    "HW_RADAR_APIFY_USAGE_STABLE_INTERVAL_S": 60,
+    "HW_RADAR_APIFY_USAGE_FINALIZE_DEADLINE_S": 86400,
+    "HW_RADAR_APIFY_CORRECTION_WINDOW_S": 604800,
+    "HW_RADAR_APIFY_POST_RUN_COST_MODE": "bound",
+    "HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT": "bound",
+    "HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S": 900,
+    "HW_RADAR_APIFY_LEDGER_ID": "",
+}
+
+
+def _load_budget(monkeypatch: pytest.MonkeyPatch, **env: str) -> ModuleType:
+    for key in _BUDGET_DEFAULTS:
+        monkeypatch.delenv(key, raising=False)
+    return _load_settings(monkeypatch, **env)
+
+
+def test_budget_keys_absent_take_the_plan_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded = _load_budget(monkeypatch)
+    assert {key: getattr(loaded, key) for key in _BUDGET_DEFAULTS} == _BUDGET_DEFAULTS
+
+
+@pytest.mark.parametrize("raw", ["", " ", "five", "-1", "-0.01", "inf", "-inf", "NaN", "sNaN"])
+def test_invalid_budget_decimal_parses_to_none_never_the_default(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    keys = (
+        "HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD",
+        "HW_RADAR_APIFY_CYCLE_TARGET_USD",
+        "HW_RADAR_APIFY_TRANSFER_USD_PER_GB",
+        "HW_RADAR_APIFY_MARGIN",
+    )
+    loaded = _load_budget(monkeypatch, **dict.fromkeys(keys, raw))
+    for key in keys:
+        assert getattr(loaded, key) is None, key
+
+
+def test_valid_budget_values_parse(monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded = _load_budget(
+        monkeypatch,
+        HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD=" 4.50 ",
+        HW_RADAR_APIFY_USD_PER_CU="0.20",
+        HW_RADAR_APIFY_MAX_KV_WRITES=" 3 ",
+        HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED="2026-10-01",
+        HW_RADAR_APIFY_POST_RUN_COST_MODE="counted",
+        HW_RADAR_APIFY_ACCOUNT_MARGIN_USD="0",
+    )
+    assert Decimal("4.50") == loaded.HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD
+    assert Decimal("0.20") == loaded.HW_RADAR_APIFY_USD_PER_CU
+    assert loaded.HW_RADAR_APIFY_MAX_KV_WRITES == 3
+    assert date(2026, 10, 1) == loaded.HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED
+    assert loaded.HW_RADAR_APIFY_POST_RUN_COST_MODE == "counted"
+    # Zero is a valid margin, distinct from both "absent" and "invalid".
+    assert Decimal(0) == loaded.HW_RADAR_APIFY_ACCOUNT_MARGIN_USD
+
+
+@pytest.mark.parametrize("raw", ["", "abc", "-1", "1.5"])
+def test_invalid_budget_int_parses_to_none(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
+    loaded = _load_budget(
+        monkeypatch,
+        HW_RADAR_APIFY_MAX_CORRECTION_READS=raw,
+        HW_RADAR_APIFY_STORAGE_MAX_LIFETIME=raw,
+        HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S=raw,
+    )
+    assert loaded.HW_RADAR_APIFY_MAX_CORRECTION_READS is None
+    assert loaded.HW_RADAR_APIFY_STORAGE_MAX_LIFETIME is None
+    # None never releases (reconcile.release_unattached_reservations).
+    assert loaded.HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S is None
+
+
+@pytest.mark.parametrize("raw", ["", "2026-09-32", "yes"])
+def test_empty_or_invalid_residual_acceptance_parses_to_none(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    loaded = _load_budget(monkeypatch, HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED=raw)
+    assert loaded.HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED is None
+
+
+def test_present_invalid_account_margin_is_nan_not_the_ten_percent_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for raw in ("", "ten", "-1"):
+        margin = _load_budget(
+            monkeypatch, HW_RADAR_APIFY_ACCOUNT_MARGIN_USD=raw
+        ).HW_RADAR_APIFY_ACCOUNT_MARGIN_USD
+        assert isinstance(margin, Decimal)
+        assert margin.is_nan(), raw
+
+
+def test_unknown_settlement_mode_parses_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded = _load_budget(
+        monkeypatch,
+        HW_RADAR_APIFY_POST_RUN_COST_MODE="Bound",
+        HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT="",
+    )
+    assert loaded.HW_RADAR_APIFY_POST_RUN_COST_MODE is None
+    assert loaded.HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT is None
+
+
+# ── Configured account state (MS2-D-48) ─────────────────────────────────────
+
+_ACCOUNT_KEYS = (
+    "HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR",
+    "HW_RADAR_APIFY_ACCOUNT_LIMIT_USD",
+    "HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD",
+    "HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS",
+    "HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON",
+)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("2026-09-05T00:00:00Z", datetime(2026, 9, 5, tzinfo=UTC)),
+        ("2026-09-05T00:00:00+00:00", datetime(2026, 9, 5, tzinfo=UTC)),
+        (" 2026-09-01T00:00:00Z ", datetime(2026, 9, 1, tzinfo=UTC)),
+        ("2026-02-28T00:00:00Z", datetime(2026, 2, 28, tzinfo=UTC)),
+        ("", None),
+        ("garbage", None),
+        ("2026-09-05T00:00:00", None),  # naive
+        ("2026-09-05T00:00:00+02:00", None),
+        ("2026-09-05T00:00:01Z", None),
+        ("2026-09-05T00:00:00.000001Z", None),
+        ("2026-09-29T00:00:00Z", None),
+        ("2026-09-30T00:00:00Z", None),
+        ("2026-08-31T00:00:00Z", None),
+        ("2026-09-05", None),  # date-only: no zone, so refused like a naive value
+    ],
+)
+def test_billing_cycle_anchor_parsing(
+    monkeypatch: pytest.MonkeyPatch, raw: str, expected: datetime | None
+) -> None:
+    loaded = _load_budget(monkeypatch, HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR=raw)
+    anchor = loaded.HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR
+    assert anchor == expected
+    if expected is not None:
+        assert anchor.tzinfo is UTC
+
+
+def test_account_settings_have_no_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded = _load_budget(monkeypatch)
+    for key in _ACCOUNT_KEYS:
+        assert getattr(loaded, key) is None, key
+
+
+_RETIRED_ACCOUNT_READ_KEYS = (
+    "HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE",
+    "HW_RADAR_APIFY_MAX_DISCOVERY_READS",
+    "HW_RADAR_APIFY_DISCOVERY_READ_INTERVAL_S",
+    "HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S",
+    "HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S",
+)
+
+
+def test_retired_account_read_settings_are_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # MS2-D-48: nothing reads them; a value left in an environment is ignored.
+    loaded = _load_budget(monkeypatch, **dict.fromkeys(_RETIRED_ACCOUNT_READ_KEYS, "5"))
+    for key in _RETIRED_ACCOUNT_READ_KEYS:
+        assert not hasattr(loaded, key), key

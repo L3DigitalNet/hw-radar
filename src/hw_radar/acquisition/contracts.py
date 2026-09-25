@@ -13,15 +13,36 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Final, Literal, Protocol, Self, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
-from hw_radar.catalog.models import ProviderKind, RetentionClass, RunCompleteness, RunKind
+from hw_radar.catalog.models import (
+    ProviderKind,
+    RetentionClass,
+    RunCompleteness,
+    RunKind,
+    TruncationReason,
+)
 from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG_RE
 
 # Reserved OfferSnapshot.attrs_json key under which persist.append_snapshot stores
 # a non-null ParsedListing.category_hint, and from which the resolver reads it
 # back. ParsedListing rejects it in `attrs` so the two can never disagree.
 CATEGORY_HINT_ATTR: Final = "category_hint"
+
+# MS2-D-12 collection scope key, "<site_key>:<category>:<query_id>". It is
+# provider-independent, so a local sweep and an Actor sweep of the same query
+# share one key and one continuity record. Cross-file contract: the Actor
+# contract's collectionScope pattern (acquisition.apify.contract) is this
+# constant, and the committed JSON Schema files carry the same literal.
+SCOPE_KEY_PATTERN: Final = r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9_-]*$"
+SCOPE_KEY_MAX_LENGTH: Final = 100
 
 
 class RawItem(BaseModel):
@@ -65,6 +86,14 @@ class ParsedListing(BaseModel):
         default=None,
         max_length=CATEGORY_SLUG_MAX_LENGTH,
         pattern=CATEGORY_SLUG_RE.pattern,
+    )
+
+    # MS2-D-12: the collection scope this observation was swept under; the
+    # persist stage writes it to Listing.collection_scope, where it decides
+    # which scope's complete sweep may delist the listing. None = no scope
+    # asserted, which never clears a scope already recorded on the listing.
+    collection_scope: str | None = Field(
+        default=None, max_length=SCOPE_KEY_MAX_LENGTH, pattern=SCOPE_KEY_PATTERN
     )
 
     @model_validator(mode="after")
@@ -128,19 +157,26 @@ class DelistScope:
         freshness obligation, not from the poll interval: the question it answers
         is "how stale may this offer be before we must stop showing it". It is
         measured in POLLING time, not wall-clock time — the pipeline's delist
-        stage (see _record_sweep_continuity) refuses stale-absence marks unless
+        stage (see acquisition.stages.record_continuity) refuses stale-absence marks unless
         the lane actually swept continuously across the whole window, so a source
         that was paused for a day does not delist its catalogue on resume.
 
     Both paths are reversible — Listing.mark_relisted() clears the mark when the
     source shows the listing again — so the failure mode of a wrong delist is a
     temporarily hidden offer, not lost data.
+
+    scope_key — the MS2-D-12 collection scope the sweep enumerated. The delist
+        stage only considers listings whose collection_scope equals it, and None
+        means the legacy NULL scope (collection_scope IS NULL), never "every
+        scope": a complete sweep of one category must not delist the others.
+        The default keeps every pre-scope adapter on the NULL scope unchanged.
     """
 
     seen_keys: frozenset[str]
     observed_at: datetime
     complete: bool
     absence_grace: timedelta
+    scope_key: str | None = None
 
 
 @runtime_checkable
@@ -171,7 +207,8 @@ def adapter_retention(adapter: SourceAdapter) -> AdapterRetention:
     run_source's own defaults are merchant_fact with no TTL, so a call site that
     forgets silently persists bounded evidence indefinitely, where the DR-001
     sweeper can never reach it. Call sites: run_heartbeat (acquisition.heartbeat),
-    and poll_source / recovery_probe_job in hw_radar.poller.service.
+    and run_local_full_lane (poll_source's and synthetic_collect_local's) /
+    recovery_probe_job in hw_radar.poller.service.
     """
     return AdapterRetention(
         retention_class=getattr(adapter, "retention_class", RetentionClass.MERCHANT_FACT),
@@ -207,6 +244,18 @@ class ProviderRunEvidence(BaseModel):
         contract, whereas a remote run's truncation is set by budget and item
         limits it reports after the fact, so it is never absence evidence of any
         strength (ADR 0021).
+    truncation_reason — which cap cut a TRUNCATED remote run short (revision 5).
+        Optional, and forbidden for every other completeness and for local
+        evidence, whose truncation is an adapter's honest incomplete scope rather
+        than a cap. It is deliberately NOT required for non-local TRUNCATED
+        evidence, although the plan's MS2-D-11 text asks for that: the frozen
+        remote fakes in tests/db/test_collection_provider.py build non-local
+        TRUNCATED evidence without one. The requirement is enforced where the
+        cause is actually recorded instead, by the provider_run CHECK
+        provider_run_truncation_reason_coherent (catalog.models.provider), and
+        both Apify evidence builders copy the reason from that row's
+        classification. A None reason is omitted from the serialized JSON, so
+        every local detail_json["provider"] stays byte-identical to Slice A's.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -217,6 +266,7 @@ class ProviderRunEvidence(BaseModel):
     completeness: RunCompleteness
     completeness_reason: str = Field(min_length=1)
     stale_absence_eligible: bool
+    truncation_reason: TruncationReason | None = None
 
     @model_validator(mode="after")
     def _check_invariants(self) -> Self:
@@ -226,7 +276,21 @@ class ProviderRunEvidence(BaseModel):
             raise ValueError("completeness_reason must be non-blank")
         if self.stale_absence_eligible and self.provider_kind is not ProviderKind.LOCAL:
             raise ValueError("only a local provider may be stale-absence eligible")
+        if self.truncation_reason is not None:
+            if self.completeness is not RunCompleteness.TRUNCATED:
+                raise ValueError("truncation_reason qualifies truncated evidence only")
+            if self.provider_kind is ProviderKind.LOCAL:
+                raise ValueError("local truncated evidence carries no truncation_reason")
         return self
+
+    @model_serializer(mode="wrap")
+    def _omit_absent_truncation_reason(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        data: dict[str, object] = handler(self)
+        if self.truncation_reason is None:
+            data.pop("truncation_reason", None)
+        return data
 
 
 class CollectionProvider(Protocol):

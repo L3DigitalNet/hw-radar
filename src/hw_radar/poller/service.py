@@ -35,6 +35,9 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
+from hw_radar.acquisition.apify import jobs as apify_jobs
+from hw_radar.acquisition.apify.jobs import APIFY_POLL_SECONDS, apify_poll_tick, start_provider_run
+from hw_radar.acquisition.apify.reconcile import resolve_stale_monitoring_markers
 from hw_radar.acquisition.contracts import adapter_retention
 from hw_radar.acquisition.heartbeat import HeartbeatProbe, run_heartbeat
 from hw_radar.acquisition.pipeline import run_source
@@ -48,10 +51,15 @@ from hw_radar.catalog.management.commands.purge_expired import sweep_expired
 from hw_radar.catalog.models import (
     CheapSignal,
     LifecycleState,
+    ProviderKind,
+    ProviderRun,
     RunKind,
     SchedulingLane,
+    ScraperRun,
     SourceConfig,
+    SourceLaneState,
 )
+from hw_radar.catalog.models.provider import ImportState
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata import refresh as refdata_refresh
 
@@ -78,6 +86,38 @@ def heartbeat() -> None:
     logger.info("poller heartbeat: alive")
 
 
+async def run_local_full_lane(
+    config: SourceConfig, lane_state: SourceLaneState
+) -> ScraperRun | None:
+    """Run a `local` source's registered adapter once on the FULL lane and apply the outcome.
+
+    The body of poll_source after admission, shared with synthetic_collect_local
+    so an operator's one-off local run is the scheduled job's own code path.
+    Returns the recorded ScraperRun, or None, running nothing, when no adapter
+    is registered for the site. Performs no admission check and never reads
+    `enabled` or collection_provider: those are each caller's gate.
+    """
+    factory = ADAPTERS.get(config.source_site.normalized_name)
+    if factory is None:
+        return None
+    # DR-001/DR-008: the adapter's own retention must ride along, or run_source
+    # defaults every persisted row to indefinite merchant_fact — eBay evidence
+    # from a scheduled poll would then outlive its 6h window forever, unreachable
+    # by the retention sweeper. tests/db/test_poller_retention_wiring.py pins it.
+    adapter = factory()
+    retention = adapter_retention(adapter)
+    run, outcome = await run_source(
+        adapter,
+        CatalogResolver(),
+        retention_class=retention.retention_class,
+        expires_policy=retention.expires_policy,
+    )
+    await sync_to_async(apply_run_outcome)(
+        config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
+    )
+    return run
+
+
 async def poll_source(site_key: str, registry: BucketRegistry, scheduler: AsyncIOScheduler) -> None:
     config = await sync_to_async(SourceConfig.objects.select_related("source_site").get)(
         source_site__normalized_name=site_key
@@ -97,26 +137,18 @@ async def poll_source(site_key: str, registry: BucketRegistry, scheduler: AsyncI
     if not decision.admitted:
         logger.info("source %s not admitted: %s", site_key, decision.reason)
         return
-    factory = ADAPTERS.get(site_key)
-    if factory is None:
+    if config.collection_provider == ProviderKind.APIFY.value:  # .value: django-types quirk
+        # MS2-D-16: an Actor-backed source's full-lane job STARTS a run; its
+        # lifecycle outcome is applied when the import finalizes or is rejected
+        # (apify-poll), never here. The local adapter is never invoked for it,
+        # even when one is registered (MS2-D-24).
+        result = await start_provider_run(config, run_kind=RunKind.FULL)
+        logger.info("source %s apify start: %s %s", site_key, result.status, result.reason)
+        return
+    interval_before = lane_state.current_interval_s
+    if await run_local_full_lane(config, lane_state) is None:
         logger.warning("source %s enabled but has no adapter registered", site_key)
         return
-    # DR-001/DR-008: the adapter's own retention must ride along, or run_source
-    # defaults every persisted row to indefinite merchant_fact — eBay evidence
-    # from a scheduled poll would then outlive its 6h window forever, unreachable
-    # by the retention sweeper. tests/db/test_poller_retention_wiring.py pins it.
-    adapter = factory()
-    retention = adapter_retention(adapter)
-    _run, outcome = await run_source(
-        adapter,
-        CatalogResolver(),
-        retention_class=retention.retention_class,
-        expires_policy=retention.expires_policy,
-    )
-    interval_before = lane_state.current_interval_s
-    await sync_to_async(apply_run_outcome)(
-        config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
-    )
     if lane_state.current_interval_s != interval_before:
         job: Job | None = scheduler.get_job(f"poll-{site_key}")
         if job is not None:
@@ -205,8 +237,64 @@ async def checkpoint_job(registry: BucketRegistry) -> None:
     await sync_to_async(save_buckets)(registry)
 
 
+def _has_outstanding_probe(config: SourceConfig) -> bool:
+    """Return whether the source has a PROBE provider_run whose import is not yet decided.
+
+    Outstanding means import_state is neither finalized nor rejected: the run
+    may still be charging, or its outcome is not applied yet. A row whose start
+    response was lost stays outstanding until the D11 overdue unit settles it,
+    which fails closed: no second probe is paid for while one is unaccounted.
+    """
+    return (
+        ProviderRun.objects.filter(source_site=config.source_site, run_kind=RunKind.PROBE)
+        .exclude(import_state__in=[ImportState.FINALIZED, ImportState.REJECTED])
+        .exists()
+    )
+
+
+async def _probe_actor_source(config: SourceConfig, registry: BucketRegistry) -> None:
+    """Start one PROBE Actor run for a paused `apify` source (MS2-D-24).
+
+    Only starts: the outcome (PROBE_SUCCESS iff the import finalizes complete
+    or truncated, else the state-neutral PROBE_FAILURE) is applied later by the
+    importer when apify-poll finalizes or rejects the run, so the source stays
+    paused here whatever the start result. start_provider_run applies budget
+    admission as class `discovery` after the kill switch, so a paused source
+    never spends watch-refresh headroom, and a denial starts nothing.
+    """
+    key = config.source_site.normalized_name
+    # Checked before check_admission so a skipped probe burns no bucket token.
+    # The check-then-start is not locked: it relies on this job being the only
+    # PROBE starter and on the scheduler's max_instances=1 for the job.
+    if await sync_to_async(_has_outstanding_probe)(config):
+        logger.info("probe for %s skipped: a probe run is still outstanding", key)
+        return
+    lane_state = await sync_to_async(config.lane_state)(SchedulingLane.FULL)
+    decision = check_admission(
+        enabled=config.enabled,
+        lifecycle_state=LifecycleState(config.lifecycle_state),
+        run_kind=RunKind.PROBE,
+        backoff_until=lane_state.backoff_until,
+        now=timezone.now(),
+        registry=registry,
+        source_key=key,
+        domain=config.domain,
+        now_s=time.monotonic(),
+    )
+    if not decision.admitted:
+        logger.info("probe for %s not admitted: %s", key, decision.reason)
+        return
+    result = await start_provider_run(config, run_kind=RunKind.PROBE)
+    logger.info("recovery probe for %s apify start: %s %s", key, result.status, result.reason)
+
+
 async def recovery_probe_job(registry: BucketRegistry) -> None:
-    """ADR-0017: paused_pending_fix sources get a daily probe; success reactivates."""
+    """ADR-0017: paused_pending_fix sources get a daily probe; success reactivates.
+
+    Dispatches by collection_provider (MS2-D-24): a `local` source replays its
+    adapter here and applies the outcome at once; an `apify` source only starts
+    a PROBE Actor run, and its outcome lands when the import settles.
+    """
     paused = await sync_to_async(
         lambda: list(
             SourceConfig.objects.select_related("source_site").filter(
@@ -215,6 +303,13 @@ async def recovery_probe_job(registry: BucketRegistry) -> None:
         )
     )()
     for config in paused:
+        if config.collection_provider == ProviderKind.APIFY.value:  # .value: django-types quirk
+            # Dispatched before the adapter lookup: the local adapter must never
+            # run for an Actor-backed source, even when one is registered — its
+            # success would "recover" the wrong provider — and an Actor-only
+            # source has no adapter at all but must still be able to recover.
+            await _probe_actor_source(config, registry)
+            continue
         key = config.source_site.normalized_name
         factory = ADAPTERS.get(key)
         if factory is None:
@@ -250,6 +345,18 @@ async def recovery_probe_job(registry: BucketRegistry) -> None:
             config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
         )
         logger.info("recovery probe for %s → %s", key, config.lifecycle_state)
+
+
+async def apify_poll_job() -> None:
+    """MS2-D-16 `apify-poll`: drive every started Actor run from persisted state.
+
+    Registered unconditionally: it never starts a run, and it keeps draining
+    imports and storage for already-admitted runs while the kill switch is off
+    (ED-07). With no provider_run rows it makes no API call and needs no token.
+    """
+    report = await apify_poll_tick(resolver=CatalogResolver())
+    if report.polled or report.imported or report.cleanup or report.overdue or report.failed:
+        logger.info("apify-poll: %s", report)
 
 
 async def refdata_refresh_job() -> None:
@@ -334,6 +441,7 @@ def build_scheduler(
         hour=REFDATA_REFRESH_HOUR_UTC,
         id="refdata-refresh",
     )
+    scheduler.add_job(apify_poll_job, "interval", seconds=APIFY_POLL_SECONDS, id="apify-poll")
     scheduler.add_job(
         retention_sweep_job,
         "interval",
@@ -396,14 +504,35 @@ def build_scheduler(
     return scheduler
 
 
+def resolve_stale_ledger_markers() -> int:
+    """Resolve selector-4 pending markers an earlier poller process left (MS2-D-34).
+
+    Called once by run() before the scheduler starts, so no apify-poll tick of
+    this process can have stamped a marker yet: every marker older than
+    jobs.PROCESS_STARTED_AT belongs to a process that is gone. Rejected
+    alternative: resolving at every tick, which the E4 hand-off did; it is
+    correct only while this process's own markers are newer than its start,
+    and it spends a budget-locked transaction per tick for a once-per-process
+    event. Returns the count.
+    """
+    return resolve_stale_monitoring_markers(apify_jobs.PROCESS_STARTED_AT)
+
+
 async def run(configs: Sequence[SourceConfig] | None = None, *, checkpoint: bool = True) -> None:
     """checkpoint=False + configs=[] is the unit-test mode: no ORM call on the
-    startup/shutdown path itself (no bucket load/save, no config query, and
-    load_schedules over an empty sequence queries nothing either). The
-    registered service jobs (FX refresh, checkpoints, probes) do touch the DB —
-    but only when they fire, which a short-lived unit run never reaches
-    (tests/unit/test_poller.py drives run(configs=[], checkpoint=False))."""
+    startup/shutdown path itself (no bucket load/save, no stale ledger-marker
+    resolution, no config query, and load_schedules over an empty sequence
+    queries nothing either). The registered service jobs (FX refresh,
+    checkpoints, probes) do touch the DB — but only when they fire, which a
+    short-lived unit run never reaches (tests/unit/test_poller.py drives
+    run(configs=[], checkpoint=False))."""
     install_asyncio_reactor()  # before APScheduler starts; Scrapy shares this loop
+    if checkpoint:
+        # Before scheduler.start(): the first apify-poll tick must already see
+        # every dead process's marker resolved (resolve_stale_ledger_markers).
+        resolved = await sync_to_async(resolve_stale_ledger_markers)()
+        if resolved:
+            logger.info("resolved %s stale apify monitoring marker(s)", resolved)
     registry = (
         await sync_to_async(load_buckets)(now_s=time.monotonic())
         if checkpoint

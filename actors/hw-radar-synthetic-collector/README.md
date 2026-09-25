@@ -11,9 +11,10 @@ The Actor exists to prove the Apify provider path end to end with a
 deterministic, project-owned source. No merchant is involved, so no merchant
 terms apply. It is never a production collection source.
 
-**Status:** D-prep (plan task D1) built it. Nothing has been pushed, built, or
-run on Apify. The first push, build, and smoke run belong to plan task F5a,
-through hw-radar's own admission and ledger. See `DEPLOYMENTS.md`.
+**Status:** D-prep (plan task D1) built it. F5a (2026-09-25) deployed it as a
+private Actor (build `1.0.1`, tag `candidate`) and ran it eleven times through
+hw-radar's own admission and ledger, in a non-production proof environment. See
+`DEPLOYMENTS.md` and `docs/evidence/2026-09-25-f5a-synthetic-proof.md`.
 
 ## Layout
 
@@ -167,7 +168,23 @@ extends the root configuration and overrides only `target-version`.
   `python -m synthetic_collector`, instead of the template's `src/main.py`
   package named `src`. The name keeps imports and type checking unambiguous.
 
-## Unconfirmed until F5a (the first real push and run)
+## Settled by F5a (2026-09-25)
+
+- Upload scope: the deployment used the REST API (version source files, then an
+  explicit build) with exactly the 15 files the image needs, taken from the
+  reviewed commit; `apify push` was not used, so its upload scope did not arise.
+- The Dockerfile builds on the platform: `apify/actor-python:3.14`, the pinned
+  `ghcr.io/astral-sh/uv:0.11.6` binary, `uv sync --locked` (45 packages); build
+  `1.0.1` succeeded in about 15 s.
+- The default key-value store receives exactly two billed writes per run: the
+  platform's `INPUT` and this Actor's `OUTPUT`. The SDK lifecycle writes no
+  record of its own.
+- Platform input validation rejects an invalid input before any run exists:
+  HTTP 400 `invalid-input` (MS2-D-15).
+- Every fault mode produced its intended classification on the platform.
+
+## Previously unconfirmed (as of D-prep; kept for the record)
+
 
 - Whether `apify push`, run from this directory, uploads only this directory
   (MS2-D-43). The fallback is a Git-source Actor

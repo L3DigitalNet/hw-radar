@@ -114,6 +114,34 @@ class StubSource:
         return httpx.Response(200, content=path.read_bytes())
 
 
+class _UnreadTransport(httpx.AsyncBaseTransport):
+    """Hand the client each mock response unread, as a network transport does.
+
+    httpx.Response(content=bytes) reads itself on construction, and
+    MockTransport passes that consumed response straight to the client, whose
+    aiter_raw() then raises StreamConsumed. The Actor counts wire bytes by
+    iterating raw chunks, so every test client wraps its MockTransport in this:
+    it re-serves the same raw (still content-encoded) bytes as a fresh stream.
+    A response built from an async iterator is already unread and passes through.
+    """
+
+    def __init__(self, inner: httpx.MockTransport) -> None:
+        self._inner = inner
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        response = await self._inner.handle_async_request(request)
+        if not response.is_stream_consumed:
+            return response
+        return httpx.Response(
+            response.status_code, headers=response.headers, stream=response.stream, request=request
+        )
+
+
+def mock_client(transport: httpx.MockTransport) -> httpx.AsyncClient:
+    """An AsyncClient over transport that the Actor can read raw, as in production."""
+    return httpx.AsyncClient(transport=_UnreadTransport(transport))
+
+
 def serve_source() -> tuple[StubSource, httpx.MockTransport]:
     stub = StubSource(requests=[])
     return stub, httpx.MockTransport(stub.handler)
@@ -133,7 +161,7 @@ def run_collect(
         _, transport = serve_source()
 
     async def go(mock: httpx.MockTransport) -> CollectionResult:
-        async with httpx.AsyncClient(transport=mock) as client:
+        async with mock_client(mock) as client:
             return await collect(
                 validate_input(payload), client, clock=clock, started_at=STARTED_AT
             )

@@ -2,7 +2,8 @@
 
 ## Current snapshot
 
-- MS-0 and MS-1a through MS-1d are implemented and merged: Django/TimescaleDB foundation, ingestion substrate, matching, catalog seed, five connectors, and availability heartbeat.
+- MS-0 and MS-1a through MS-1d are implemented and merged: Django/TimescaleDB foundation, ingestion
+  substrate, matching, catalog seed, five connectors, and availability heartbeat.
 - All marketplace sources ship disabled; scoring and alerting are not implemented.
 - **Strategy re-baselined 2026-09-24:** [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
   adopts hybrid acquisition (retain cheap direct/local collectors; use self-owned private Apify
@@ -10,51 +11,47 @@
   Hardware Radar Apify ceiling and a $12/month initial operating target. [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md)
   broadens v1 to HDD/SSD + GPU/accelerator + RAM + CPU first-class categories and makes
   requirement matching / watches / shortlist / alerting the launch-critical workflow.
-- Bounded-retention expiry, eBay delete-on-delist (CR-004), and per-lane scheduling-state split
-  landed `5a7f5b7`/`db62b6f`/`6e68585`. OQ22 resolved via migration 0017 (`8101504`). Migrations
-  0014-0017 deployed 2026-09-06 (PR #22). Source go-live gated by SA-004 + MS-1e.
-- MS-2 scoring design revision 14 (`a3ec96b`) is owner-accepted (2026-09-06). The MS-2a
-  scoring-substrate plan reached revision 4 (`05f130f`) across three Codex `delegate` passes
-  (`a626c2f0`/`8755be2a`/`b92dd220`); design and plan are the accepted advanced drive-scoring
-  artifacts, but **execution is deferred by ADR 0022** and MS-2a is not the next implementation step.
-- MS-1e's validation-corpus harness/harvest tooling is merged and DEPLOYED (PR #20, `1099f766`,
-  2026-08-16): Approach-A evaluator, `EvalReport`, `ms1_ratification_gate`, `harvest_corpus`. The
-  live harvest/label-draft/audit/ratification/ADR-0019 flip remain the deferred owner-in-the-loop
-  step; `tests/db/test_ratification_corpus.py` skips until it lands.
-- Full gate @001a5b6: 1231 passed/1 skip, 96% cov; Actor 67 passed, 99%; pip-audit clean (`--skip-editable`).
-- **MS-2 multi-category watch-core plan converged at revision 8**
-  (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`). Eight-round Codex
-  delegate review lineage: r1-r4 converged rev 4 (session 1); r5 `0469e098` REVISION NEEDED (5) ->
-  r6 `6af5388b` REVISION NEEDED (3 partial + 2 new) -> r7 `01639c2a` REVISION NEEDED (2 partial +
-  1 new) -> r8 `b73b6633` READY, no new findings. All findings dispositioned in the plan.
-- **Session 2 owner decisions (2026-09-24):** Hardware Radar owns all its Apify Actors in this
-  repo under `actors/<name>/`, managed independently of `apify-actors` (PR #62, doc-only, merged
-  by the operator). OQ23 resolved (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12 attributable,
-  no PAYG). OQ24 split: synthetic proof first via a real private Actor; merchant-source admission
-  separate; Newegg excluded; existing connectors not grandfathered.
-- **Slice B complete on `dev`:** GPU/RAM/CPU typed spec satellites (migration 0018), category rows
-  (0019), refdata contract + importer, first-party seeds (CPU 9 / GPU 8 / RAM 2), category rules +
-  registry + acceptance policy, category-change edge, corpus category-hint round trip (B6).
-- **Slice C code complete on `dev`:** eligibility schema (migration 0020), evaluator (C2/C3),
-  shortlist/review-queue read model (C4), evaluation wired into every ingestion path (C3 wiring).
-  `EVALUATOR_VERSION` is `ms2c.2`; implementation-driven clarifications recorded in the plan.
-- **D-prep code complete on `dev`:** D3 collector client; D1 Actor project
-  `actors/hw-radar-synthetic-collector` + contract schemas + `classify_run` + CI Actor gates. No
-  Apify push/build/run has occurred. Open: `ProviderRunEvidence.truncation_reason` (MS2-D-11) not
-  yet added; private-helper coupling in `eligibility/service.py`/`shortlist.py` (drift-tested).
-  gate-runner verified. **Deployed 2026-09-25** (`ac8d608` run 36078378772, then `96ce005`): 0018-0020
-  applied, sources disabled, no Actor run; evidence in `docs/handoff/deployed.md`.
-- Battery @62e670b green: 1226 passed/1 expected skip, 96% coverage, pip-audit clean; Actor
-  project 64 passed, 99% coverage. Migrations empty->head and head->0017->head both OK; A0 oracle
-  unchanged. Verifiers: Slice B C1-C9, Slice C/D-prep V1-V10 all CONFIRMED. Post-battery hardening
-  (complete-report count checks, Actor wall-clock deadline) landed after it; targeted gates green.
-- **Owner decisions 2026-09-25 (OQ25–OQ29 resolved):** Apify credential split — unscoped
-  operator key `secret/apps/hw-radar/agent/apify`, scoped runtime token pending; $5.00/cycle
-  external-liability bound; no new non-first-party retention class; MS-2 exits on the
-  synthetic proof (F5a) alone; $1.00/cycle operator allowance. Carried over: OQ24, MS-1e
-  ratification, category corpus gate. See `docs/resolved-questions.md`.
-- **Dependabot (2026-09-25):** #28 merged (ruff Markdown scoping); #31/#32 closed/deferred; #33 merged.
-- Verified account state (2026-09-24): Apify STARTER, `maxMonthlyUsageUsd` 19, billing cycle
-  5th 00:00Z -> 4th 23:59:59Z, no settings changed.
-- Project Standards Catalog 5 pinned to 5.29.0 (Agent Handoff 1.17); upstream issue #80 resolved
-  and re-verified 2026-09-06 under this pin.
+- Bounded-retention expiry, eBay delete-on-delist (CR-004), and the per-lane scheduling-state
+  split are deployed (migrations 0014-0017, 2026-09-06). Source go-live is gated by SA-004 + MS-1e.
+- MS-2 scoring design rev 14 and the MS-2a scoring-substrate plan rev 4 are the accepted advanced
+  drive-scoring artifacts; **execution is deferred by ADR 0022**.
+- MS-1e validation-corpus tooling is deployed (PR #20); the live harvest, owner audit,
+  ratification, and ADR-0019 flip remain the owner-in-the-loop step.
+- **MS-2 plan** (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`) is at
+  revision 11 plus landing notes; review lineage in `docs/handoff/specs-plans.md`.
+- **Slices A–C:** seams, first-class GPU/RAM/CPU categories (0018-0019, first-party seeds CPU 9 /
+  GPU 8 / RAM 2), eligibility + shortlist read model (0020, `EVALUATOR_VERSION` `ms2c.2`).
+  **Deployed 2026-09-25** (now `531916e`, bug 001 fixed); evidence in `docs/handoff/deployed.md`.
+- **Slice D (core) complete on `dev` 2026-09-25 (`4ba8dce`, not deployed):** synthetic Actor
+  project (`actors/hw-radar-synthetic-collector`, wire-byte cap), schema `0021` (undeployed),
+  byte-capped client, import provider, durable staged import (transactional local path), start
+  job + `apify-poll` selectors, AC-4/5/6 fixture proofs, storage cleanup, provider-dispatched
+  probes. Verifier: 10/11 acceptance bullets hold, the storage-deadline bullet with the plan's
+  accepted exceptions (R21).
+- **Slice E complete on `dev` 2026-09-25 (`40b7295`, not deployed):** spend ledger (`0022`,
+  undeployed), DB-free budget policy, advisory-lock ledger service (cycle discovery, MS2-D-45
+  claim/handoff, operator reservations), reconcile + overrun latch + correction monitoring,
+  `apify_spend_report` (AC-7), `LedgerAdmission` bound in production, `budget_paused` in the
+  shortlist, ledger-settled probe (E8). Verifier: 16/16 acceptance claims hold; its two crash
+  windows are fixed (`40b7295`). FULL starts are refused while a same-scope run is outstanding.
+- **MS-2 plan revision 12 (R25, OQ30, MS2-D-48) on `dev`:** the runtime reads no Apify account
+  state; the cycle comes from `HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR` and four operator-verified
+  account settings; a 402 start trips `account_limit_refused`. Synthetic setup/smoke/local-switch
+  commands landed (`10062f8`, `7bc1f76`).
+- **F5a executed 2026-09-25 (non-production proof env; production untouched):** build `1.0.1` (REST,
+  15 files) + eleven admitted runs over every fault mode, all classified as designed; 0 delistings;
+  live duplicate import 0 HTTP calls; live Actor↔local switch kept identity/history (AC-4/5 live);
+  Apify 400 on invalid input; 403-vs-404 probe passed. Usage not final at finish (keep `bound`);
+  +$0.00527 account usage for the whole proof. Evidence: `docs/evidence/2026-09-25-f5a-synthetic-proof.md`.
+- **Production still cannot start or pay for an Actor run:** migrations `0021`/`0022` undeployed; no
+  Actor id, prices, account settings, ledger authority, or token rendered there; kill switch off.
+- Gate @7bc1f76 leg: 2016 passed/1 skip, 95% cov; Actor 75 passed, 99%; pip-audit clean.
+- **Owner decisions:** session 2 (2026-09-24) — HR Actors live in this repo under `actors/`;
+  OQ23 (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12, no PAYG). 2026-09-25 — OQ25–OQ29
+  (unscoped operator key at `secret/apps/hw-radar/agent/apify`; scoped runtime token created;
+  $5.00/cycle external liability; no non-first-party retention class; MS-2 exits on F5a;
+  $1.00/cycle operator allowance); R38 accepted; OQ30 (no runtime account reads). Open: OQ24, MS-1e ratification, category
+  corpus gate. See `docs/resolved-questions.md`.
+- Verified account state (2026-09-25, operator key, outside the app): Apify STARTER, prepaid credit
+  $19, usage limit $19, base price $19, cycle anchor 2026-09-05T00:00Z, retention 31 d; no settings changed.
+- Project Standards Catalog 5 pinned to 5.29.0 (Agent Handoff 1.17).

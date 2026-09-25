@@ -24,43 +24,50 @@ Instructions for AI agents:
   rules/registry/acceptance policy, corpus category-hint round trip). CPU 9 / GPU 8 / RAM 2
   first-party rows seeded; no further RAM expansion is planned in MS-2 (OQ27 resolved
   2026-09-25 — no new retention class for non-first-party reference data).
-- [ ] Add `ProviderRunEvidence.truncation_reason` (MS2-D-11), deferred out of D1 into D2 or a
-  follow-up.
 - [ ] Split the committed input contract into a common schema + synthetic extension so a future
   merchant Actor can't inherit `faultMode` (verifier finding, low priority).
 - [ ] Harden D3 client's proxy guard: currently top-level only; nested proxy config is blocked via
   `prepare_run_input`'s `extra=forbid`, but a dedicated nested-key guard is a cleaner fix (low).
 - [ ] Add listing-row fields (`title_raw`, `condition_label_raw`, `is_international`) to the
   eligibility evaluation binding; not currently read by the evaluator (verifier finding, low).
-- [ ] Run the Slice D entry-gate design review before D2 (plan: Slice D entry gate): a focused
-  review of the D/E async-ordering design (watermarks, continuity, retention, charge horizon, R23).
-- [ ] **Blocked on owner:** create the scoped runtime Apify token (OpenBao
-  `secret/apps/hw-radar/apify`, env `HW_RADAR_APIFY_TOKEN`); the unscoped operator/deploy key
-  exists at `secret/apps/hw-radar/agent/apify` (OQ25 resolved 2026-09-25). Permissions needed:
-  run Hardware Radar-owned Actors, read their runs/default storages, **delete** their run storages
-  (MS2-D-33 cleanup), and ideally read `/users/me/limits` + `/users/me/usage/monthly` (MS2-D-40).
+- [x] Scoped runtime Apify token created by the owner (OpenBao `secret/apps/hw-radar/apify`, env
+  `HW_RADAR_APIFY_TOKEN`), restricted to the Hardware Radar Actor (`Read`, `Run`, `List runs`,
+  `Manage runs`, restricted access, default run storages). No account permission is needed: the
+  runtime reads no account state (OQ30, plan rev 12, MS2-D-48). Capability probe recorded
+  2026-09-25 (403 for inaccessible storage, 404 for nonexistent).
 - [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
   saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
   Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.
-- [ ] Add an acquisition-provider boundary to hw-radar. **Seam done:** `CollectionProvider`
-  contract, run-evidence completeness gate, truncated/partial/failed runs cannot delist.
-  **D-prep code-complete:** D3 client and D1 Actor project (`actors/hw-radar-synthetic-collector`,
-  contract schemas, `classify_run`, CI Actor gates). **Next (Slice D):** Apify push/build/run
-  (none has occurred yet), truncation_reason (above), Slice D entry-gate review, then D2.
-- [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
-  initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
-  ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential
-  proxy / paid third-party Actor escalation. Design is in the MS-2 plan; implementation is Slice E.
+- [x] Add an acquisition-provider boundary to hw-radar. **Slice D (core) complete 2026-09-25**
+  (D1–D12; D9 verifier 10/11 bullets hold, the storage-deadline bullet with the plan's accepted
+  exceptions). A FULL Actor start is refused while a same-scope run's import is undecided
+  (`scope_run_outstanding`, `3c117c9`). Migration `0021` undeployed. See `docs/STATUS.md`.
+- [x] Add Hardware Radar Apify budget admission/accounting ($20/month cash ceiling, $12 operating
+  target, reserve-before-run + reconcile-after-run, `budget_paused`, no automatic escalation).
+  **Slice E complete 2026-09-25** (E1–E8; E7 verifier 16/16 acceptance claims hold; crash windows
+  d1/d2 closed `40b7295`). Migration `0022` undeployed. Keep `report._place` in step with
+  `ledger._tally` (pinned by `test_cycle_totals_match_ledger_cycle_debits`).
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
   categories and both local + self-owned-Apify provider paths. Measure cost, completeness,
   identifier quality, condition/shipping coverage, freshness, and failure recovery before adding
   breadth.
-- [ ] Coordinate one self-owned private Hardware Radar Actor as the integration proof. **Owned
-  and managed in this repo** under `actors/` (not `apify-actors`, session-2 owner decision). Keep
-  Actor output observation-only: no Django model imports, no production DB credentials, no
-  canonical matching/persistence.
-- [ ] Keep provider identity separate from marketplace/source identity so moving a source between
-  local and Apify execution preserves listing identity and price history.
+- [x] Coordinate one self-owned private Hardware Radar Actor as the integration proof. **F5a
+  executed 2026-09-25** in a non-production proof environment (evidence:
+  `docs/evidence/2026-09-25-f5a-synthetic-proof.md`): build `1.0.1`, eleven admitted runs over every
+  fault mode, zero delistings, live AC-4 switch, $0.00527 total account usage.
+- [ ] F5a step 5 (MS2-D-45): before any production environment admits paid Apify work in the
+  2026-09-05 cycle, keep the proof environment's ticks running until its correction monitoring
+  closes (7-day window), confirm it drained, then `apify_ledger_handoff`. Until then the proof
+  environment holds the cycle's ledger authority.
+- [ ] Production Apify runtime rendering: production secrets come from the Hetzner-side OpenBao
+  peer through the CT's bao-agent template, not the workstation path; add the scoped runtime token
+  there and render `HW_RADAR_APIFY_TOKEN` only when production paid admission is intentionally
+  configured (with the account settings, prices, ledger authority, and `MAX_KV_WRITES=3`, the
+  owner-approved F-01 value).
+- [ ] Promote the synthetic Actor build to the `prod` tag (MS2-D-43 *Deploy*) only if a production
+  smoke is ever wanted; the synthetic Actor is not a production collection source.
+- [x] Keep provider identity separate from marketplace/source identity: proven by D7
+  (`test_provider_switch_preserves_identity_history_and_watch_state`, AC-4).
 - [ ] Run the existing MS-1e owner-in-the-loop ratification step for the drive matcher before
   enabling affected drive source/category combinations: live harvest, label draft, owner audit,
   full verification gate, and ADR-0019 flip only on PASS.
@@ -72,8 +79,6 @@ Instructions for AI agents:
   drive harvest / first SSD seed.
 - [ ] Confirm the first post-migration-0015 continuous-sweep log before relying on
   `ABSENT_STALE` delisting (deployed 2026-09-06; expected 6h grace).
-- [ ] **Blocked on owner:** choose the fix for production `/static/` 403 (nginx cannot traverse the
-  `0750` app root; admin CSS only) — [bug 001](handoff/bugs/001-nginx-static-403.md).
 - [ ] **Gated framework upgrade:** Django 6.1.2+ (PR #31, 6.1.1, was closed/deferred 2026-09-25).
   Before adopting any 6.1.x release: read its release notes, review backwards-incompatible
   changes against the raw-SQL Timescale migrations/constraints, run PostgreSQL checks and a

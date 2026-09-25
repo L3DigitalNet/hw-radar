@@ -28,6 +28,12 @@ run_collection is the stage runner, and run_source wraps a plain SourceAdapter i
 a LocalCollectionProvider so poller, heartbeat and probe call sites are unchanged.
 The provider's run evidence gates the delist stage (acquisition.providers), so a
 truncated, partial or failed run is never read as evidence of absence.
+
+Persist and delist are the extracted transactional stages of acquisition.stages
+(MS2-D-22 *Code shape*), shared with the durable Apify importer: each runs in
+its own transaction inside one sync_to_async call, so no transaction spans an
+await, and both take the MS2-D-35 lock order with the in-memory retry.
+Resolution and evaluation stay outside both, as before.
 """
 
 from __future__ import annotations
@@ -36,9 +42,11 @@ import asyncio
 import logging
 import statistics
 from collections.abc import Callable
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from asgiref.sync import sync_to_async
+from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from pydantic import ValidationError
 
@@ -53,7 +61,7 @@ from hw_radar.acquisition.contracts import (
     RawBatch,
     SourceAdapter,
 )
-from hw_radar.acquisition.persist import append_snapshot, store_raw, upsert_listing
+from hw_radar.acquisition.persist import ObservationRetention
 from hw_radar.acquisition.providers import (
     LocalCollectionProvider,
     counts_toward_sweep_continuity,
@@ -61,18 +69,24 @@ from hw_radar.acquisition.providers import (
 )
 from hw_radar.acquisition.scheduling.apply import RunOutcome
 from hw_radar.acquisition.scheduling.lifecycle import LifecycleEvent
+from hw_radar.acquisition.stages import (
+    PersistResult,
+    apply_absence,
+    apply_delist,
+    atomic_with_retry,
+    ensure_watermark_rows,
+    persist_observations,
+    target_scopes,
+)
 from hw_radar.catalog.models import (
-    DelistReason,
     Listing,
-    RawPayload,
+    ProviderKind,
     ResolutionGrain,
     RetentionClass,
     RunFailureClass,
     RunKind,
     RunStatus,
-    SchedulingLane,
     ScraperRun,
-    SourceConfig,
     SourceSite,
 )
 from hw_radar.eligibility import ListingEvaluator, WatchEvaluator
@@ -83,16 +97,6 @@ MEDIAN_BODY_WINDOW = 10  # recent successful runs consulted for EC-007 body-size
 FETCH_TIMEOUT_S = (
     120.0  # ADR-0012 hard fetch-stage timeout; a hung adapter must not wedge the poller
 )
-# Floor on the CR-004 continuity tolerance (see _record_sweep_continuity). A gap
-# between consecutive successful full sweeps counts as "still polling" while it
-# stays within max(2 * current_interval_s, this). Two intervals is the cadence
-# part — one missed tick plus jitter is normal operation, two consecutive misses
-# is not — and the fixed floor covers fast lanes whose interval is so short that
-# an ordinary process restart or misfire-grace slip would otherwise read as an
-# outage: the eBay fast lane rides a 60s-order interval, where 2x is under the
-# systemd restart-plus-warmup budget.
-MIN_CONTINUITY_TOLERANCE = timedelta(minutes=15)
-
 _EVENT_BY_CLASS: dict[RunFailureClass, LifecycleEvent] = {
     RunFailureClass.TRANSIENT: LifecycleEvent.TRANSIENT_FAILURE,
     RunFailureClass.ANTI_BOT: LifecycleEvent.ANTI_BOT,
@@ -108,114 +112,16 @@ class FetchFailure(Exception):
         self.failure_class = failure_class
 
 
-def _record_sweep_continuity(site: SourceSite, observed_at: datetime) -> datetime | None:
-    """Fold this successful full sweep into the FULL lane's continuity run.
+def _apply_delist(  # pyright: ignore[reportUnusedFunction] - tests/db/test_scoped_delist.py drives it
+    site: SourceSite, scope: DelistScope, continuous_since: datetime | None
+) -> int:
+    """Run the scoped delist step (acquisition.stages.apply_delist) in its own transaction.
 
-    Returns the instant the current uninterrupted run of successful full sweeps
-    began — the value the CR-004 absence grace is measured from — or None when
-    the site has no SourceConfig (isolation tests, unseeded sources), which the
-    caller must treat as "no continuity proven".
-
-    The run is extended while the gap to the PREVIOUS successful FULL ScraperRun
-    is within max(2 * current_interval_s, MIN_CONTINUITY_TOLERANCE); a larger gap
-    means the lane stopped polling, so the run restarts at this sweep. The gap is
-    read from ScraperRun rather than stored on the lane row because the run table
-    is the actual record of what polled and when, and it survives a poller
-    restart that never got to write lane state. The current run is still RUNNING
-    at this point, so status=SUCCESS excludes it without a pk filter.
-
-    Called for every successful full run whose provider evidence counts toward
-    continuity (acquisition.providers.counts_toward_sweep_continuity), not only
-    delist-capable ones: continuity is a property of the lane's polling, and
-    evaluating it only on sweeps that produced a DelistScope would step over a
-    pause that happened between two scope-less sweeps and read the lane as
-    continuous across it. Every local run counts; a truncated, partial or failed
-    remote run does not, because it did not sweep the lane, and it breaks the
-    run instead (see _break_sweep_continuity).
+    A direct entry point for callers outside a transaction; the pipeline itself
+    reaches apply_delist through apply_absence inside the delist transaction.
     """
-    config = SourceConfig.objects.filter(source_site=site).first()
-    if config is None:
-        return None
-    lane_state = config.lane_state(SchedulingLane.FULL)
-    previous: datetime | None = (
-        ScraperRun.objects.filter(source_site=site, run_kind=RunKind.FULL, status=RunStatus.SUCCESS)
-        .order_by("-started_at")
-        .values_list("started_at", flat=True)
-        .first()
-    )
-    tolerance = max(timedelta(seconds=2 * lane_state.current_interval_s), MIN_CONTINUITY_TOLERANCE)
-    if (
-        lane_state.continuous_since is None
-        or previous is None
-        or observed_at - previous > tolerance
-    ):
-        lane_state.continuous_since = observed_at
-        lane_state.save(update_fields=["continuous_since", "updated_at"])
-    return lane_state.continuous_since
-
-
-def _break_sweep_continuity(site: SourceSite) -> None:
-    """End the FULL lane's continuity run at a full sweep that did not sweep the lane.
-
-    Called for every successful FULL run whose evidence fails
-    counts_toward_sweep_continuity (a truncated, partial or failed remote run).
-    Merely skipping _record_sweep_continuity is not enough (plan review F-04):
-    the old continuous_since would survive, and that function's previous-run
-    lookup counts every successful FULL ScraperRun, so a string of ineligible
-    runs would read as unbroken polling. A later truncated local sweep could
-    then use continuity those runs never proved and stale-delist the catalogue
-    (CR-004, ADR 0021). Clearing it makes the next eligible sweep restart the
-    run at itself, so stale absence again waits out a full grace of real sweeps.
-    """
-    config = SourceConfig.objects.filter(source_site=site).first()
-    if config is None:
-        return
-    lane_state = config.lane_state(SchedulingLane.FULL)
-    if lane_state.continuous_since is not None:
-        lane_state.continuous_since = None
-        lane_state.save(update_fields=["continuous_since", "updated_at"])
-
-
-def _apply_delist(site: SourceSite, scope: DelistScope, continuous_since: datetime | None) -> int:
-    """Soft-delete this site's active listings that the sweep contradicts.
-
-    Deliberately per-row rather than a bulk .update(): mark_delisted also pulls the
-    DR-008 evidence TTLs forward, and a queryset update would mark the listings
-    terminal while leaving their snapshots on the original freshness clock.
-
-    CR-004 continuity invariant (go-live review 2026-08-16): ABSENT_STALE requires
-    BOTH that the listing went unseen for the grace AND that the lane was actually
-    polling throughout it — `continuous_since` (see _record_sweep_continuity) is
-    that second half. Without it, any pause longer than the grace makes every
-    listing look stale on the first sweep back, and with delete-on-delist plus
-    IR-002 field redaction that mass-delist destroys merchant content on a source
-    that never changed. A complete sweep is unaffected: enumerating the whole
-    result set is direct evidence of absence and owes nothing to polling history.
-    """
-    candidates = (
-        Listing.objects.not_delisted()
-        .filter(source_site=site)
-        .exclude(source_listing_key__in=scope.seen_keys)
-    )
-    if scope.complete:
-        reason = DelistReason.ABSENT_FROM_SWEEP
-    else:
-        if continuous_since is None or scope.observed_at - continuous_since < scope.absence_grace:
-            logger.info(
-                "delist stage for %s: skipping stale-absence marks — the full lane has only "
-                "been polling continuously since %s, short of the %s absence grace",
-                site.normalized_name,
-                continuous_since,
-                scope.absence_grace,
-            )
-            return 0
-        reason = DelistReason.ABSENT_STALE
-        candidates = candidates.filter(last_seen__lt=scope.observed_at - scope.absence_grace)
-    delisted = 0
-    for listing in candidates.iterator():
-        if listing.mark_delisted(reason, when=scope.observed_at):
-            delisted += 1
-    return delisted
+    with transaction.atomic():
+        return apply_delist(site, scope, continuous_since)
 
 
 def _median_body_bytes(site: SourceSite) -> int | None:
@@ -227,8 +133,18 @@ def _median_body_bytes(site: SourceSite) -> int | None:
     # taking the median, and restrict the window to FULL runs — heartbeat/probe
     # runs fetch a single item, which would otherwise inject a distorted
     # "average of 1" and skew the basis.
+    #
+    # Local runs only (MS2-D-28): an imported run's "items" are small dataset
+    # rows, not HTTP pages, so its body sizes are not a basis for judging a page.
+    # A run that predates provider evidence has no "provider" key and is local.
+    # Without this filter, a window of remote runs after a provider switch would
+    # replace the page-size basis and soft-block the next ordinary local run.
     rows = (
         ScraperRun.objects.filter(source_site=site, status=RunStatus.SUCCESS, run_kind=RunKind.FULL)
+        .filter(
+            Q(detail_json__provider__provider_kind=ProviderKind.LOCAL.value)
+            | Q(detail_json__provider__provider_kind__isnull=True)
+        )
         .order_by("-started_at")
         .values_list("detail_json__body_bytes", "records_fetched")[:MEDIAN_BODY_WINDOW]
     )
@@ -251,61 +167,6 @@ def _classify_batch(batch: RawBatch, *, expects_json: bool, median: int | None) 
             raise FetchFailure(verdict, f"{item.url} classified {verdict}")
 
 
-def _persist_all(
-    site: SourceSite,
-    batch: RawBatch,
-    normalized: list[NormalizedListing],
-    retention_class: RetentionClass,
-    expires_at: datetime | None,
-) -> tuple[list[int], int, int]:
-    # CR-002: every RawItem is stored, not just items[0] — multi-request
-    # connectors (e.g. WD's search sweep + per-product fetches) otherwise lose
-    # provenance for every item but the first. raws is a LIST (not a dict keyed
-    # by url) so duplicate source URLs each still get their own stored row.
-    raws = [
-        store_raw(
-            item,
-            fetched_at=batch.fetched_at,
-            retention_class=retention_class,
-            expires_at=expires_at,
-        )
-        for item in batch.items
-    ]
-    # url -> RawPayload for snapshot association; first raw per url wins when
-    # a batch has duplicate source URLs (rare, but must not drop a stored row).
-    by_url: dict[str, RawPayload] = {}
-    for item, raw in zip(batch.items, raws, strict=True):
-        by_url.setdefault(item.url, raw)
-    # Single-item batches have no meaningful raw_url to key on (adapters may
-    # leave it unset); fall back to the one raw payload that must be it.
-    sole = raws[0] if len(raws) == 1 else None
-    listing_ids: list[int] = []
-    upserted = 0
-    appended = 0
-    # observed_at is the instant the offer was observed at fetch time, not
-    # persistence time: it must match RawPayload.fetched_at and the FX stamping
-    # basis (batch.fetched_at.date()) so stored raw payloads can be replayed
-    # faithfully.
-    observed_at = batch.fetched_at
-    for record in normalized:
-        listing, _created = upsert_listing(site, record, retention_class, expires_at=expires_at)
-        # Seeing a listing is proof it is not delisted, so any terminal mark is
-        # cleared here rather than in the delist stage. This is what makes the
-        # absence heuristics (see DelistScope) self-healing: a listing wrongly
-        # delisted for missing a truncated sweep returns to the live set on its
-        # next appearance, keeping its pk, its history and its resolution edges.
-        listing.mark_relisted()
-        # append_snapshot reads listing.expires_at (not the expires_at param
-        # directly) so a snapshot's TTL always matches its listing's current
-        # value, even if a future caller mutates the listing between calls.
-        raw = by_url.get(record.raw_url) or sole  # per-item; fallback to the sole raw
-        append_snapshot(listing, record, observed_at=observed_at, raw=raw)
-        listing_ids.append(listing.pk)
-        upserted += 1
-        appended += 1
-    return listing_ids, upserted, appended
-
-
 def _grain_counts(listing_ids: list[int]) -> dict[str, int]:
     # POST-resolution tally (SA-003): read after resolver.resolve_listing has
     # run for every listing_id, so this reflects each listing's final grain
@@ -314,7 +175,7 @@ def _grain_counts(listing_ids: list[int]) -> dict[str, int]:
     #
     # listing_ids can repeat a pk: two records in one batch sharing a
     # source_listing_key both resolve to the same Listing via upsert_listing's
-    # (source_site, source_listing_key) key, so _persist_all appends that pk
+    # (source_site, source_listing_key) key, so persist_observations appends that pk
     # once per record, not once per distinct listing. A filter(...).count()-style
     # tally over DISTINCT query rows would collapse the repeat and undercount
     # (E1 review) — build a pk->grain map instead and iterate listing_ids
@@ -447,8 +308,13 @@ async def run_collection(
     try:
         async with asyncio.timeout(fetch_timeout_s):
             batch = await provider.fetch()
-        median = await sync_to_async(_median_body_bytes)(site)
-        _classify_batch(batch, expects_json=provider.expects_json, median=median)
+        # MS2-D-28: only a local provider's items are HTTP responses. A remote
+        # provider's items are dataset rows with no body text, which the EC-007
+        # body-size rule would call ANTI_BOT against any local median; remote
+        # transport health is classify_run's job, inside the provider.
+        if provider.provider_kind is ProviderKind.LOCAL:
+            median = await sync_to_async(_median_body_bytes)(site)
+            _classify_batch(batch, expects_json=provider.expects_json, median=median)
         try:
             parsed = provider.parse(batch)
         except ValidationError as exc:
@@ -460,9 +326,10 @@ async def run_collection(
         # (e.g. eBay's DR-008 <=6h) stay relative to this batch's own fetch
         # time rather than the moment run_collection happened to be called.
         expires_at = expires_policy(batch.fetched_at) if expires_policy else None
-        listing_ids, upserted, appended = await sync_to_async(_persist_all)(
-            site, batch, normalized, retention_class, expires_at
+        persisted = await persist_local(
+            site, batch, normalized, ObservationRetention(retention_class, expires_at)
         )
+        listing_ids = persisted.listing_ids
         # Delist stage — runs AFTER persistence so this sweep's listings are
         # already revived/last_seen-bumped and cannot be delisted by their own
         # sweep. Restricted to FULL runs: a PROBE is a recovery poke and a
@@ -472,33 +339,27 @@ async def run_collection(
         # The provider's scope is never applied as-is: gate_delist_scope reads it
         # through the run's completeness evidence, so a remote run that stopped at
         # a page/item/budget limit cannot delist however its scope is phrased, and
-        # the same evidence AND scope decide whether the run advances lane
-        # continuity or breaks it (_break_sweep_continuity) — a non-local run needs
-        # its own scope to claim complete=True too, or COMPLETE evidence alone
-        # would let a string of under-scoped remote runs fake polling continuity
-        # a later local sweep could stale-delist on (plan review F-04 residual;
-        # see counts_toward_sweep_continuity). For a LocalCollectionProvider
-        # continuity always advances the same way it always has and the scope gate
-        # is the identity, so local delist behavior is unchanged — with one
-        # deliberate difference: continuity is now recorded AFTER delist_scope(),
-        # because it depends on the evidence.
-        # If delist_scope raises, the run fails as before but no longer advances
-        # continuous_since first, which can only shorten the continuity window —
-        # strictly more conservative for the stale-absence path.
+        # the same evidence AND scope decide whether the run advances the swept
+        # scope's continuity or breaks it — a non-local run needs its own scope
+        # to claim complete=True too (plan review F-04 residual; see
+        # counts_toward_sweep_continuity). Continuity is recorded AFTER
+        # delist_scope(), because it depends on the evidence; if delist_scope
+        # raises, the run fails without advancing continuity, which can only
+        # shorten the window — the conservative direction for stale absence.
+        #
+        # The swept scope is the DelistScope's scope_key; a scope-less run swept
+        # the legacy NULL scope (MS2-D-31).
         delisted = 0
         if effective_kind is RunKind.FULL:
             scope = provider.delist_scope(batch, parsed)
             evidence = provider.run_evidence(batch, parsed, scope, run_kind=effective_kind)
-            continuous_since: datetime | None = None
-            if counts_toward_sweep_continuity(evidence, scope):
-                continuous_since = await sync_to_async(_record_sweep_continuity)(
-                    site, batch.fetched_at
-                )
-            else:
-                await sync_to_async(_break_sweep_continuity)(site)
-            gated = gate_delist_scope(scope, evidence)
-            if gated is not None:
-                delisted = await sync_to_async(_apply_delist)(site, gated, continuous_since)
+            delisted = await absence_local(
+                site,
+                swept_scope_key=None if scope is None else scope.scope_key,
+                eligible=counts_toward_sweep_continuity(evidence, scope),
+                gated=gate_delist_scope(scope, evidence),
+                event_time=batch.fetched_at,
+            )
         else:
             evidence = provider.run_evidence(batch, parsed, None, run_kind=effective_kind)
         resolver_errors = 0
@@ -514,8 +375,8 @@ async def run_collection(
         grain_counts = await sync_to_async(_grain_counts)(listing_ids)
         run.records_fetched = len(batch.items)
         run.records_valid = len(normalized)
-        run.listings_upserted = upserted
-        run.snapshots_appended = appended
+        run.listings_upserted = persisted.upserted
+        run.snapshots_appended = persisted.appended
         run.detail_json = {
             "body_bytes": sum(len(item.payload_text or "") for item in batch.items),
             "resolver_errors": resolver_errors,
@@ -539,6 +400,61 @@ async def run_collection(
         return await _finalize_failure(run, exc.failure_class, str(exc), effective_kind)
     except Exception as exc:  # every crash must classify + record (NFR-001)
         return await _finalize_failure(run, classify_exception(exc), repr(exc), effective_kind)
+
+
+async def persist_local(
+    site: SourceSite,
+    batch: RawBatch,
+    normalized: list[NormalizedListing],
+    retention: ObservationRetention,
+) -> PersistResult:
+    """Run the local persist step in one transaction (D10 *Local transactions*, ED-04).
+
+    Everything the step writes (raw payloads, listing observation and
+    creation, snapshots) commits together or not at all: a crash mid-persist
+    rolls back the whole batch, where the MS-1 autocommit path kept the rows
+    before the crash, and the next poll repairs it. A retry exhaustion
+    (RetryExhausted) propagates and ends the run like any crash.
+    """
+
+    def persist() -> PersistResult:
+        ensure_watermark_rows(site, target_scopes(site, normalized) | {None})
+        return atomic_with_retry(
+            lambda: persist_observations(site, batch, normalized, retention),
+            label=f"persist {site.normalized_name}",
+        )
+
+    return await sync_to_async(persist)()
+
+
+async def absence_local(
+    site: SourceSite,
+    *,
+    swept_scope_key: str | None,
+    eligible: bool,
+    gated: DelistScope | None,
+    event_time: datetime,
+) -> int:
+    """Run the local delist step in its own transaction, after the persist step's commit.
+
+    A crash between the two transactions leaves observations without absence,
+    which fails toward keeping listings active; the next complete sweep delists.
+    """
+
+    def absence() -> int:
+        ensure_watermark_rows(site, {swept_scope_key, None})
+        return atomic_with_retry(
+            lambda: apply_absence(
+                site,
+                swept_scope_key=swept_scope_key,
+                eligible=eligible,
+                gated=gated,
+                event_time=event_time,
+            ),
+            label=f"delist {site.normalized_name}",
+        )
+
+    return await sync_to_async(absence)()
 
 
 async def _evaluate_all(

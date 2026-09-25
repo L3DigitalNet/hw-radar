@@ -54,6 +54,7 @@
     - [OQ27 — Retention class for non-first-party reference data](#oq27--retention-class-for-non-first-party-reference-data)
     - [OQ28 — Can MS-2 exit on the synthetic proof alone?](#oq28--can-ms-2-exit-on-the-synthetic-proof-alone)
     - [OQ29 — Operator allowance size](#oq29--operator-allowance-size)
+    - [OQ30 — Runtime Apify account reads (R25)](#oq30--runtime-apify-account-reads-r25)
 
 ---
 
@@ -624,3 +625,31 @@ _Recommendation ratified as presented (2026-07-04): `dependency-review-action` g
 - Replaces the plan's earlier $0.50 assumption.
 
 **My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-25 direction.)_
+
+### OQ30 — Runtime Apify account reads (R25)
+
+**✅ Resolved (owner, 2026-09-25): recorded here. [ADR 0021's 2026-09-25 (s5) amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-25-s5-the-runtime-reads-no-account-state-owner-decision-r25) carries the architectural rule, and MS-2 plan revision 12 (MS2-D-48) carries the design.** Raised during the F5a synthetic proof (session s5). Admission denied every request with `account_state_unobservable` because the scoped runtime token could not read the account.
+
+- **Evidence (2026-09-25, `GET` only).** The runtime token `HW_RADAR_APIFY_TOKEN` got `403 insufficient-permissions` from `/v2/users/me`, `/v2/users/me/limits`, and `/v2/users/me/usage/monthly`. Apify's scoped-token form offers account-level permissions only for Actors, Tasks, Schedules, and Storages (docs.apify.com/platform/integrations/api, retrieved 2026-09-25), so no scoped token can make these reads. At the same time, the operator key read: plan STARTER, prepaid usage credit $19, account usage limit $19, cycle 2026-09-05T00:00:00Z → 2026-10-04T23:59:59.999Z, and data retention 31 days. The account is shared with the separate apify-actors venture.
+- **Decision: "Drop runtime account reads (Recommended)"**, chosen by the owner on 2026-09-25 from a bounded choice.
+  - The runtime stops calling the account endpoints.
+  - A configured anchor supplies the billing cycle, and the operator key checks it before enabling.
+  - Apify's own $19 limit, equal to the prepaid credit and verified, caps account-wide cash.
+  - Hardware Radar's ledger, its $12 target, and the $5 allowance for other workloads on the account all stay.
+  - The owner accepts one consequence: the runtime can no longer see the apify-actors venture's actual spend, only Apify's hard cap.
+  - Production never needs the unscoped key.
+- **Rejected by the owner:**
+  - operator-key account reads inside the application, even for the proof only;
+  - keeping admission denied until Apify offers an account-read scope.
+- **Constraint.** The unscoped operator key (`secret/apps/hw-radar/agent/apify`) is never rendered to any application runtime, whether production or proof. Operator verification with it happens outside the application, and its result enters Hardware Radar only as configuration with an evidence date.
+- **Open follow-ups (plan R39):**
+  - whether to add a re-verification age;
+  - whether R38's acceptance stands without after-the-fact runtime detection;
+  - whether master spec C-011's "prepaid allowance actually remaining" needs a clarification now that Apify's limit, not a runtime observation, enforces it.
+- **Follow-ups answered (owner, 2026-09-25, bounded choice; plan R39 closed):**
+  1. **Re-verification age: "No expiry; warn only (Recommended)".** Admission never ages out `HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON`. `apify_spend_report` prints a non-blocking warning when the date predates the current cycle's start.
+  2. **R38: "Still accepted (Recommended)".** The R38 acceptance stands. F5a still measures API-call billing on the operator side, and a measured real per-call charge revises the estimator bound then. The operator's end-of-cycle reconciliation compares the ledger with account usage.
+  3. **C-011: "Clarify the spec (Recommended)".** The master spec's C-011 carries a dated clarification: the runtime plans against the operator-verified account limit minus the margin, Apify's hard limit enforces the account-wide remaining allowance, and the operator reconciles each cycle.
+- A Codex bounded review of plan revision 12 (REVISION_REQUIRED, R12-01..R12-05) was resolved in the plan's rev-12 Codex follow-up. None of it changed this decision.
+
+**My Comments:** _(none recorded; the decision above is the owner's 2026-09-25 direction.)_

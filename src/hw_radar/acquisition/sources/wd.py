@@ -14,7 +14,7 @@ Fetch is TWO steps against the OCC API:
   2. one per-product GET per code → its `variantOptions`.
 Each HTTP response becomes its OWN RawItem (Task B4 per-item raw persistence),
 so every variant's raw_url points at the product response it was parsed from,
-and _persist_all's by_url association stores distinct provenance per product.
+and persist_observations' by_url association stores distinct provenance per product.
 
 Three search sweeps, not one: the OCC catalog has no recert facet for
 enterprise SKUs, so `query=recertified` (consumer My Book / Elements / My

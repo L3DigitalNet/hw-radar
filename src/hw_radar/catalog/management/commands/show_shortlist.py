@@ -41,8 +41,11 @@ class Command(BaseCommand):
             landed = "n/a" if r.landed_usd is None else f"${r.landed_usd}"
             shipping = "" if r.shipping_known else " (+shipping?)"
             observed = "never" if r.observed_at is None else r.observed_at.isoformat()
+            freshness = str(r.freshness)
+            if r.budget_paused_reason is not None:
+                freshness += f"({r.budget_paused_reason})"
             self.stdout.write(
-                f"  {landed}{shipping}  target:{_flag(r.meets_target)}  {r.freshness}  "
+                f"  {landed}{shipping}  target:{_flag(r.meets_target)}  {freshness}  "
                 f"observed {observed}  [{r.source}#{r.listing_id}] {r.title}  {r.url}"
             )
         pending = sum(1 for q in queue if q.state == "pending")
