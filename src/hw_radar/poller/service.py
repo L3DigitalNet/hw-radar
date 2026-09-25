@@ -35,6 +35,7 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
+from hw_radar.acquisition.apify.jobs import APIFY_POLL_SECONDS, apify_poll_tick, start_provider_run
 from hw_radar.acquisition.contracts import adapter_retention
 from hw_radar.acquisition.heartbeat import HeartbeatProbe, run_heartbeat
 from hw_radar.acquisition.pipeline import run_source
@@ -48,6 +49,7 @@ from hw_radar.catalog.management.commands.purge_expired import sweep_expired
 from hw_radar.catalog.models import (
     CheapSignal,
     LifecycleState,
+    ProviderKind,
     RunKind,
     SchedulingLane,
     SourceConfig,
@@ -96,6 +98,14 @@ async def poll_source(site_key: str, registry: BucketRegistry, scheduler: AsyncI
     )
     if not decision.admitted:
         logger.info("source %s not admitted: %s", site_key, decision.reason)
+        return
+    if config.collection_provider == ProviderKind.APIFY.value:  # .value: django-types quirk
+        # MS2-D-16: an Actor-backed source's full-lane job STARTS a run; its
+        # lifecycle outcome is applied when the import finalizes or is rejected
+        # (apify-poll), never here. The local adapter is never invoked for it,
+        # even when one is registered (MS2-D-24).
+        result = await start_provider_run(config, run_kind=RunKind.FULL)
+        logger.info("source %s apify start: %s %s", site_key, result.status, result.reason)
         return
     factory = ADAPTERS.get(site_key)
     if factory is None:
@@ -252,6 +262,18 @@ async def recovery_probe_job(registry: BucketRegistry) -> None:
         logger.info("recovery probe for %s → %s", key, config.lifecycle_state)
 
 
+async def apify_poll_job() -> None:
+    """MS2-D-16 `apify-poll`: drive every started Actor run from persisted state.
+
+    Registered unconditionally: it never starts a run, and it keeps draining
+    imports and storage for already-admitted runs while the kill switch is off
+    (ED-07). With no provider_run rows it makes no API call and needs no token.
+    """
+    report = await apify_poll_tick(resolver=CatalogResolver())
+    if report.polled or report.imported or report.cleanup or report.overdue or report.failed:
+        logger.info("apify-poll: %s", report)
+
+
 async def refdata_refresh_job() -> None:
     """ADR-0018 monthly reference refresh — slow path, never heartbeat/fast-lane."""
     report = await sync_to_async(refdata_refresh.run_refresh)()
@@ -334,6 +356,7 @@ def build_scheduler(
         hour=REFDATA_REFRESH_HOUR_UTC,
         id="refdata-refresh",
     )
+    scheduler.add_job(apify_poll_job, "interval", seconds=APIFY_POLL_SECONDS, id="apify-poll")
     scheduler.add_job(
         retention_sweep_job,
         "interval",

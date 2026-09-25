@@ -115,12 +115,18 @@ class RejectReason(StrEnum):
     STORAGE_DEADLINE_PASSED = "storage_deadline_passed"
     CONTENT_PAST_TTL = "content_past_ttl"
     READ_CAP_EXHAUSTED = "read_cap_exhausted"
+    # The start response disagreed with the request, or the started build is
+    # outside the contract's version line (MS2-D-26, -38); set by the start job.
+    START_OPTION_MISMATCH = "start_option_mismatch"
 
 
 # The ADR-0017 failure class a FULL rejection feeds apply_run_outcome. A run the
 # Actor could not complete or described inconsistently is the collector's
 # fault, as parser rot is a local adapter's; the budget and retention refusals
-# are hw-radar's own local conditions and back off as transient.
+# are hw-radar's own local conditions and back off as transient. A start
+# mismatch is neither: the platform ignored a run option or ran a build our
+# contract does not cover, so it goes to UNKNOWN, which ADR-0017 holds in
+# paused_pending_fix for a human to classify.
 REJECT_FAILURE_CLASS: Final[dict[RejectReason, RunFailureClass]] = {
     RejectReason.FAILED_RUN: RunFailureClass.PARSER_ROT,
     RejectReason.INVALID_CONTRACT: RunFailureClass.PARSER_ROT,
@@ -128,6 +134,7 @@ REJECT_FAILURE_CLASS: Final[dict[RejectReason, RunFailureClass]] = {
     RejectReason.STORAGE_DEADLINE_PASSED: RunFailureClass.TRANSIENT,
     RejectReason.CONTENT_PAST_TTL: RunFailureClass.TRANSIENT,
     RejectReason.READ_CAP_EXHAUSTED: RunFailureClass.TRANSIENT,
+    RejectReason.START_OPTION_MISMATCH: RunFailureClass.UNKNOWN,
 }
 
 

@@ -50,13 +50,20 @@ Instructions for AI agents:
   `dataRetentionDays`, response/page/request byte caps, pinned `SO_RCVBUF`). **D10 core done**
   (`acquisition.stages`: transactional persist/delist with the MS2-D-35 lock order and in-memory
   retry, `observe_listing` ordering guards, per-observation snapshot retention, per-scope ordered
-  continuity; `acquisition.apify.importer`: MS2-D-22 state machine, read caps, Reject). D10
-  remainder: the restart tests in `test_apify_poll_job.py` (land with D5's selectors). **D6–D8
-  done** (AC-4/5/6 fixture proofs in `tests/db/test_apify_import.py`;
+  continuity; `acquisition.apify.importer`: MS2-D-22 state machine, read caps, Reject). **D5
+  done** (`acquisition.apify.jobs`: start job behind `DenyAllAdmission` + kill switch, MS2-D-33
+  refusals and row-before-start, options/version-line check with the counted mismatch abort,
+  `apify-poll` job with the three MS2-D-23 selectors and per-row backoff; D10 restart tests).
+  **D6–D8 done** (AC-4/5/6 fixture proofs in `tests/db/test_apify_import.py`;
   `ProviderRunEvidence.truncation_reason`, optional on the model, DB CHECK enforces it).
-  **Next (Slice D core):** D5 → D11 → D12 → D9; Apify push/build/run (none has occurred yet). D5 must write `provider_run.query_scope` as the camelCase
-  `QueryScope` wire JSON the run was started with, supply the admitted Actor name the provider
-  checks OUTPUT against, and drive `import_provider_run` from the outstanding selector.
+  **Next (Slice D core):** D11 → D12 → D9; Apify push/build/run (none has occurred yet). D11
+  binds the `cleanup` and `overdue` StorageUnit hooks in `apify_poll_tick` (orphaned_start
+  included); F5a registers the synthetic site's `ActorRunSpec` in `jobs.RUN_SPECS` (empty in
+  production, so every `apify` source is refused `no_run_spec`); E5 replaces `BUDGET_ADMISSION`
+  and trips the latch on `stage_detail.start_mismatch` / `restart_count`; D12 dispatches
+  `recovery_probe_job` through `start_provider_run(run_kind=PROBE)`. Open: the start job does
+  not yet refuse a new FULL start while a previous run of the same scope is outstanding (only
+  the one-probe rule, D12, is planned).
 - [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
   initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential

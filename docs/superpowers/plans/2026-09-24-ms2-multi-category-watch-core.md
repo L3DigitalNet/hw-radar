@@ -4708,6 +4708,15 @@ the then-current code. D-prep (D1, D3) is not gated.
       sent; the attempt deletes only after terminal evidence) and
       `test_start_request_is_never_retried` (a transport error on start
       leaves the row for `orphaned_start` handling, MS2-D-33).
+  - Landed 2026-09-25: `acquisition/apify/jobs.py` (`start_provider_run`,
+    `apify_poll_tick`), the `poll_source` apify branch and the `apify-poll`
+    job in `poller/service.py`, and the D5 tests above plus D10's two restart
+    tests. The run input comes from a per-site `ActorRunSpec` in
+    `jobs.RUN_SPECS`, empty in production (F5a registers the synthetic site).
+    A start mismatch rejects the import as `start_option_mismatch` (ADR-0017
+    `UNKNOWN`) before the abort; D10's other reject classes were checked
+    against ADR-0017 and kept. The cleanup and overdue units are logging
+    hooks until D11 binds them.
 - **D6 — Idempotency (AC-6).**
   - `test_duplicate_completion_is_noop`: a second import of the same run adds no
     `ScraperRun`, `OfferSnapshot`, or `RawPayload` rows.

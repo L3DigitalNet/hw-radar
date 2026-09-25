@@ -21,6 +21,21 @@ Environment contract (see .env.example for dev values):
   HW_RADAR_APIFY_MAX_DATASET_READS / HW_RADAR_APIFY_MAX_KV_READS
                             optional; per-run caps on full dataset reads and OUTPUT
                             record reads (default 3 each, MS2-D-32 *Operation caps*)
+  HW_RADAR_APIFY_ENABLED    optional kill switch for new Actor starts; only the
+                            literal "true" enables (default false). The apify-poll
+                            job drains already-started runs either way (ED-07)
+  HW_RADAR_APIFY_ACTOR_ID / HW_RADAR_APIFY_ACTOR_BUILD / HW_RADAR_APIFY_ACTOR_NAME
+                            optional; the Actor a start targets (no default: an
+                            unset id refuses every start), its build tag (default
+                            "prod"), and the Actor name its OUTPUT must report
+                            (default "hw-radar-synthetic-collector", MS2-D-38)
+  HW_RADAR_APIFY_STORAGE_CLEANUP_MAX / HW_RADAR_APIFY_IMPORT_MARGIN
+                            optional, in seconds; the remote-storage deadline after
+                            admission (default 86400) and the import time a start's
+                            timeout must leave before it (default 3600, MS2-D-33)
+  HW_RADAR_APIFY_MAX_RUN_POLLS
+                            optional; per-run cap on status polls (default 60,
+                            MS2-D-32 *Run polls*)
 Production values arrive via the bao-agent tmpfs render (systemd
 EnvironmentFile=/run/bao-agent/hw-radar.env) - never a plaintext file at rest.
 """
@@ -178,6 +193,32 @@ HW_RADAR_APIFY_MAX_API_RESPONSE_BYTES = int(
 # bound; at the cap the import is rejected with read_cap_exhausted.
 HW_RADAR_APIFY_MAX_DATASET_READS = int(os.environ.get("HW_RADAR_APIFY_MAX_DATASET_READS", "3"))
 HW_RADAR_APIFY_MAX_KV_READS = int(os.environ.get("HW_RADAR_APIFY_MAX_KV_READS", "3"))
+# MS2-D-17 kill switch, read by acquisition.apify.jobs before budget admission.
+# Anything but the literal "true" (a typo, "1", "yes") keeps starts off: a
+# misspelled value must never be what makes paid execution possible. It gates
+# new starts only; the apify-poll selectors keep draining imports and storage
+# for runs that were already admitted (ED-07).
+HW_RADAR_APIFY_ENABLED = os.environ.get("HW_RADAR_APIFY_ENABLED", "").strip().lower() == "true"
+# The Actor a start targets (MS2-D-38 *Deploy*). The id is account configuration
+# and is never committed, so it has no default and an empty value refuses every
+# start. The build tag is what `apify` promotes; the name is the one the run's
+# OUTPUT.provider.actorName must echo, or classify_run fails it as scope_mismatch.
+HW_RADAR_APIFY_ACTOR_ID = os.environ.get("HW_RADAR_APIFY_ACTOR_ID", "")
+HW_RADAR_APIFY_ACTOR_BUILD = os.environ.get("HW_RADAR_APIFY_ACTOR_BUILD", "prod")
+HW_RADAR_APIFY_ACTOR_NAME = os.environ.get(
+    "HW_RADAR_APIFY_ACTOR_NAME", "hw-radar-synthetic-collector"
+)
+# MS2-D-25/-33, in seconds: storage_cleanup_due_at = admitted_at +
+# min(STORAGE_CLEANUP_MAX, bounded_ttl / 2) (24 h, an assumption), and a start is
+# refused unless timeout_s + IMPORT_MARGIN fits before that deadline (1 h, an
+# assumption), so a run that uses its whole timeout still leaves time to import.
+HW_RADAR_APIFY_STORAGE_CLEANUP_MAX = int(
+    os.environ.get("HW_RADAR_APIFY_STORAGE_CLEANUP_MAX", "86400")
+)
+HW_RADAR_APIFY_IMPORT_MARGIN = int(os.environ.get("HW_RADAR_APIFY_IMPORT_MARGIN", "3600"))
+# MS2-D-32 *Run polls* (60, an assumption): the most `GET` run calls selector 1
+# makes for one provider_run, each counted and committed before it is sent.
+HW_RADAR_APIFY_MAX_RUN_POLLS = int(os.environ.get("HW_RADAR_APIFY_MAX_RUN_POLLS", "60"))
 
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"
