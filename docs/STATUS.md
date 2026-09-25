@@ -21,7 +21,7 @@
   2026-08-16): Approach-A evaluator, `EvalReport`, `ms1_ratification_gate`, `harvest_corpus`. The
   live harvest/label-draft/audit/ratification/ADR-0019 flip remain the deferred owner-in-the-loop
   step; `tests/db/test_ratification_corpus.py` skips until it lands.
-- Full gate @001a5b6: 1231 passed/1 skip, 96% cov; Actor 67 passed, 99%; pip-audit clean (`--skip-editable`).
+- Full gate @c31a6d4: 1242 passed/1 skip, 96% cov; Actor 67 passed, 99%; pip-audit clean (`--skip-editable`).
 - **MS-2 multi-category watch-core plan converged at revision 8**
   (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`). Eight-round Codex
   delegate review lineage: r1-r4 converged rev 4 (session 1); r5 `0469e098` REVISION NEEDED (5) ->
@@ -42,7 +42,7 @@
   `actors/hw-radar-synthetic-collector` + contract schemas + `classify_run` + CI Actor gates. No
   Apify push/build/run has occurred. Open: `ProviderRunEvidence.truncation_reason` (MS2-D-11) not
   yet added; private-helper coupling in `eligibility/service.py`/`shortlist.py` (drift-tested).
-  gate-runner verified. **Deployed 2026-09-25** (`ac8d608` run 36078378772, then `96ce005`): 0018-0020
+  gate-runner verified. **Deployed 2026-09-25** (`ac8d608` run 36078378772; now `531916e`, bug 001 fixed): 0018-0020
   applied, sources disabled, no Actor run; evidence in `docs/handoff/deployed.md`.
 - Battery @62e670b green: 1226 passed/1 expected skip, 96% coverage, pip-audit clean; Actor
   project 64 passed, 99% coverage. Migrations empty->head and head->0017->head both OK; A0 oracle

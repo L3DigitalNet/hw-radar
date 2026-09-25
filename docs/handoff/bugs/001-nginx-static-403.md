@@ -1,6 +1,6 @@
 # Bug 001: nginx cannot serve `/static/` (403) in production
 
-Status: open; fix implemented on dev, pending production deployment and verification
+Status: fixed and verified in production 2026-09-25 (release `531916e`, deploy run 36122297450)
 Found: 2026-09-25, during post-deploy verification of `ac8d608`
 Severity: low. Only Django admin styling is affected; the app's own templates
 load no static assets, and `/healthz` and the login flow are unaffected.
@@ -64,3 +64,26 @@ A green deploy smoke test (`/healthz`) does not exercise static serving. The
 post-deploy check should fetch one collected static asset through nginx, and
 any provisioning step that locks down the app root must say how nginx reaches
 `STATIC_ROOT`.
+
+## Production verification (2026-09-25)
+
+- The host directories were provisioned before the release: `/var/lib/hw-radar` is `root:root 0755`
+  and `staticfiles` is `deploy:deploy 0755`. The files were collected into it and the nginx alias was
+  switched and reloaded. The CT-local 403 seen during the reload came from an old worker that was
+  still draining, and later requests returned 200.
+- The release was deployed as `531916e` in run 36122297450. The deploy's new "Static smoke test
+  (through CT nginx)" step passed. Django `STATIC_ROOT` on the host is
+  `/var/lib/hw-radar/staticfiles`, every directory there is `0755` and every file is `0644`.
+- `/static/admin/css/base.css` returns 200 `text/css` both from the CT's nginx and at the public
+  edge, as does `nav_sidebar.css`. `/admin/login/` returns 200 with its stylesheets resolving.
+- Negative security checks, run as the nginx worker identity:
+  - `www-data` is only in group `www-data`.
+  - `runuser -u www-data -- cat /run/bao-agent/hw-radar.env` is denied, and `www-data` cannot
+    traverse `/run/bao-agent`.
+  - `www-data` cannot write the static root.
+  - The render is still `root:hwradar 0640` inside a `root:hwradar 0750` directory.
+- The web, poller, bao-agent, nginx, and PostgreSQL units are active with 0 restarts, and there
+  are no warning-level journal entries. All sources are still disabled.
+- The legacy `/opt/hw-radar/app/staticfiles` (1.2 MB) was removed after verification, once nginx
+  no longer referenced it.
+

@@ -72,8 +72,6 @@ Instructions for AI agents:
   drive harvest / first SSD seed.
 - [ ] Confirm the first post-migration-0015 continuous-sweep log before relying on
   `ABSENT_STALE` delisting (deployed 2026-09-06; expected 6h grace).
-- [ ] **Blocked on owner:** choose the fix for production `/static/` 403 (nginx cannot traverse the
-  `0750` app root; admin CSS only) — [bug 001](handoff/bugs/001-nginx-static-403.md).
 - [ ] **Gated framework upgrade:** Django 6.1.2+ (PR #31, 6.1.1, was closed/deferred 2026-09-25).
   Before adopting any 6.1.x release: read its release notes, review backwards-incompatible
   changes against the raw-SQL Timescale migrations/constraints, run PostgreSQL checks and a

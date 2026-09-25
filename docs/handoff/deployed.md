@@ -4,9 +4,10 @@ Last updated: 2026-09-25
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `96ce005` (PR #27;
-  CI/docs/build-bound only), run 36116766253, 2026-09-25T09:13:56Z. Before it,
-  `ac8d608` (PRs #25+#26) run 36078378772 at 08:50:08Z shipped the schema; the
+- Deploys run from `main` via the Deploy workflow. Latest: `531916e` (PR #34:
+  bug 001 static fix, docs, pydantic/gunicorn updates; no migrations), run
+  36122297450, 2026-09-25T10:11:51Z. Earlier the same day: `96ce005` (run
+  36116766253), and `ac8d608` (run 36078378772), which shipped the schema; the
   superseded `c728613` run 36077354704 was cancelled unapproved.
 - Host-verified after each run: `RELEASE` and `/healthz` (local + public) report
   the run's SHA, `database: true`; login 200; web, poller, bao-agent, nginx,
@@ -18,8 +19,9 @@ Last updated: 2026-09-25
 - All `SourceConfig` rows still `enabled=False`; the poller logged
   `poller started (0 source job(s))`; no `scraper_runs` rows; the env render
   has no Apify variable (names checked only; OQ25), so no Actor run can start.
-- Pre-existing anomaly: nginx 403 on `/static/` since 2026-07-05 (admin CSS
-  only) — [bug 001](bugs/001-nginx-static-403.md).
+- Static files: `STATIC_ROOT` `/var/lib/hw-radar/staticfiles` (deploy-owned,
+  0755/0644, no `hwradar` link); the deploy smoke fetches `base.css` through
+  nginx. [Bug 001](bugs/001-nginx-static-403.md) is fixed and verified.
 - Runtime assets live under `deploy/`; `/healthz` reports release and DB health.
 - The production environment needs a reviewer approval per push to `main`; an
   unapproved run dies at GitHub's 30-day cap (production sat stale at MS-1b
