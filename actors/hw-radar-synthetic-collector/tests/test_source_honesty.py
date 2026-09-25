@@ -17,7 +17,7 @@ import pytest
 import synthetic_collector.main as entry
 from synthetic_collector.contract import load_schema
 from synthetic_collector.core import MAX_ERRORS
-from tests.support import base_input, run_collect, serve_source
+from tests.support import base_input, mock_client, run_collect, serve_source
 
 
 def _serving(page: object) -> httpx.MockTransport:
@@ -115,7 +115,7 @@ def test_main_runs_inside_the_sdk_actor_context(monkeypatch: pytest.MonkeyPatch)
     stand_in = _SdkActorStandIn()
     _, transport = serve_source()
     monkeypatch.setattr(entry, "Actor", stand_in)
-    monkeypatch.setattr(entry, "new_http_client", lambda: httpx.AsyncClient(transport=transport))
+    monkeypatch.setattr(entry, "new_http_client", lambda: mock_client(transport))
 
     asyncio.run(entry.main())
 

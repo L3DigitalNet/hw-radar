@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import gzip
+import socket
+import sys
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from typing import Any
 
+import httpcore
 import httpx
 import pytest
 
+import synthetic_collector.main as entry
+from synthetic_collector.core import HTTP_READ_CHUNK_BYTES, HTTP_RECEIVE_BUFFER_BYTES
 from tests.support import SOURCE_DIR, base_input, run_collect, serve_source
 
 PAGE_1_BYTES = len((SOURCE_DIR / "catalog" / "page-1.json").read_bytes())
@@ -174,6 +180,165 @@ def test_byte_and_time_limits_binding_on_one_chunk_are_both_reported() -> None:
     limits = _limits(result.output)
     assert limits["time"] is True
     assert limits["bytes"] is True
+
+
+# A body whose gzip encoding is larger than its decoded form: 15 decoded bytes,
+# 35 on the wire. With maxBytes=20 a decoded-byte count would accept it; the
+# wire count must not, because the wire bytes are what the run is billed for.
+_TINY_PAGE = b'{"listings":[]}'
+_TINY_PAGE_GZIP = gzip.compress(_TINY_PAGE, mtime=0)
+
+
+@pytest.mark.parametrize(
+    ("chunks", "headers", "max_bytes"),
+    [
+        # The R10-02 shape: one 100-byte read under maxBytes=10, then more body
+        # the Actor must never pull.
+        ([b"x" * 100, b"y" * 100, b"z" * 100], {}, 10),
+        ([_TINY_PAGE_GZIP, b"never read"], {"Content-Encoding": "gzip"}, 20),
+        # The 10-byte gzip header alone decodes to nothing, so a check that ran
+        # only on decoded output would never see this read at all.
+        ([_TINY_PAGE_GZIP[:10], _TINY_PAGE_GZIP[10:]], {"Content-Encoding": "gzip"}, 5),
+    ],
+    ids=[
+        "oversized-first-read",
+        "compressed-wire-over-decoded-under",
+        "compressed-read-with-no-decoded-output",
+    ],
+)
+def test_byte_cap_counts_wire_bytes_and_stops_on_first_crossing_chunk(
+    chunks: list[bytes], headers: dict[str, str], max_bytes: int
+) -> None:
+    assert len(_TINY_PAGE) < 20 < len(_TINY_PAGE_GZIP)
+    pulled: list[bytes] = []
+
+    async def body() -> AsyncIterator[bytes]:
+        for chunk in chunks:
+            pulled.append(chunk)
+            yield chunk
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers=headers, content=body())
+
+    result = run_collect(base_input(maxBytes=max_bytes), transport=httpx.MockTransport(handler))
+
+    assert pulled == chunks[:1]
+    assert len(requests) == 1
+    assert _limits(result.output) == _only_hit("bytes")
+    assert result.rows == []
+
+
+def test_byte_count_is_run_wide_across_responses_including_failed_ones() -> None:
+    # Response 1 is a valid page, response 2 dies mid-body, and response 3
+    # crosses the cap only because the first two responses' 30 bytes carry over
+    # (a per-response count would see 16 of 40). Its third read is never pulled.
+    pulled: list[tuple[int, bytes]] = []
+
+    async def body(index: int) -> AsyncIterator[bytes]:
+        if index == 0:
+            pulled.append((index, _TINY_PAGE))
+            yield _TINY_PAGE
+        elif index == 1:
+            pulled.append((index, _TINY_PAGE))
+            yield _TINY_PAGE
+            raise httpx.ReadError("connection reset")
+        else:
+            for chunk in (b"a" * 8, b"b" * 8, b"c" * 8):
+                pulled.append((index, chunk))
+                yield chunk
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=body(len(requests) - 1))
+
+    result = run_collect(
+        base_input(
+            maxBytes=40,
+            fixturePaths=["catalog/page-1.json", "catalog/page-2.json", "empty/page-1.json"],
+        ),
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert pulled == [(0, _TINY_PAGE), (1, _TINY_PAGE), (2, b"a" * 8), (2, b"b" * 8)]
+    assert len(requests) == 3
+    assert _limits(result.output) == _only_hit("bytes")
+    assert result.output is not None
+    assert [error["code"] for error in result.output["errors"]] == ["fetch_error"]
+
+
+def test_compressed_body_within_wire_cap_is_decoded_and_parsed() -> None:
+    page = (SOURCE_DIR / "catalog" / "page-1.json").read_bytes()
+    wire = gzip.compress(page, mtime=0)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"Content-Encoding": "gzip"}, content=wire)
+
+    result = run_collect(
+        base_input(fixturePaths=["catalog/page-1.json"], maxBytes=len(wire)),
+        transport=httpx.MockTransport(handler),
+    )
+
+    # maxBytes equals the wire size exactly: at the cap is within it.
+    assert len(result.rows) == 2
+    assert _limits(result.output)["bytes"] is False
+
+
+def test_undecodable_body_is_an_invalid_page_not_a_crash() -> None:
+    # Streamed, so the bad encoding reaches the Actor's decode step rather than
+    # failing inside the mock's own eager read of a bytes body.
+    async def body() -> AsyncIterator[bytes]:
+        yield b"not gzip"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"Content-Encoding": "gzip"}, content=body())
+
+    result = run_collect(base_input(), transport=httpx.MockTransport(handler))
+
+    assert result.output is not None
+    assert [error["code"] for error in result.output["errors"]] == ["invalid_page"] * 2
+    assert result.rows == []
+
+
+def test_read_chunk_constant_is_httpcore_network_read_size() -> None:
+    # The one-read overshoot bound hw-radar prices is httpcore's read size; an
+    # httpcore upgrade that changes it must fail here, not silently widen it.
+    assert httpcore.AsyncHTTP11Connection.READ_NUM_BYTES == HTTP_READ_CHUNK_BYTES == 65536
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="SO_RCVBUF doubling is Linux semantics")
+def test_http_client_pins_receive_buffer(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Read back from a real loopback connection. The pinned 65536 doubles to
+    # 131072, which is also a common kernel default (tcp_rmem), so a second,
+    # distinctive value proves the option really reaches the socket.
+    async def serve_once(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+        await writer.drain()
+        writer.close()
+
+    async def receive_buffer() -> int:
+        server = await asyncio.start_server(serve_once, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            async with (
+                entry.new_http_client() as client,
+                client.stream("GET", f"http://127.0.0.1:{port}/") as response,
+            ):
+                sock: socket.socket = response.extensions["network_stream"].get_extra_info("socket")
+                return sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
+        finally:
+            server.close()
+            await server.wait_closed()
+
+    assert HTTP_RECEIVE_BUFFER_BYTES == 65536
+    assert asyncio.run(receive_buffer()) == 2 * HTTP_RECEIVE_BUFFER_BYTES
+    monkeypatch.setattr(entry, "HTTP_RECEIVE_BUFFER_BYTES", 12288)
+    assert asyncio.run(receive_buffer()) == 2 * 12288
 
 
 def test_source_that_exactly_fits_every_cap_is_complete() -> None:

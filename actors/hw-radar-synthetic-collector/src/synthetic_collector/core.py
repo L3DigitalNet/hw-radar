@@ -7,7 +7,8 @@ pattern-checked by the contract, so input can never point a fetch elsewhere.
 
 Caps (MS2-D-26) are enforced here, not trusted to the platform:
 - maxRequests: HTTP requests sent; maxPages: pages attempted;
-- maxItems: rows emitted; maxBytes: response-body bytes received;
+- maxItems: rows emitted; maxBytes: response-body bytes received on the wire
+  (before any content decoding), checked after every network read;
 - timeBudgetSecs: a total wall-clock deadline from the start of collect(), checked
   before each request and after every received body chunk (see _fetch_page).
 A limit counts as *hit* only when it stopped work that remained, so a source that
@@ -50,6 +51,22 @@ SOURCE_ROOT: Final = "actors/hw-radar-synthetic-collector/fixtures/source"
 
 # Mirrors the run schema's errors maxItems; the last slot reports the overflow.
 MAX_ERRORS: Final = 50
+
+# Transfer constants (MS2-D-26 *Data transfer*, R10-02). hw-radar's estimator
+# prices one run's fetch transfer as maxBytes + maxRequests x request overhead
+# + one read of overshoot, so it must cover both values. Its drift guard,
+# tests/unit/test_apify_contract.py::test_actor_transfer_constants_match_estimator
+# (it lands with Slice E's estimator), reads them from this file's source text:
+# keep each a plain integer literal and change the estimator in the same change.
+# - HTTP_READ_CHUNK_BYTES: the most one network read can deliver, i.e. the
+#   largest overshoot past maxBytes at the stop. It is httpcore's
+#   AsyncHTTP11Connection.READ_NUM_BYTES, pinned by uv.lock and by
+#   tests/test_limits.py, so an httpcore upgrade that changes it fails the gate.
+# - HTTP_RECEIVE_BUFFER_BYTES: SO_RCVBUF on every fetch socket (main.py). Linux
+#   doubles it, so at most 2x this is in flight when a response is abandoned
+#   (over the byte cap, past the deadline, or a non-200 body never read).
+HTTP_READ_CHUNK_BYTES: Final = 65536
+HTTP_RECEIVE_BUFFER_BYTES: Final = 65536
 
 _QUERY_SCOPE_FIELDS: Final = (
     "siteKey",
@@ -312,13 +329,16 @@ async def _fetch_page(
 ) -> dict[str, Any] | None:
     """GET one page before the run's deadline and within the byte budget; None when unusable.
 
-    Identity encoding is requested, so the counted body bytes are the transfer
-    the cap bounds. If a server compresses anyway, the decoded count exceeds the
-    transfer, which only makes the cap stricter, never looser.
+    run.bytes_read counts wire body bytes (response.num_bytes_downloaded), so a
+    body a server compresses despite the identity request is counted as
+    received, not as decoded. The byte check runs after every network read and
+    stops at the first read that crosses max_bytes, so a run's body transfer
+    exceeds maxBytes by at most one read (HTTP_READ_CHUNK_BYTES).
     An over-budget or past-deadline body is discarded whole: a partial page
     could silently drop listings while still looking parseable.
     """
     run.requests += 1
+    bytes_before = run.bytes_read
     body = bytearray()
     remaining_secs = max(deadline - clock(), 0.001)
     # Three layers, because httpx's timeout is per operation (connect, each
@@ -341,8 +361,14 @@ async def _fetch_page(
             if response.status_code != 200:
                 run.error("http_status", f"{url} answered HTTP {response.status_code}")
                 return None
-            async for chunk in response.aiter_bytes():
-                run.bytes_read += len(chunk)
+            # aiter_raw, not aiter_bytes: each raw chunk is exactly one network
+            # read, so the check below sees every read. aiter_bytes yields only
+            # when a content decoder emits output; a compressed body whose
+            # decoder buffers would let several reads pass unchecked and void
+            # the one-read overshoot bound hw-radar's transfer estimate relies on.
+            async for chunk in response.aiter_raw():
+                # num_bytes_downloaded is per response; bytes_read is per run.
+                run.bytes_read = bytes_before + response.num_bytes_downloaded
                 over_bytes = run.bytes_read > max_bytes
                 out_of_time = clock() >= deadline
                 if over_bytes or out_of_time:
@@ -362,8 +388,8 @@ async def _fetch_page(
         run.error("fetch_error", f"{url}: {type(exc).__name__}")
         return None
     try:
-        page: object = json.loads(bytes(body))
-    except ValueError:
+        page: object = json.loads(_decoded(response, bytes(body)))
+    except httpx.DecodingError, ValueError:
         run.error("invalid_page", f"{url} is not JSON")
         return None
     parsed = _json_object(page)
@@ -371,6 +397,15 @@ async def _fetch_page(
         run.error("invalid_page", f"{url} has no listings array")
         return None
     return parsed
+
+
+def _decoded(response: httpx.Response, raw: bytes) -> bytes:
+    """Apply the response's Content-Encoding to its raw body; raise httpx.DecodingError.
+
+    Rebuilding a Response is httpx's public route to its content decoders, which
+    reading with aiter_raw bypasses. An identity body comes back unchanged.
+    """
+    return httpx.Response(response.status_code, headers=response.headers, content=raw).content
 
 
 def _declared_counts(page: Mapping[str, Any]) -> tuple[int | None, int | None]:

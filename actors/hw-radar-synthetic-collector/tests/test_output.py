@@ -7,7 +7,6 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
 import pytest
 
 from synthetic_collector.contract import (
@@ -34,6 +33,7 @@ from tests.support import (
     build_fixture,
     fixture_text,
     implied_remote_status,
+    mock_client,
     run_collect,
     serve_source,
 )
@@ -100,7 +100,7 @@ def _run_entry_point(actor_input: object) -> RecordingActor:
     asyncio.run(
         run_actor(
             actor,
-            client_factory=lambda: httpx.AsyncClient(transport=transport),
+            client_factory=lambda: mock_client(transport),
             clock=lambda: 0.0,
             wall_clock=lambda: STARTED_AT,
         )
