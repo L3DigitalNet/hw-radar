@@ -104,6 +104,7 @@ logger = logging.getLogger(__name__)
 RETRY_EXHAUSTED_BACKOFF: Final = timedelta(minutes=5)
 
 _TERMINAL: Final = frozenset({ImportState.FINALIZED, ImportState.REJECTED})
+_PROBE_RECOVERS: Final = frozenset({RunCompleteness.COMPLETE, RunCompleteness.TRUNCATED})
 
 
 class RejectReason(StrEnum):
@@ -450,11 +451,18 @@ def _stage5(provider_run_id: int, rand: Callable[[], float]) -> None:
         run.status = RunStatus.SUCCESS
         run.finished_at = timezone.now()
         run.save()
-        event = (
-            LifecycleEvent.PROBE_SUCCESS
-            if RunKind(locked.run_kind) is RunKind.PROBE
-            else LifecycleEvent.SUCCESS
-        )
+        event = LifecycleEvent.SUCCESS
+        if RunKind(locked.run_kind) is RunKind.PROBE:
+            # MS2-D-24 *Probe outcome*: a finalized probe recovers the source
+            # only when it swept its scope (complete) or stopped at a declared
+            # cap (truncated). A partial_failure also finalizes, since its rows
+            # are valid, but a source whose pages still fail is not fixed, so
+            # it gets the state-neutral PROBE_FAILURE and stays paused.
+            event = (
+                LifecycleEvent.PROBE_SUCCESS
+                if locked.completeness in _PROBE_RECOVERS
+                else LifecycleEvent.PROBE_FAILURE
+            )
         # Lock order: provider_run (held) -> SourceConfig -> FULL lane, both taken
         # inside apply_run_outcome's savepoint and held to this commit. Stage 5
         # holds no scope or listing lock here (MS2-D-35 *Conditions*).

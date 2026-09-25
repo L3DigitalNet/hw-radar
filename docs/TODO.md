@@ -56,14 +56,17 @@ Instructions for AI agents:
   `apify-poll` job with the three MS2-D-23 selectors and per-row backoff; D10 restart tests).
   **D6–D8 done** (AC-4/5/6 fixture proofs in `tests/db/test_apify_import.py`;
   `ProviderRunEvidence.truncation_reason`, optional on the model, DB CHECK enforces it).
-  **Next (Slice D core):** D11 → D12 → D9; Apify push/build/run (none has occurred yet). D11
+  **D12 done** (`recovery_probe_job` starts a PROBE Actor run for an `apify` source, never its
+  local adapter; one outstanding probe per source; a finalized probe recovers only when
+  `complete`/`truncated`, `partial_failure` is `PROBE_FAILURE`).
+  **Next (Slice D core):** D11 → D9; Apify push/build/run (none has occurred yet). D11
   binds the `cleanup` and `overdue` StorageUnit hooks in `apify_poll_tick` (orphaned_start
   included); F5a registers the synthetic site's `ActorRunSpec` in `jobs.RUN_SPECS` (empty in
   production, so every `apify` source is refused `no_run_spec`); E5 replaces `BUDGET_ADMISSION`
-  and trips the latch on `stage_detail.start_mismatch` / `restart_count`; D12 dispatches
-  `recovery_probe_job` through `start_provider_run(run_kind=PROBE)`. Open: the start job does
-  not yet refuse a new FULL start while a previous run of the same scope is outstanding (only
-  the one-probe rule, D12, is planned).
+  and trips the latch on `stage_detail.start_mismatch` / `restart_count` and records probe
+  budget denials as ledger rows (D12 only logs them). Open: the start job does not yet refuse
+  a new FULL start while a previous run of the same scope is outstanding (only PROBE runs have
+  the one-outstanding rule, D12).
 - [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
   initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential

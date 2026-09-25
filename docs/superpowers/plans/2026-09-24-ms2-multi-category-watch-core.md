@@ -5032,6 +5032,18 @@ the then-current code. D-prep (D1, D3) is not gated.
     - `test_denied_actor_probe_starts_nothing_and_stays_paused`.
     - `test_one_outstanding_probe_per_source`.
     - `test_local_provider_probe_path_unchanged`.
+  - Landed 2026-09-25: `recovery_probe_job` in `poller/service.py` branches
+    on `collection_provider` before the adapter lookup; an `apify` source
+    skips the probe while a PROBE `provider_run` of its site has an undecided
+    import (checked before `check_admission`, so no bucket token is spent),
+    then calls `start_provider_run(run_kind=PROBE)`. The rule lives in the
+    poller, so `jobs.py` is unchanged. A lost-response probe stays
+    outstanding until D11 settles it, which fails closed. Importer fix
+    (MS2-D-24 *Probe outcome*): stage 5 emitted `PROBE_SUCCESS` for any
+    finalized probe, including `partial_failure`; it now emits
+    `PROBE_FAILURE` for anything but `complete` or `truncated`. The tests
+    also include `test_truncated_probe_recovers_source`. A budget denial is
+    only logged until E records it as a ledger row.
 - **D9 — Close-out.** This runs last in D (core). Gate; TODO/STATUS. Record
   that live Actor runs remain owner-gated.
 

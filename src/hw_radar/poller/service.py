@@ -50,10 +50,12 @@ from hw_radar.catalog.models import (
     CheapSignal,
     LifecycleState,
     ProviderKind,
+    ProviderRun,
     RunKind,
     SchedulingLane,
     SourceConfig,
 )
+from hw_radar.catalog.models.provider import ImportState
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata import refresh as refdata_refresh
 
@@ -215,8 +217,64 @@ async def checkpoint_job(registry: BucketRegistry) -> None:
     await sync_to_async(save_buckets)(registry)
 
 
+def _has_outstanding_probe(config: SourceConfig) -> bool:
+    """Return whether the source has a PROBE provider_run whose import is not yet decided.
+
+    Outstanding means import_state is neither finalized nor rejected: the run
+    may still be charging, or its outcome is not applied yet. A row whose start
+    response was lost stays outstanding until the D11 overdue unit settles it,
+    which fails closed: no second probe is paid for while one is unaccounted.
+    """
+    return (
+        ProviderRun.objects.filter(source_site=config.source_site, run_kind=RunKind.PROBE)
+        .exclude(import_state__in=[ImportState.FINALIZED, ImportState.REJECTED])
+        .exists()
+    )
+
+
+async def _probe_actor_source(config: SourceConfig, registry: BucketRegistry) -> None:
+    """Start one PROBE Actor run for a paused `apify` source (MS2-D-24).
+
+    Only starts: the outcome (PROBE_SUCCESS iff the import finalizes complete
+    or truncated, else the state-neutral PROBE_FAILURE) is applied later by the
+    importer when apify-poll finalizes or rejects the run, so the source stays
+    paused here whatever the start result. start_provider_run applies budget
+    admission as class `discovery` after the kill switch, so a paused source
+    never spends watch-refresh headroom, and a denial starts nothing.
+    """
+    key = config.source_site.normalized_name
+    # Checked before check_admission so a skipped probe burns no bucket token.
+    # The check-then-start is not locked: it relies on this job being the only
+    # PROBE starter and on the scheduler's max_instances=1 for the job.
+    if await sync_to_async(_has_outstanding_probe)(config):
+        logger.info("probe for %s skipped: a probe run is still outstanding", key)
+        return
+    lane_state = await sync_to_async(config.lane_state)(SchedulingLane.FULL)
+    decision = check_admission(
+        enabled=config.enabled,
+        lifecycle_state=LifecycleState(config.lifecycle_state),
+        run_kind=RunKind.PROBE,
+        backoff_until=lane_state.backoff_until,
+        now=timezone.now(),
+        registry=registry,
+        source_key=key,
+        domain=config.domain,
+        now_s=time.monotonic(),
+    )
+    if not decision.admitted:
+        logger.info("probe for %s not admitted: %s", key, decision.reason)
+        return
+    result = await start_provider_run(config, run_kind=RunKind.PROBE)
+    logger.info("recovery probe for %s apify start: %s %s", key, result.status, result.reason)
+
+
 async def recovery_probe_job(registry: BucketRegistry) -> None:
-    """ADR-0017: paused_pending_fix sources get a daily probe; success reactivates."""
+    """ADR-0017: paused_pending_fix sources get a daily probe; success reactivates.
+
+    Dispatches by collection_provider (MS2-D-24): a `local` source replays its
+    adapter here and applies the outcome at once; an `apify` source only starts
+    a PROBE Actor run, and its outcome lands when the import settles.
+    """
     paused = await sync_to_async(
         lambda: list(
             SourceConfig.objects.select_related("source_site").filter(
@@ -225,6 +283,13 @@ async def recovery_probe_job(registry: BucketRegistry) -> None:
         )
     )()
     for config in paused:
+        if config.collection_provider == ProviderKind.APIFY.value:  # .value: django-types quirk
+            # Dispatched before the adapter lookup: the local adapter must never
+            # run for an Actor-backed source, even when one is registered — its
+            # success would "recover" the wrong provider — and an Actor-only
+            # source has no adapter at all but must still be able to recover.
+            await _probe_actor_source(config, registry)
+            continue
         key = config.source_site.normalized_name
         factory = ADAPTERS.get(key)
         if factory is None:
