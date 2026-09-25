@@ -1,24 +1,32 @@
 # Deployed State
 
-Last updated: 2026-09-25
+Last updated: 2026-09-25 (release `508b1f0`)
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `531916e` (PR #34:
-  bug 001 static fix, docs, pydantic/gunicorn updates; no migrations), run
-  36122297450, 2026-09-25T10:11:51Z. Earlier the same day: `96ce005` (run
-  36116766253), and `ac8d608` (run 36078378772), which shipped the schema; the
-  superseded `c728613` run 36077354704 was cancelled unapproved.
-- Host-verified after each run: `RELEASE` and `/healthz` (local + public) report
-  the run's SHA, `database: true`; login 200; web, poller, bao-agent, nginx,
-  PostgreSQL active, 0 restarts; no warning-level journal entries.
-- Migrations 0018-0020 applied 2026-09-25T08:50Z: spec satellites, category
-  rows (`gpu`, `ram`, `cpu`, `nic`, `hba`, `motherboard`, `server` beside
-  `drive`), watch requirements/`watch_evaluation`. `migrate --plan` empty and
-  `makemigrations --check` clean. Pre/post row counts match; new tables empty.
-- All `SourceConfig` rows still `enabled=False`; the poller logged
-  `poller started (0 source job(s))`; no `scraper_runs` rows; the env render
-  has no Apify variable (names checked only; OQ25), so no Actor run can start.
+- Deploys run from `main` via the Deploy workflow. Latest: `508b1f0` (PR #35:
+  MS-2 Slices D/E, provider runs and the Apify spend ledger, F5a tooling, F-01),
+  run 36194557063, approved 2026-09-25T22:10Z. Earlier: `531916e` (PR #34, run
+  36122297450), `96ce005` (run 36116766253), and `ac8d608` (run 36078378772),
+  which shipped migrations 0018-0020.
+- Host-verified after `508b1f0`: `RELEASE` and `/healthz` (local + public)
+  report `508b1f0`, `database: true`; login 200; public
+  `/static/admin/css/base.css` 200; web, poller, bao-agent, nginx, PostgreSQL
+  active, 0 restarts; no warning-level journal entries.
+- Migrations 0021 (`provider_runs`) and 0022 (`apify_spend_ledger`) applied
+  2026-09-25T22:10Z; both are additive. `migrate --plan` empty,
+  `makemigrations --check` clean, pre/post catalog row counts identical, new
+  provider and ledger tables empty.
+- Apify stays fail-closed in production: no `APIFY` variable is rendered
+  (`HW_RADAR_APIFY_ENABLED` false, no token, no Actor id, no prices or caps, so
+  admission denies by construction); no ledger authority, cycle, reservation,
+  latch, or provider run exists, including after several `apify_poll_job`
+  ticks. The F5a proof environment holds the 2026-09-05 cycle's ledger
+  authority; production may claim paid admission only after that
+  environment's correction monitoring closes (2026-10-02 ~21:09Z) and
+  `apify_ledger_handoff` runs.
+- All `SourceConfig` rows still `enabled=False` (provider `local`); the poller
+  logged `poller started (0 source job(s))`; no `scraper_runs` rows.
 - Static files: `STATIC_ROOT` `/var/lib/hw-radar/staticfiles` (deploy-owned,
   0755/0644, no `hwradar` link); the deploy smoke fetches `base.css` through
   nginx. [Bug 001](bugs/001-nginx-static-403.md) is fixed and verified.
@@ -100,6 +108,7 @@ After each flip:
 3. Only then proceed to the next source in the list.
 
 Enable order: **ServerPartDeals → goHardDrive → WD → Seagate → eBay.**
+ServerPartDeals and Seagate are blocked by OQ31 until the owner decides (see below).
 eBay is last and, per below, stays blocked after the other four are live.
 
 ### eBay go-live block (CR-004) — status update 2026-08-16
@@ -114,6 +123,10 @@ missing code:
 
 - The MS-1e owner-in-the-loop ratification step (design §6) must complete and `ADR-0019` must flip
   to accepted before any source is enabled.
-- ServerPartDeals, goHardDrive, WD, and Seagate gate only on the SA-004 checklist above.
+- ServerPartDeals, goHardDrive, WD, and Seagate gate on the same ratification (all sources ship
+  disabled until it passes; `AGENTS.md`, MS-2 plan risk R5) and on the SA-004 checklist above.
+- ServerPartDeals and Seagate are additionally blocked by
+  [OQ31](../open-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access):
+  their current Terms prohibit automated access (reviewed 2026-09-25).
 - eBay additionally requires this ratification step; per the enable order in this document, it is
   enabled last regardless.

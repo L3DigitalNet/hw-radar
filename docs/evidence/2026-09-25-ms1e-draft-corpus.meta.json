@@ -1,0 +1,17 @@
+{
+  "corpus_version": "ms1e-draft-2026-09-25",
+  "harvested_from": "2026-09-25",
+  "harvested_to": "2026-09-25",
+  "observed_at": "2026-09-25T22:30:00Z",
+  "source_counts": {
+    "serverpartdeals": 0,
+    "goharddrive": 21,
+    "wd-recertified": 75,
+    "seagate-recertified": 0,
+    "ebay": 29
+  },
+  "matcher_version": "2026.09.1",
+  "audit_rollup": {
+    "claude_draft": 125
+  }
+}
