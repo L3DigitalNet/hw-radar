@@ -17,11 +17,16 @@ Never store credential values in this repository.
 - `HW_RADAR_KUMA_PUSH_URL`
 - `EBAY_CLIENT_ID` — OpenBao `secret/api-keys/commerce/ebay`
 - `EBAY_CLIENT_SECRET` — OpenBao `secret/api-keys/commerce/ebay`
-- `HW_RADAR_APIFY_TOKEN` — OpenBao `secret/apps/hw-radar/apify`. Runtime, **scoped** token
-  (run only Hardware Radar-owned Actors, read their runs/default storages, delete their run
-  storages for MS2-D-33 cleanup; account limits/usage reads needed by MS2-D-40 to be verified). Not yet created by
-  the owner; production rendering is deferred until Slice E live admission is ready.
-  `HW_RADAR_APIFY_ENABLED` defaults to `false` as the fail-closed kill switch.
+- `HW_RADAR_APIFY_TOKEN` — OpenBao `secret/apps/hw-radar/apify`. Runtime, **scoped** token,
+  created by the owner 2026-09-25. It needs **Run** and **Read** on the Hardware Radar Actor:
+  Read covers `GET /v2/actor-runs/{id}` polls and the `GET /v2/actor-builds/{id}` build reads
+  made by the poll job's runtime client, and the 2026-09-25 pre-probe got 404 on both without it.
+  It also needs read and delete on those runs' default storages for MS2-D-33 cleanup. The delete
+  403-versus-404 behavior is still to be probed (R25). It needs **no** account limits or usage
+  permission: those reads return 403 for scoped tokens, and the runtime makes none (MS-2 plan
+  MS2-D-48, [OQ30](../resolved-questions.md#oq30--runtime-apify-account-reads-r25)). Production
+  rendering is deferred until Slice E live admission is ready. `HW_RADAR_APIFY_ENABLED` defaults
+  to `false` as the fail-closed kill switch.
 
 ## Apify — Operator/Deploy Credential
 

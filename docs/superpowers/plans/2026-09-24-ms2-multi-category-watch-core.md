@@ -291,6 +291,56 @@
 >   `ApifySpendReservation.monitoring_bound_usd` and
 >   `monitoring_charge_last_at`, the `ApifyCycleDiscovery` table, and the
 >   `operator_kind` value `probe`.
+>
+> **Revision 12 (owner decision (s5, 2026-09-25), R25).** The runtime stops
+> reading Apify account state. On 2026-09-25 the owner-created scoped runtime
+> token (`HW_RADAR_APIFY_TOKEN`) got `403 insufficient-permissions` from
+> `GET /v2/users/me`, `/v2/users/me/limits`, and `/v2/users/me/usage/monthly`.
+> Apify's scoped-token form offers account-level permissions only for Actors,
+> Tasks, Schedules, and Storages (docs.apify.com/platform/integrations/api,
+> retrieved 2026-09-25), so no scoped token can make these reads. Every
+> admission was therefore denied `account_state_unobservable`, which blocked
+> F5a. The owner chose "Drop runtime account reads" on 2026-09-25. The
+> decision is recorded in
+> [OQ30](../../resolved-questions.md#oq30--runtime-apify-account-reads-r25) and in the
+> 2026-09-25 (s5) amendment of [ADR 0021](../../adr/adr-0021-hybrid-acquisition-apify.md),
+> which the same owner-directed change updates. New decision **MS2-D-48**
+> holds the design, and the new *Implementation tasks (rev 12)* (E9.1–E9.6)
+> hold the engineer's work. Each changed passage is marked **Revision 12
+> (owner decision (s5, 2026-09-25), R25)**.
+> - **Replaced:** the observed account snapshot and API cycle discovery
+>   (MS2-D-17 *Period*, MS2-D-40) give way to a configured billing-cycle
+>   anchor plus operator-verified account settings. The operator checks them
+>   with the operator key outside the application before enabling. Headroom
+>   becomes `HR_cycle + estimate + E ≤ P`, with `P = ACCOUNT_LIMIT_USD −
+>   account margin`.
+> - **Retired:** snapshot check 1 and `external_liability_exceeded`
+>   (MS2-D-40), the standing account-read debit and *Cycle discovery*
+>   (MS2-D-32), `USAGE_INCLUSION_LAG_S`, and the runtime client's three
+>   account reads (MS2-D-15). The owner accepts the consequence: the runtime
+>   can no longer see the other workloads' actual spend, only Apify's hard
+>   limit. A start that Apify refuses with HTTP 402 trips a new latch reason,
+>   `account_limit_refused`.
+> - **Kept:** `cycle_unknown` and `account_state_unobservable`, with new
+>   triggers. Also kept unchanged: every ledger reservation, the lock order,
+>   the latch, row-before-start, operator reservations, `E` (5.00), the cycle
+>   target (12.00), the cash ceiling (20.00), the operator allowance (1.00),
+>   and R38.
+> - **No schema change.** Migrations `0021` and `0022` are not edited, and no
+>   `0023` is added. The `ApifyCycleDiscovery` table and the
+>   `ApifyBudgetCycle.account_*` and `account_read_count` columns stay in
+>   place, unwritten (MS2-D-48 *Schema*).
+> - F5a's operator-side account reads move to the operator key under an
+>   operator `inspect` reservation (MS2-D-46, F5a). New risk R39. R25's
+>   account-read residual is closed. Its storage-delete residual and the
+>   token's Actor **Read** grant stay open.
+> - Changed text: MS2-D-15, -17, -32, -34, -40, -45, -46, -47; the new
+>   MS2-D-48; *Things not to do*; the traceability rows for NFR-003, C-011,
+>   and AC-7 reconciled spend, plus a new rev-12 row; *Synthetic Actor proof
+>   acceptance* item 14; the E settings, E1, E3, E5, E6, E7, and *Acceptance*;
+>   the new *Implementation tasks (rev 12)*; F5a; R3, R25, R38, and the new
+>   R39; the paragraph after the risk table; and *Review lineage*. Codex review
+>   of revision 12 is pending.
 
 **Goal:** prove the smallest complete multi-category decision path without an
 ADR-0011 score:
@@ -373,6 +423,11 @@ bounded, idempotent, completeness-honest, and budget-admitted.
 
 ## Things not to do
 
+- Revision 12 (owner decision (s5, 2026-09-25), R25): do not add a runtime
+  Apify account read (`/v2/users/...`) to any admission, poll, reconcile,
+  report, or command path. Do not render the unscoped operator key to any
+  application runtime, including a proof environment, and do not
+  read account state with it from inside the application (MS2-D-48).
 - Do not change the ADR-0010 identity spine
   (`category → product_family → product_model → product_variant → listing →
   offer_snapshot`), add an EAV table, or put watch-critical values in a JSON bag
@@ -1035,7 +1090,15 @@ settles at its bound (MS2-D-46). A build read is priced like the other `GET`
 reads (revision 10). Revision 11 (R10-01, R10-06): MS2-D-32 *Per-call bound*
 enumerates every external call hw-radar makes, runtime and operator, with
 its committed counter, its documented billing units, and its reservation
-component. A call outside that table is not made.
+component. A call outside that table is not made. Revision 12 (owner
+decision (s5, 2026-09-25), R25): the three account reads (`GET
+/v2/users/me/limits`, `/v2/users/me/usage/monthly`, `/v2/users/me`) are
+**removed** from the runtime client, and nothing replaces them. The runtime
+surface is the seven run and storage calls plus get build. Account state
+comes from operator-verified configuration (MS2-D-48). *Rejected:* keeping
+the methods in the client but calling them from nowhere. A later change could
+wire them back, and the runtime token gets 403 on them anyway. Removing them
+makes the rule structural, and a static test can check it (E9.4).
 - `httpx` is already a dependency, and tests use `httpx.MockTransport` / vcrpy
   cassettes.
 - *Rejected:* `apify-client` 3.2.0 (released 2026-09-03). Since 3.0.0 it uses
@@ -1120,6 +1183,17 @@ component. A call outside that table is not made.
   is unscoped and serves the operator/deploy role only, so it is never a runtime
   fallback for an account read that the scoped token cannot make. The scoped
   runtime token does not exist yet.
+  Revision 12 (owner decision (s5, 2026-09-25), R25): the owner created the
+  scoped token on 2026-09-25, and the pre-probe answered the question left
+  open above. All three account endpoints return 403
+  `insufficient-permissions`, and Apify offers no account or usage
+  permission for scoped tokens. The runtime therefore makes no account read
+  (MS2-D-48), and the token no longer needs to read account limits or usage.
+  The same pre-probe got 404 on `GET` of the Hardware Radar Actor, its runs,
+  and its builds, so the token also needs **Read** on that Actor: the poll
+  job's `GET /v2/actor-runs/{id}` and the build selector's `GET
+  /v2/actor-builds/{id}` (`jobs._build_unit`, selector 4) use the runtime
+  client (R25 residual).
 
 **MS2-D-16 — Completion observation (settled D4).**
 - **Poll job.** An APScheduler `apify-poll` interval job (`max_instances=1`,
@@ -1138,6 +1212,15 @@ component. A call outside that table is not made.
   cycle (MS2-D-40). It is never a hard-coded calendar month and never a rolling
   window. Verified account state 2026-09-24: an anniversary cycle,
   2026-09-05T00:00:00Z → 2026-10-04T23:59:59.999Z.
+  - Revision 12 (owner decision (s5, 2026-09-25), R25): the cycle is still
+    the account's actual Apify billing cycle, but the runtime no longer
+    discovers it from the API. The runtime derives it from the configured
+    anchor `HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR`, which the operator verifies
+    against `monthlyUsageCycle.startAt` with the operator key before
+    enabling (MS2-D-48 *Cycle*). The drift risk that revision 5 cited as the
+    reason to read the cycle becomes R39. The runtime cannot detect a drift,
+    so the operator procedure covers it and Apify's 402 is the fail-closed
+    signal.
   - *Withdrawn:* revision 1–4's "rolling 31-day window" and its rejection of the
     billing cycle ("an extra API read; the boundary drifts if the plan
     changes"). The owner ruled the cycle authoritative. The extra read is
@@ -1187,7 +1270,12 @@ component. A call outside that table is not made.
   is a budget denial after its last imported run, or while the overrun latch is
   tripped. Revision 5: the denial reason (`class_cap`, `account_headroom`,
   `overrun_latch`, `cycle_unknown`, `account_state_unobservable`, …) is part of
-  the visible state (MS2-D-41).
+  the visible state (MS2-D-41). Revision 12 (owner decision (s5,
+  2026-09-25), R25): `cycle_unknown` now means that the configured anchor is
+  unset, invalid, or in the future, or conflicts with a recorded cycle.
+  `account_state_unobservable` now means that an operator-verified account
+  setting is unset or invalid (MS2-D-48 *Reasons*). A stale snapshot and a
+  failed read no longer exist.
 - *Rejected:* fusing with ADR-0016 `SearchBudgetGate` semantics. That gate is
   unbuilt and search-specific. Only the reserve-then-reconcile pattern is reused.
 
@@ -2033,7 +2121,7 @@ and 0022; review F-08 residual).** This decision amends MS2-D-17 and MS2-D-26.
         | Dataset page, `GET /v2/datasets/{id}/items` | stage 1 | `dataset_read_count` ≤ `…_MAX_DATASET_READS` per full read; at most `pages_per_read` pages per read | dataset reads (priced at one per item returned, and one for an empty page); transfer | `dataset_page_bound` per page; MS2-D-26 storage row |
         | `GET /v2/key-value-stores/{id}/records/OUTPUT` | stage 1 | `kv_read_count` ≤ `…_MAX_KV_READS` | one KV read; transfer | `api_call_bound`; MS2-D-26 storage row |
         | `GET /v2/actor-builds/{id}` | selectors 2 and 4, operator build rows | the build row's `run_poll_count` and `correction_read_count` | transfer only | build allowance (MS2-D-46) |
-        | `GET /v2/users/me/limits`, `/v2/users/me/usage/monthly`, `/v2/users/me` | snapshot refresh; cycle discovery | `ApifyBudgetCycle.account_read_count` ≤ `…_MAX_ACCOUNT_READS_PER_CYCLE` in a known cycle; `ApifyCycleDiscovery.read_count` ≤ `…_MAX_DISCOVERY_READS` otherwise | transfer only | standing cycle debit; discovery allowance |
+        | `GET /v2/users/me/limits`, `/v2/users/me/usage/monthly`, `/v2/users/me` (revision 12, R25: **retired**. The runtime never sends them, and the operator makes them with the operator key outside the application under an `inspect` reservation, MS2-D-48) | snapshot refresh; cycle discovery | `ApifyBudgetCycle.account_read_count` ≤ `…_MAX_ACCOUNT_READS_PER_CYCLE` in a known cycle; `ApifyCycleDiscovery.read_count` ≤ `…_MAX_DISCOVERY_READS` otherwise | transfer only | standing cycle debit; discovery allowance |
         | Capability probe: create an unnamed dataset, runtime-token `DELETE`, operator-key cleanup `DELETE` | operator (R25) | the operator's count against `…_OPERATOR_PROBE_MAX_CALLS` (procedural, R36) | dataset create and deletes (unpriced, priced as dataset writes), one empty dataset's timed storage, transfer | probe envelope (MS2-D-46) |
         | Build and push, and inspection reads through the Console, CLI, or MCP | operator | procedural (R36) | compute (build), storage reads, transfer | build bound; inspection envelope (MS2-D-46) |
 
@@ -2053,6 +2141,15 @@ and 0022; review F-08 residual).** This decision amends MS2-D-17 and MS2-D-26.
         (MS2-D-40) and `external_liability_exceeded` detect it after the
         fact, because the account figure contains any under-priced charge.
         F5a step 4 measures (a) and (b).
+        Revision 12 (owner decision (s5, 2026-09-25), R25): snapshot
+        check 1 and `external_liability_exceeded` are retired (MS2-D-48), so
+        the runtime no longer detects an under-priced charge after the fact.
+        Only the operator's cycle reconciliation (MS2-D-48 *Operator
+        reconciliation*, with operator-key reads outside the application)
+        and F5a step 4 can find one, and Apify's hard limit caps the
+        account (402 → `account_limit_refused`). The owner accepted R38 when
+        after-the-fact runtime detection still existed. R39 records that it
+        is gone.
     - **Run polls.** Every `GET` run made by selectors 1 and 2, and every
       `GET` build for an operator build row, increments and commits
       `run_poll_count` before it is sent; failed calls count too. The cap is
@@ -2094,7 +2191,8 @@ and 0022; review F-08 residual).** This decision amends MS2-D-17 and MS2-D-26.
       (MS2-D-26) is attempt 1 of this sequence: D5 increments and commits
       `storage_cleanup_attempts` before sending it, and the attempt deletes
       only after terminal evidence (MS2-D-33).
-    - **Account reads** (`GET /v2/users/me/limits`, `/usage/monthly`, and
+    - **Account reads** (withdrawn by revision 12, R25; see the note that
+      ends this bullet) (`GET /v2/users/me/limits`, `/usage/monthly`, and
       `/users/me`) increment and commit `ApifyBudgetCycle.account_read_count`
       before each call (a read that discovers a new cycle counts on the new
       cycle's row as well, which over-counts). The cap is
@@ -2131,6 +2229,18 @@ and 0022; review F-08 residual).** This decision amends MS2-D-17 and MS2-D-26.
         opens a new one. An exhausted per-cycle cap never blocks finding the
         next cycle, because once `now` is past `cycle_end` discovery uses its
         own allowance.
+      - Revision 12 (owner decision (s5, 2026-09-25), R25): this
+        *Account reads* bullet and its *Cycle discovery* sub-bullet are
+        **withdrawn**. The runtime sends no account read, so it has no
+        per-cycle read counter, no standing debit
+        (`…_MAX_ACCOUNT_READS_PER_CYCLE × api_call_bound`), no
+        `ApifyCycleDiscovery` allowance, no `…_MAX_DISCOVERY_READS` or
+        `…_DISCOVERY_READ_INTERVAL_S`, and no `apify_budget_reset
+        --discovery`. The cycle row is materialized from the configured
+        anchor under the budget lock (MS2-D-48 *Cycle*). A missing row
+        therefore costs nothing to create, and an empty ledger or a
+        rollover has nothing to discover. `HR_cycle` and both runtime class
+        checks lose the standing and discovery terms.
     - The reservation prices the per-run calls in the MS2-D-26 *API calls*
       row. An operator build reservation adds `…_MAX_RUN_POLLS ×
       api_call_bound` to its build bound and holds `…_MAX_CORRECTION_READS ×
@@ -2379,6 +2489,8 @@ replaced.
   `monitoring_bound_usd` by the *Monitoring charges* interval, and each
   `ApifyCycleDiscovery` allowance by its own interval (MS2-D-32 *Cycle
   discovery*).
+  Revision 12 (owner decision (s5, 2026-09-25), R25): the discovery allowance term is withdrawn with cycle
+  discovery (MS2-D-32, -48). No `ApifyCycleDiscovery` row is ever written.
 - **Why this is conservative.** Each charge a run produces falls between its
   admission and its final charge-producing operation (compute ends at
   `finished_at`; reads and deletes end at `final_charge_op_at`; polls and
@@ -2785,6 +2897,13 @@ revision 5, owner-clarified (s2, 2026-09-24)).**
 **MS2-D-40 — The billing cycle is the budget period, and the cash ceiling is
 enforced as project allocation plus account prepaid headroom (Slice E, migration
 0022; revision 5; OQ23 resolved).**
+- **Revision 12 (owner decision (s5, 2026-09-25), R25).** The runtime makes no account read.
+  Revision 12 does not rewrite the bullets below. It amends them where marked,
+  and MS2-D-48 carries the replacement design. In short: the cycle comes from
+  a configured anchor, and `P` comes from the operator-verified
+  `HW_RADAR_APIFY_ACCOUNT_LIMIT_USD`. Check 1 and
+  `external_liability_exceeded` are retired, and check 2 (the
+  external-liability check) is the only account check left.
 - **Cycle discovery (owner-overridden).** Admission reads
   `GET /v2/users/me/limits` for `monthlyUsageCycle.startAt/endAt`, the account
   limit, and the current usage, and `GET /v2/users/me` or the same response for
@@ -2800,6 +2919,10 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
     900 s, an assumption) is refreshed before admission. A failed refresh denies
     with `account_state_unobservable`. `now` past the stored `cycle_end`,
     before a new cycle is observed, denies with `cycle_unknown`.
+    Revision 12 (owner decision (s5, 2026-09-25), R25): withdrawn. No snapshot exists, so it cannot go stale
+    and no refresh is made. `cycle_unknown` now comes from the anchor rules
+    of MS2-D-48 *Cycle*, and `account_state_unobservable` from its
+    *Account settings*.
   - *Retention check* (revision 10, entry gate, ED-09). The limits read also
     parses `limits.dataRetentionDays`, a required integer
     (`api/v2/users-me-limits-get`) that the D3 client does not parse yet (D3
@@ -2814,12 +2937,19 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
     Revision 11 also denies with `unbounded_component` when the observed
     cycle (`cycle_end − cycle_start`) exceeds 744 h, the full cycle
     `storage_hours` covers.
+    Revision 12 (owner decision (s5, 2026-09-25), R25): the value comes from the operator-verified
+    `HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS` instead of the limits read.
+    An unset or invalid value now denies `account_state_unobservable`,
+    and a lifetime shorter than it still denies `unbounded_component`. The
+    744 h check is kept, although a cycle derived from an anchor on day
+    1–28 is always 28–31 days long.
   - *Account reads* are counted and capped per cycle (MS2-D-32 *API calls*,
     revision 10); their full bound is a standing debit in `HR_cycle` and
     against `A`. Revision 11 (R10-05): reads made while no cycle row covers
     `now` (an empty ledger, or a rollover) are counted and capped on
     `ApifyCycleDiscovery` and debited by its interval (MS2-D-32 *Cycle
     discovery*).
+    Revision 12 (owner decision (s5, 2026-09-25), R25): withdrawn with the account reads (MS2-D-32).
 - **Project allocation.** `A = HW_RADAR_APIFY_CYCLE_TARGET_USD −
   HW_RADAR_APIFY_OPERATOR_ALLOWANCE_USD`.
   - The target defaults to 12.00, and settings validation rejects a value above
@@ -2857,6 +2987,13 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
        however stale or lagging the snapshot. The owner may set the lag only
        from F5a evidence that the account usage figure includes a charge within
        that lag.
+     - Revision 12 (owner decision (s5, 2026-09-25), R25): **check 1 is retired.** It needs the
+       observed `account_usage_usd`, which the runtime can no longer read.
+       `HR_included` and `HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S` go with it.
+       The owner's decision accepts the loss: the runtime sees the other
+       workloads only through `E` and Apify's hard limit (R39). Reconciled
+       spend still never disappears, because check 2 debits it in
+       `HR_cycle`.
   2. *External-liability check (R5-02):* `HR_cycle + estimate +
      HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD ≤ P`.
      - `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD` is an **owner-supplied** upper
@@ -2884,6 +3021,12 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
        consumption, already exceeds the declared bound
        (`external_liability_exceeded`, which also trips the overrun latch and is
        reported, because the owner's bound no longer holds).
+     - Revision 12 (owner decision (s5, 2026-09-25), R25): the stale-snapshot denial and
+       `external_liability_exceeded` are retired (no observed usage). Their
+       fail-closed role now falls to Apify's hard limit: a start refused
+       with HTTP 402 trips `account_limit_refused` (MS2-D-48 *Hard-limit
+       refusal*). An explicitly empty or invalid bound still denies
+       `external_liability_unbounded`.
      - The bound covers a whole cycle, and a reservation that straddles a cycle
        edge (MS2-D-34) is checked against both cycles' bounds, so the external
        liability is reserved over the whole outstanding-work horizon.
@@ -2892,22 +3035,35 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
        admission evaluates it with the current snapshot. The first snapshot
        of the new cycle re-checks every carried row (MS2-D-47's committed-total
        check), and a failure trips the latch.
+       Revision 12 (owner decision (s5, 2026-09-25), R25): both cycles use the same configured `P`.
+       MS2-D-47's re-check applies the external-liability check only.
   - The margin defaults to 10% of the observed prepaid credit. It absorbs price
     and rounding error only. **It does not bound uncoordinated consumption by
     other workloads**; only the owner's declared bound does. Revision 5's claim
     that the cash ceiling "rests on this admission margin" is withdrawn.
+    Revision 12 (owner decision (s5, 2026-09-25), R25): the default is 10% of the configured
+    `HW_RADAR_APIFY_ACCOUNT_LIMIT_USD`. Its role is unchanged: price and
+    rounding error only. It now also absorbs part of Apify's documented
+    enforcement deviation of about 10% (R39).
   - Hardware Radar therefore uses the lesser of its target, its declared share,
     and the observed remaining allowance, and it never relies on pay-as-you-go
     overage. Whether the account as a whole stays within its prepaid credit
     also depends on the other workloads honoring the owner's bound; Hardware
     Radar cannot enforce that, and it detects a breach only at the next
     snapshot.
+    Revision 12 (owner decision (s5, 2026-09-25), R25): the runtime no longer detects such a breach at
+    all. Apify's hard limit refuses further starts, and the refusal trips
+    `account_limit_refused`. The operator's cycle reconciliation (MS2-D-48)
+    is how a breach is found after the fact (R39).
 - **Cash-ceiling guard.** If the observed base price exceeds
   `HW_RADAR_APIFY_CASH_CEILING_USD` (20.00), every paid admission is denied with
   `cash_ceiling_exceeded_by_plan`. With the verified Starter plan ($19 base,
   $19 prepaid credit), cash outlay is $19 plus any overage. The two checks keep
   Hardware Radar's own admitted work within its share; they are not proof that
   the account incurs no overage.
+  Revision 12 (owner decision (s5, 2026-09-25), R25): the base price is the operator-verified
+  `HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD`, not an observed value. The guard
+  and its denial reason are unchanged.
 - **Account backstop (owner-clarified).** The account-level usage limit is a
   secondary defense only, **not proof of zero overage**: Apify documents that
   enforcement may deviate by up to about 10%, so a $19 limit can still let
@@ -2916,6 +3072,10 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
   credit and never raising it for Hardware Radar. No agent changes any billing
   or account setting without explicit owner authority. The project-level
   controls apply regardless of the account limit.
+  Revision 12 (owner decision (s5, 2026-09-25), R25): the owner now also relies on the limit as the
+  account-wide cap on the other workloads' spend, which the runtime can no
+  longer observe. The project-level controls still apply in full, and
+  Apify's documented deviation of about 10% is recorded in R39.
 - **Cycle boundary.** A reservation whose charge interval (MS2-D-34) comes
   within `HW_RADAR_APIFY_CYCLE_BOUNDARY_GUARD_S` (default 3600 s, an
   assumption) of a cycle edge counts in both cycles. Unsettled reservations are
@@ -2947,6 +3107,10 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
   conflated cash with consumption and ignored other workloads.
 - *Rejected (b):* the account limit as the enforcement point. It is shared,
   approximate (about 10%), and an owner billing setting.
+  Revision 12 (owner decision (s5, 2026-09-25), R25): still rejected as Hardware Radar's enforcement
+  point, since admission enforces `A`, the operator allowance, and check 2.
+  The owner does accept the limit as the only account-wide bound on
+  the other workloads (R39).
 - *Rejected (c)* (revision 6): the 10% margin as the shared-account bound
   (review R5-02). Another workload can consume more than the margin between a
   snapshot and the end of an admitted run.
@@ -2955,6 +3119,8 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
   while the snapshot still predated it.
 - *Reopen if* the owner changes plans, target, or cash ceiling, or Apify
   documents per-workload limits.
+  Revision 12 (owner decision (s5, 2026-09-25), R25): or if Apify offers a scoped-token permission for account
+  limits and usage, which would allow restoring check 1 (MS2-D-48 *Reopen if*).
 
 **MS2-D-41 — Reservation → reconciliation lifecycle with provisional and
 finalized usage (Slices D, E; revision 5, owner-clarified (s2, 2026-09-24)).**
@@ -3185,6 +3351,9 @@ command spellings are illustrative and are verified in D-prep and F5a.
     and default storages; MS2-D-15 lists every call the runtime makes). It lives
     at `secret/apps/hw-radar/apify` and is rendered by the OpenBao Agent as
     `HW_RADAR_APIFY_TOKEN` (NFR-003). It does not exist yet (R25 residual).
+    Revision 12 (owner decision (s5, 2026-09-25), R25): the token exists as of 2026-09-25. It needs
+    **Read** on the Actor in addition to Run, and it needs no account
+    permission, because the runtime reads no account state (MS2-D-48).
     Rendering it to production is deferred until Slice E live admission is
     ready. `HW_RADAR_APIFY_ENABLED=false` (the default) remains the fail-closed
     kill switch regardless of which credentials are present.
@@ -3302,6 +3471,10 @@ environments (Slice E, migration 0022; revision 6, review R5-04).**
     account-read counter and standing debit, because its reads are separate
     calls. A same-cycle handoff therefore counts both environments'
     allowances; that over-counts and fails closed.
+    Revision 12 (owner decision (s5, 2026-09-25), R25): the standing account-read and discovery lines
+    are withdrawn (MS2-D-48 *Claim and handoff*). The record carries the
+    settled runtime and operator lines, the monitoring allowance, and the
+    carried consumption. Neither environment has an account-read counter.
   - *Serialization.* Every admission (all classes) re-reads its authority row
     inside the same budget-locked transaction that creates the reservation, and
     the export takes that lock. So an admission either commits first (and the
@@ -3370,7 +3543,14 @@ F5a; revision 6, review R5-05).**
     (`pricing_unverified`). The operator counts operations against the envelope
     (for example with the MCP or CLI item `limit`) and must reserve a new
     envelope before exceeding it. If the allowance cannot fit one, no further
-    paid inspection is done that cycle;
+    paid inspection is done that cycle. Revision 12 (owner decision (s5,
+    2026-09-25), R25): an operator-key account read (`GET /v2/users/me`,
+    `/limits`, or `/usage/monthly`, outside the application) counts as one
+    record read of an `inspect` envelope, priced at `api_call_bound`. The
+    envelope therefore also budgets the operator verification after
+    authority exists, the cycle reconciliation, and the F5a account-usage
+    measurements (MS2-D-48). The "named run's default storages" limit does
+    not apply to these reads;
   - probe (revision 11, R10-06): the **capability-probe envelope** for the
     R25 403-versus-404 check (MS2-D-25 *404 rule*). It covers creating one
     throwaway **unnamed** dataset with the operator key (a named storage is
@@ -3442,6 +3622,9 @@ revision 7, review R6-02).** This decision refines MS2-D-26 and MS2-D-41.
      cap (`watch_refresh`, `discovery`, or `operator`), the runtime allocation
      `A`, the operator allowance, the target, and both account checks of
      MS2-D-40 (snapshot and external liability) against the latest snapshot;
+     Revision 12 (owner decision (s5, 2026-09-25), R25): the external-liability check only, against the
+     configured `P` (MS2-D-48). An unset or invalid account setting is
+     reported as an unverifiable breach, which fails closed;
   4. trips the overrun latch with `post_admission_invariant_breach` if **any**
      of them is exceeded, or with the existing overrun reason if the row's
      settled amount exceeds its own reservation;
@@ -3457,6 +3640,253 @@ revision 7, review R6-02).** This decision refines MS2-D-26 and MS2-D-41.
   report.
 - *Rejected:* checking only the corrected row against its own reservation
   (revision 6).
+
+**MS2-D-48 — The runtime reads no Apify account state: configured billing cycle
+and operator-verified account settings (Slice E; revision 12, owner decision
+(s5, 2026-09-25), R25).** This decision amends MS2-D-15, -17, -32, -34, -40,
+-45, -46, and -47 where they are marked.
+- **Evidence (2026-09-25, `GET` only).** The runtime token
+  `HW_RADAR_APIFY_TOKEN` got `403 insufficient-permissions` from
+  `/v2/users/me`, `/v2/users/me/limits`, and `/v2/users/me/usage/monthly`.
+  It got 403 on a foreign dataset and `404 record-not-found` on a nonexistent
+  one. Apify's scoped-token form offers account-level permissions only for
+  Actors, Tasks, Schedules, and Storages, and resource-specific permissions
+  apply only to existing resources (docs.apify.com/platform/integrations/api,
+  retrieved 2026-09-25). No account, usage, or limits permission is
+  documented. At the same time, the operator key read plan STARTER, prepaid
+  usage credit $19, account usage limit $19, cycle 2026-09-05T00:00:00Z →
+  2026-10-04T23:59:59.999Z, and data retention 31 days. The account is shared
+  with the separate apify-actors venture.
+- **Owner decision (2026-09-25; [OQ30](../../resolved-questions.md#oq30--runtime-apify-account-reads-r25)).**
+  The owner chose the option "Drop runtime account reads (Recommended)". The
+  runtime stops calling the account endpoints. A configured anchor supplies
+  the billing cycle, and the operator key checks the anchor before enabling.
+  Apify's own $19 limit, equal to the prepaid credit and verified, caps
+  account-wide cash. Hardware Radar's ledger, the $12 target, and the $5
+  allowance for the account's other workloads all stay. The runtime can no
+  longer see the apify-actors venture's actual spend, only Apify's hard cap.
+  Production never needs the unscoped key.
+- **Credential boundary (Binding).** The unscoped operator key
+  (`secret/apps/hw-radar/agent/apify`) is never rendered to any application
+  runtime, whether production or proof. Every operator read that uses it
+  happens outside the application, from the workstation (Apify CLI or
+  `curl`) or the Apify Console. Its result enters Hardware Radar only as the
+  configuration below, together with the evidence date
+  `…_ACCOUNT_VERIFIED_ON`.
+- **Cycle (Binding).** `HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR` is an ISO-8601
+  timestamp of one observed cycle start, which is the
+  `monthlyUsageCycle.startAt` the operator read. It has no default. Settings
+  parse it to `None` when it is absent, empty, unparseable, naive, not at UTC
+  offset zero, not exactly `00:00:00.000`, or on a day of the month above
+  28. A valid anchor is normalized to UTC.
+  - *Derivation* (pure, `budget.billing_cycle_bounds(anchor, now)`). Let
+    `k = 12 × (now.year − a.year) + (now.month − a.month)` and let
+    `start(k)` be the UTC midnight on day `a.day` of the month `k` months
+    after the anchor's month. Each `start(k)` is computed from the anchor
+    directly, never from the previous cycle, so no drift accumulates. If
+    `start(k) > now`, then `k −= 1`. The cycle is `[start(k), start(k + 1) −
+    1 ms]`, which matches Apify's `…T23:59:59.999Z` end stamps. A `now` before
+    the anchor has no cycle. A `now` in the sub-millisecond gap after
+    `cycle_end` is outside the cycle and is denied `cycle_unknown`, which
+    fails closed.
+  - *Month-length edge cases.* Days 29–31 are rejected rather than clamped.
+    Apify does not document how an anniversary cycle anchored on day 29–31
+    runs through a shorter month, and a wrong guess would silently move a
+    boundary by up to three days. On days 1–28 every month has the anchor
+    day, so a cycle lasts 28–31 days (at most 744 h). Year rollover and
+    February (leap or not) need no special case. All arithmetic is in UTC,
+    and no local time or DST applies.
+  - *Materialization* (`ledger.ensure_cycle(config, now)`, called with the
+    budget lock held). It replaces API discovery. It derives the cycle and
+    handles four cases:
+    1. A row with the derived `cycle_start` and the same `cycle_end` exists.
+       Return it.
+    2. A row with the derived start but a different end exists (an earlier
+       anchor change clamped it). This is a conflict.
+    3. A recorded row starts inside the derived cycle (`start(k) <
+       row.cycle_start ≤ derived end`), which means the anchor moved
+       backward into recorded history. This is a conflict.
+    4. Otherwise, clamp every older row that overlaps the derived cycle
+       (`row.cycle_start < start(k) ≤ row.cycle_end`) to end at `start(k) −
+       1 ms`. This is revision 5's plan-change clamp, kept. Then create the
+       row: `cycle_start`, `cycle_end`, `allocation_usd`, `opened_at`,
+       `account_read_count` 0, and `account_*` null. Run
+       `_ensure_continued_authority` (MS2-D-45).
+    A conflict creates nothing, is logged at error level, and makes the
+    caller deny `cycle_unknown` (detail: the anchor conflicts with a recorded
+    cycle). Only the owner resolves a conflict, by correcting the anchor.
+    Hardware Radar never repairs recorded cycles itself. `reserve`,
+    `claim_origin`, `export_handoff`, and `import_handoff` call
+    `ensure_cycle`. The read-only report and `reconcile.invariant_breaches`
+    read recorded rows only.
+  - *Drift* (a plan change or other billing change that moves the real
+    cycle). The runtime cannot observe it, because no run, build, or storage
+    response carries the billing cycle. The controls are procedural and
+    fail-closed:
+    - a billing or plan change is an owner action, and no agent makes one
+      (MS2-D-40);
+    - the operator procedure below requires `HW_RADAR_APIFY_ENABLED=false`
+      and re-verification of every configured value before re-enabling;
+    - a start that Apify refuses at the hard limit trips the latch (*Hard-limit
+      refusal*);
+    - the operator's cycle reconciliation compares the configured values
+      with the account (*Operator reconciliation*).
+    The residual is R39. A forward anchor change is absorbed by the clamp. A
+    backward one denies until the owner resolves it.
+- **Account settings (Binding).** All four have no default, because each value
+  belongs to one account. An unset or invalid value denies every paid
+  admission with `account_state_unobservable`, and the detail names the
+  setting:
+  - `HW_RADAR_APIFY_ACCOUNT_LIMIT_USD` (Decimal). The operator-verified
+    lesser of the account usage limit (`limits.maxMonthlyUsageUsd`) and the
+    prepaid usage credit (`plan.monthlyUsageCreditsUsd`). It must be finite
+    and greater than 0. It replaces the observed prepaid credit in `P`, so
+    admission never plans against overage.
+  - `HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD` (Decimal). The plan's monthly
+    base price, finite and at least 0, used by the cash-ceiling guard.
+  - `HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS` (int). `limits.dataRetentionDays`,
+    at least 1, used by the MS2-D-40 retention consistency check.
+  - `HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON` (ISO date). The UTC date of the
+    operator verification that produced the anchor and the three values
+    above. Valid only if it is on or after the anchor's date and not after
+    `now`'s UTC date. It is evidence, not an expiry: revision 12 adds no
+    re-verification age (owner point in R39).
+  - `HW_RADAR_APIFY_ACCOUNT_MARGIN_USD` is unchanged. Absent means 10% of
+    `…_ACCOUNT_LIMIT_USD`, and present but invalid means
+    `budget_setting_invalid`.
+- **Admission (Binding; answers "what replaces the observed usage").**
+  Nothing replaces the observed usage. `decide_admission` keeps its blanket
+  stops and the estimate. It then applies, in order:
+  1. ledger authority;
+  2. `cycle_unknown` when there is no cycle, or `now` is outside it;
+  3. `account_state_unobservable` for an invalid account setting;
+  4. the retention check;
+  5. the 744 h check;
+  6. the cash-ceiling guard on the configured base price;
+  7. the class caps: runtime and operator debits as before, without the
+     standing or discovery terms;
+  8. the external-liability check, `HR_cycle + new + E ≤ P` for the current
+     cycle and the next, with `P = ACCOUNT_LIMIT_USD −
+     account_margin_usd(ACCOUNT_LIMIT_USD)` and `HR_cycle = runtime committed
+     + operator committed + carried handoff`.
+
+  Check 1 (`usage + HR_cycle − HR_included + new ≤ P`) and the
+  `external_liability_exceeded` latch check are removed with their inputs.
+  At the verified values, `P = 19.00 − 1.90 = 17.10`, and check 2 lets
+  `HR_cycle` reach at most `17.10 − 5.00 = 12.10`, so the $12 target binds
+  first. A lower configured limit makes check 2 bind.
+- **Hard-limit refusal (Binding).** Apify documents HTTP 402 on `POST
+  /v2/acts/{actorId}/runs` when "the user has exceeded their usage limit,
+  does not have enough credits, or the request lacks authentication and
+  payment credentials" (`api/v2/act-runs-post`, retrieved 2026-09-25). The
+  `error.type` for the usage-limit cause is not documented; the example is
+  `x402-payment-required`. So the classification uses the status code, not
+  the type. When `client.start_run` raises `ApifyApiError` with
+  `status_code == 402`, the start job:
+  - records `start_error` as today, including the `error_type`;
+  - after that commit (ED-05 order), trips the overrun latch with the new
+    `LatchReason.ACCOUNT_LIMIT_REFUSED` (`account_limit_refused`) for the
+    row;
+  - returns `START_FAILED` with the reason `account_limit_refused`.
+
+  The row stays unstarted and its reservation stays open. Selector 3 handles
+  it at its deadline as `orphaned_start`, unchanged: the rule for a lost
+  response is not relaxed for a 402. A 402 means that the account has reached
+  its hard limit. The other workloads may have exceeded `E`, Hardware Radar
+  may have under-counted (R38), or the configured state may be wrong (R39).
+  Each needs the owner, and `apify_budget_reset --reason` is the reset. A 402
+  on a poll, read, or delete keeps that call's existing handling, so the
+  drain never stops.
+- **Retired, kept, and repurposed (answers the fate list).**
+
+  | Item | Revision 12 |
+  | --- | --- |
+  | `ApifyCycleDiscovery`, `…_MAX_DISCOVERY_READS`, `…_DISCOVERY_READ_INTERVAL_S`, `reset_discovery`, `discovery_status`, `apify_budget_reset --discovery`, the discovery allowance | retired: code and settings removed; the table stays, empty (*Schema*) |
+  | Standing account-read debit, `…_MAX_ACCOUNT_READS_PER_CYCLE`, `PerCallBounds.account_read` | retired; `ApifyBudgetCycle.account_read_count` stays 0 |
+  | `account_read_useful`, `refresh_account_snapshot`, `AccountReader`, `RefreshOutcome` | retired; `LedgerAdmission.admit(request)` calls only `reserve` |
+  | `…_ACCOUNT_SNAPSHOT_MAX_AGE_S`, `…_USAGE_INCLUSION_LAG_S`, `HR_included` | retired with check 1 |
+  | `…_ACCOUNT_MARGIN_USD` | kept; default base is the configured limit |
+  | `cycle_unknown` | kept; repurposed to anchor unset, invalid, in the future, or conflicting |
+  | `account_state_unobservable` | kept; repurposed to an account setting unset or invalid |
+  | `external_liability_exceeded`, `AdmissionDecision.trip_latch` | retired (no producer) |
+  | `account_limit_refused` | new `LatchReason` |
+
+- **Schema (no change).** `0021` and `0022` have not been deployed to
+  production (it runs migrations up to `0020`). However, `0022` is merged on
+  `dev` and applied in development and leg databases. Revision 12 therefore
+  changes no model and adds no migration. `ApifyCycleDiscovery` stays an
+  empty table, and `ApifyBudgetCycle.account_prepaid_credit_usd`,
+  `account_base_price_usd`, `account_limit_usd`, `account_usage_usd`,
+  `account_observed_at`, and `account_data_retention_days` stay null.
+  `makemigrations --check` must still report no changes. `denial_reason` and
+  the latch `reason` are free text (E3), so the vocabulary changes need no
+  migration.
+  - *Rejected:* editing `0022` in place. Databases that already applied it
+    would diverge from the migration history.
+  - *Rejected:* a `0023` drop migration now. It is a schema change that the
+    brief asks to avoid, and it is not needed for correctness. A later slice
+    that touches this schema may drop the dead table and columns under its
+    own plan text.
+- **Claim and handoff stay cycle-scoped.** Authority rows are still keyed by
+  `cycle_start`, now the derived start, and `continued` still passes only
+  between adjacent recorded cycles. `claim_origin` materializes the cycle, so
+  bootstrap no longer needs a denied start first. The export record keeps
+  version 1 and drops the `discovery_allowance_usd` and
+  `standing_account_read_usd` lines, which have no source any more. No
+  record has been exported from a deployed environment. An older record that
+  still carries them is accepted and over-counts, which fails closed. Two
+  environments must configure the same anchor. A mismatched anchor makes
+  `import_handoff` refuse the record with `wrong_cycle`.
+- **Operator verification (procedural; before enabling).** With the operator
+  key, outside the application, the operator reads `GET /v2/users/me/limits`
+  and `GET /v2/users/me` (or the Console's Billing pages) and checks four
+  things:
+  - `monthlyUsageCycle.startAt` equals the anchor, or is a later start on
+    the same day and time;
+  - `…_ACCOUNT_LIMIT_USD` equals the lesser of `maxMonthlyUsageUsd` and
+    `monthlyUsageCreditsUsd`;
+  - the base price and `dataRetentionDays` match their settings;
+  - the limit is at or below the prepaid credit (R3).
+
+  The operator then sets `…_ACCOUNT_VERIFIED_ON` and records the check (date,
+  values, no identifiers) in STATUS. The same check is required before
+  re-enabling after any plan or billing change. The first verification
+  happens before the environment holds ledger authority, so it cannot be
+  reserved: it is at most three `GET` calls per verification, unledgered,
+  within the account margin, and recorded under R36. Every later operator
+  account read is reserved as an operator `inspect` envelope (MS2-D-46), and
+  each read counts as one of its record reads.
+- **Operator reconciliation (procedural; recommended at each cycle close
+  and during F5a).** Under an `inspect` reservation, the operator reads the
+  cycle's monthly usage with the operator key and compares it with
+  `apify_spend_report`. If other workloads (account usage minus Hardware
+  Radar's settled spend) exceed `E`, or a configured value no longer matches,
+  the operator sets `HW_RADAR_APIFY_ENABLED=false` and tells the owner. This
+  is the after-the-fact detection that check 1 and
+  `external_liability_exceeded` used to provide inside the runtime (R38,
+  R39).
+- **Client surface (MS2-D-15).** `get_account_limits`, `get_monthly_usage`,
+  `get_account_plan`, and their result types are removed from
+  `acquisition/apify/client.py`. The operator uses the Apify CLI, `curl`, or
+  the Console, never the application client.
+- *Rejected (a):* proof-only operator-key account reads inside the
+  application. The owner rejected them, and they would put the unscoped key
+  in an application runtime.
+- *Rejected (b):* keeping admission denied until Apify offers an
+  account-read scope. The owner rejected it, because it blocks F5a
+  indefinitely.
+- *Rejected (c):* inferring the cycle from run or usage responses. None
+  carries the billing cycle.
+- *Rejected (d):* clamping anchor days 29–31 to the month end. The behavior
+  is undocumented (*Month-length edge cases*).
+- *Rejected (e):* a configured account usage figure. It would be stale at
+  once and would give false confidence.
+- *Rejected (f):* a verification expiry, such as re-verifying every cycle.
+  The owner's decision says "before enabling". The owner may add one (R39).
+- *Reopen if* Apify documents a scoped-token permission for account limits
+  and usage (check 1 could return, read-only), Apify documents anniversary
+  behavior for days 29–31, the account's plan or sharing changes, or a 402
+  latch trip or an operator reconciliation finds other workloads above `E`.
 
 ## Requirement traceability
 
@@ -3484,7 +3914,7 @@ Task IDs refer to the slices below.
 | FR-003 — identity ladder, no false cross-category merges | spec :248 | A3, B3 | `test_resolver_categories.py::test_cross_category_alias_goes_to_review`; `::test_non_authoritative_alias_never_auto_accepts_new_category` (MS2-D-21) |
 | FR-006 — eligibility reasons mandatory | spec :251 | C3 | every `watch_evaluation` row has non-empty `reasons` (DB test) |
 | FR-014 — verdict persisted; unknown never passes | spec :259 | C2, C3, C4 | `test_eligibility_aggregate.py` (unknown ≠ match); listing-tier evidence cannot `match` a product clause; `test_shortlist.py::test_prior_match_then_contradictory_evidence_leaves_shortlist` (MS2-D-20) |
-| NFR-003 — secrets via OpenBao | spec :267 | D3 | client reads `HW_RADAR_APIFY_TOKEN` (the scoped runtime token) only; test asserts no token in logs/detail_json; rev 9 (OQ25, MS2-D-43): the unscoped operator key is never rendered to production and CI holds no Apify credential (operational evidence, not a test) |
+| NFR-003 — secrets via OpenBao | spec :267 | D3 | client reads `HW_RADAR_APIFY_TOKEN` (the scoped runtime token) only; test asserts no token in logs/detail_json; rev 9 (OQ25, MS2-D-43): the unscoped operator key is never rendered to production and CI holds no Apify credential (operational evidence, not a test); rev 12 (R25, MS2-D-48): the operator key is never rendered to any application runtime, proof included, and account state enters only as operator-verified settings; `test_apify_client.py::test_client_has_no_account_read_methods` |
 | NFR-006 — new category = satellite + rows | spec :270 | B1, B2 | no change to spine models (migration test + diff) |
 | IR-007 — provenance-bearing category references | spec :283 | B4 | seed validation rejects a row without `source_url`/`retrieved_on` |
 | IR-008 — Actor provider evidence, idempotent, delist-safe, budgeted | spec :284 | D1–D8, E5 | as AC-4..AC-7 |
@@ -3523,9 +3953,10 @@ Task IDs refer to the slices below.
 | DR-001 / DR-008 — snapshot retention follows the observation's own time (MS2-D-37) | spec :290 | D10 | `test_persist_observation_retention.py::test_reverse_order_bounded_observation_snapshot_keeps_its_own_deadline`, `::test_older_bounded_observation_after_newer_delist_is_not_snapshotted`, `::test_append_snapshot_default_copies_listing_retention` |
 | AC-7 — reservation bounds cumulative work (MS2-D-32) | spec :943 | D10, E1–E4 | `test_apify_ledger.py::test_repeated_pre_commit_reads_are_capped_and_reserved`, `::test_non_null_usage_before_cleanup_completes_does_not_release_liability`, `::test_delayed_deletion_keeps_storage_liability_outstanding` |
 | AC-7 — settled spend counts in every billing cycle its charge interval touches (MS2-D-34 as revised in rev 5) | spec :943 | E1, E3, E4 | `test_apify_ledger.py::test_late_cleanup_settled_spend_counts_in_the_cycle_of_its_final_charge`, `::test_reconciled_spend_leaves_a_cycle_its_charge_interval_does_not_touch` |
-| C-011 / AC-7 — billing cycle is the period; cash ceiling = project allocation + account prepaid headroom (MS2-D-40, OQ23) | spec :181, :943 | E1–E3 | `test_apify_budget.py::test_cycle_bounds_come_from_account_limits_not_calendar`, `::test_account_headroom_below_project_target_binds`, `::test_project_target_below_account_headroom_binds`, `::test_admission_never_relies_on_overage`, `::test_plan_base_price_above_cash_ceiling_denies_all`; `test_apify_ledger.py::test_arbitrary_non_calendar_cycle_boundary` |
+| C-011 / AC-7 — billing cycle is the period; cash ceiling = project allocation + account prepaid headroom (MS2-D-40, OQ23) | spec :181, :943 | E1–E3 | `test_apify_budget.py::test_cycle_bounds_come_from_account_limits_not_calendar`, `::test_account_headroom_below_project_target_binds`, `::test_project_target_below_account_headroom_binds`, `::test_admission_never_relies_on_overage`, `::test_plan_base_price_above_cash_ceiling_denies_all`; `test_apify_ledger.py::test_arbitrary_non_calendar_cycle_boundary`; rev 12 (R25): the cycle-bounds and headroom tests are rewritten on the configured anchor and limit (E9.1, E9.2) |
+| C-011 / AC-7 / NFR-003 — the runtime reads no account state; configured cycle and operator-verified account settings; 402 hard-limit latch (MS2-D-48, rev 12, R25) | spec :181, :267, :943 | E9.1–E9.5 | `test_apify_no_account_reads.py::test_runtime_paths_never_request_account_endpoints`, `::test_no_runtime_module_references_account_endpoints`; `test_apify_budget.py::test_admission_admits_with_configured_cycle_and_limit`, `::test_unset_or_invalid_anchor_denies_cycle_unknown`, `::test_unset_or_invalid_account_setting_denies_account_state_unobservable`, `::test_billing_cycle_bounds_from_anchor`, `::test_billing_cycle_bounds_are_computed_from_the_anchor_not_iterated`; `test_apify_ledger.py::test_anchor_moved_backward_into_recorded_cycle_denies_cycle_unknown`; `test_apify_ledger_authority.py::test_handoff_record_is_cycle_scoped_under_configured_anchor`; `test_apify_admission.py::test_start_refused_with_402_trips_account_limit_latch_and_keeps_reservation` |
 | AC-7 — provisional → finalized usage; reconcile and release (MS2-D-41) | spec :943 | E4 | `test_apify_ledger.py::test_first_usage_read_is_provisional_until_settle_delay`, `::test_finalized_usage_written_once_not_recomputed`, `::test_reconcile_below_reservation_returns_capacity`, `::test_reconcile_above_reservation_trips_overrun_and_pauses_paid_work`; revision 6 (R5-03): `::test_nonnull_usage_rising_after_ten_seconds_is_not_finalized_early`, `::test_permanently_unfinalized_run_stays_at_bound_and_is_stale_at_cycle_end`, `::test_upward_correction_after_reconciliation_raises_settled_and_trips_latch` |
-| AC-7 / C-011 — reconciled spend stays debited; shared-account external liability owner-bounded (MS2-D-40, rev 6 R5-01/R5-02) | spec :943 | E2, E3 | `test_apify_ledger.py::test_repeated_reserve_reconcile_against_one_unchanged_snapshot_keeps_debit`, `::test_refreshed_snapshot_that_still_lags_keeps_reconciled_debit`; `test_apify_budget.py::test_empty_or_invalid_external_liability_denies_all_paid_admission`, `::test_default_external_liability_admits_only_when_invariant_holds` (rev 9, OQ26), `::test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_prepaid` |
+| AC-7 / C-011 — reconciled spend stays debited; shared-account external liability owner-bounded (MS2-D-40, rev 6 R5-01/R5-02) | spec :943 | E2, E3 | `test_apify_ledger.py::test_repeated_reserve_reconcile_against_one_unchanged_snapshot_keeps_debit`, `::test_refreshed_snapshot_that_still_lags_keeps_reconciled_debit`; `test_apify_budget.py::test_empty_or_invalid_external_liability_denies_all_paid_admission`, `::test_default_external_liability_admits_only_when_invariant_holds` (rev 9, OQ26), `::test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_prepaid`; rev 12 (R25): the snapshot-check tests are retired with check 1, and reconciled spend stays debited in check 2: `test_apify_ledger.py::test_reconciled_spend_stays_debited_against_configured_limit` (E9.2) |
 | AC-7 — one HR ledger authority per cycle; drained handoff (MS2-D-45, rev 6 R5-04) | spec :943 | E1, E3, F5a | `test_apify_ledger_authority.py::test_handoff_export_refused_while_proof_run_is_running`, `::test_handoff_export_refused_while_usage_is_provisional_or_unfinalized`, `::test_second_environment_denied_until_handoff_imported` |
 | AC-7 — operator operations reserved in the ledger (MS2-D-46, rev 6 R5-05) | spec :943 | E2, E4, F5a | `test_apify_budget.py::test_operator_allowance_exhausted_refuses_reservation`; `test_apify_ledger.py::test_unsettled_operator_reservation_counts_at_bound` |
 | AC-7 — corrections monitored after reconciliation and re-checked against every invariant; exclusive handoff (MS2-D-41, -45, -47, rev 7) | spec :943 | E3, E4 | `test_apify_ledger.py::test_poll_tick_selects_reconciled_cleaned_up_run_for_correction_monitoring`, `::test_below_estimate_upward_correction_after_capacity_reuse_trips_latch`; `test_apify_ledger_authority.py::test_duplicate_export_imported_into_two_ledgers_second_rejected`, `::test_admission_racing_handoff_export_serializes` |
@@ -3559,7 +3990,7 @@ source (F5b) is required to close MS-2.
 | 11 | Truncated import cannot delist | A6, D8 | `test_truncated_actor_fixture_cannot_delist` [item, page, time, bytes] |
 | 12 | Provider switch preserves listing identity | D7 | `test_provider_switch_preserves_identity_history_and_watch_state` |
 | 13 | Run usage/cost evidence captured | D3, E4, F5a | `test_apify_ledger.py::test_finalized_usage_written_once_not_recomputed`; live: `usage_total_usd`, `usageUsd`, `stats` on `provider_run` |
-| 14 | Post-run retrieval cost/usage measured | E4, F5a | `test_apify_ledger.py::test_post_run_cost_uses_bound_until_measured`; live: account usage diff around the dataset read (MS2-D-43) |
+| 14 | Post-run retrieval cost/usage measured | E4, F5a | `test_apify_ledger.py::test_post_run_cost_uses_bound_until_measured`; live: account usage diff around the dataset read (MS2-D-43); rev 12 (R25): the account usage diff is an operator-key read outside the application under an `inspect` reservation (MS2-D-48, F5a step 4) |
 | 15 | Reservation and reconciliation correct | E3, E4 | `test_reconcile_below_reservation_returns_capacity`, `test_reconcile_above_reservation_trips_overrun_and_pauses_paid_work`, `test_reservation_exactly_equal_to_remaining_is_admitted` |
 | 16 | Budget exhaustion prevents a new paid run | E2, E5 | `test_one_cent_over_remaining_is_denied`; `test_denied_start_records_denial_and_starts_nothing` |
 | 17 | `budget_paused` visible as freshness/operational state | E5 | `test_denied_start_shows_budget_paused_with_reason_in_shortlist` |
@@ -5187,6 +5618,14 @@ the then-current code. D-prep (D1, D3) is not gated.
     the operator uses to set `…_STORAGE_MAX_LIFETIME`.)
 
   The revision-1 `…_PER_RUN_OVERHEAD_USD` key is withdrawn.
+  - Revision 12 (owner decision (s5, 2026-09-25), R25): new, none with a default (MS2-D-48):
+    `…_BILLING_CYCLE_ANCHOR` (ISO-8601 UTC midnight, day 1–28),
+    `…_ACCOUNT_LIMIT_USD` (Decimal > 0), `…_ACCOUNT_BASE_PRICE_USD`
+    (Decimal ≥ 0), `…_ACCOUNT_DATA_RETENTION_DAYS` (int ≥ 1), and
+    `…_ACCOUNT_VERIFIED_ON` (ISO date). Removed: `…_MAX_ACCOUNT_READS_PER_CYCLE`,
+    `…_MAX_DISCOVERY_READS`, `…_DISCOVERY_READ_INTERVAL_S`,
+    `…_ACCOUNT_SNAPSHOT_MAX_AGE_S`, and `…_USAGE_INCLUSION_LAG_S`.
+    `…_ACCOUNT_MARGIN_USD` now defaults to 10% of `…_ACCOUNT_LIMIT_USD`.
 - new commands `apify_spend_report` and `apify_budget_reset`; revision 6 adds
   `apify_ledger_claim`, `apify_ledger_handoff` (MS2-D-45), and
   `apify_operator_reserve` (MS2-D-46).
@@ -5241,6 +5680,9 @@ the then-current code. D-prep (D1, D3) is not gated.
     reservations carry their own `run_poll_count` and
     `correction_read_count` (integer, default 0), because they have no
     `provider_run` (MS2-D-32, -46).
+  - Revision 12 (owner decision (s5, 2026-09-25), R25): no schema change (MS2-D-48 *Schema*). The
+    `ApifyBudgetCycle.account_*` columns and `account_read_count` stay
+    unwritten, and `ApifyCycleDiscovery` stays empty.
   - Revision 11 (R10-05): `ApifyCycleDiscovery` (MS2-D-32 *Cycle
     discovery*): `opened_at`, `read_count` (integer, default 0),
     `last_read_at` (nullable), `closed_at` (nullable), `cycle_start`
@@ -5504,6 +5946,12 @@ the then-current code. D-prep (D1, D3) is not gated.
     --discovery`; E4 adds `--settle` and the latch reset. The plan's
     shortened-cycle case is
     `test_cycle_shortened_by_plan_change_moves_the_boundary`.
+  - Revision 12 (owner decision (s5, 2026-09-25), R25): the discovery, snapshot-refresh, and
+    inclusion-watermark tests above (revision 6 R5-01 and revision 11
+    R10-05) are deleted or rewritten by E9.2. `refresh_account_snapshot` and
+    `reset_discovery` are removed, and `ensure_cycle` materializes the cycle
+    from the anchor. The E3 choice "with no cycle row, admission reports
+    `cycle_unknown`" still holds.
 - **E4 — Reconcile and the overrun latch.** Settle under the same lock per
   MS2-D-32 and MS2-D-41 (revision 7 wording). The first non-null
   `usage_total_usd` makes the row `usage_provisional`. It becomes
@@ -5737,6 +6185,13 @@ the then-current code. D-prep (D1, D3) is not gated.
     overrides `fresh`/`stale`. Bootstrap order: the first enabled start
     discovers the cycle and is denied `ledger_authority_missing`, after which
     `apify_ledger_claim` can claim it.
+  - Revision 12 (owner decision (s5, 2026-09-25), R25): `admit(request)` loses its `reader`, and
+    `account_read_useful` and the refresh step are removed. "No account
+    read is sent" now holds in every configuration, not only with the
+    production defaults. The bootstrap order becomes: set the anchor and
+    the account settings, then `apify_ledger_claim` (which materializes the
+    cycle), then start. A start refused with 402 trips `account_limit_refused`
+    (E9.3).
   - Crash windows closed 2026-09-25 (verifier findings d1, d2). (d2) The
     `orphaned_start` and `delete_attempts_exhausted` trips now commit in the
     same transaction as the row mark: `storage_cleanup._begin` and `_finish`
@@ -5797,6 +6252,12 @@ the then-current code. D-prep (D1, D3) is not gated.
     Owner free text (`attested_by`, `cleared_reason`) and Apify run, dataset,
     build, and Actor identifiers are never printed. An unpriceable setting
     prints `unavailable (<reason>)` instead of failing the report.
+  - Revision 12 (owner decision (s5, 2026-09-25), R25): the report no longer prints observed usage,
+    remaining prepaid, the `[STALE]` flag, the inclusion watermark, the
+    discovery status, or the standing debit. It prints the configured
+    account state (anchor, limit, `P`, base price, retention, verified-on)
+    and the external-liability headroom `P − HR_cycle − E`, and it states
+    that the runtime does not observe the other workloads' spend (E9.2).
 - **E8 — Budget-admitted probe (MS2-D-24 with the real ledger).**
   `test_budget_admitted_actor_probe_recovers_source_with_ledger`: a probe is
   admitted under the `discovery` class, reserved, imported, and reconciled, and
@@ -5833,6 +6294,12 @@ the then-current code. D-prep (D1, D3) is not gated.
     prices, `…_MARGIN`, `…_MAX_TIMEOUT_S`, `…_MAX_KV_WRITES`,
     `…_MAX_KV_BYTES`, `…_STORAGE_MAX_LIFETIME`, `…_LEDGER_ID`, `…_ACTOR_ID`).
     Settled as recorded above: R24, R33, R36; OQ23.
+  - Revision 12 (owner decision (s5, 2026-09-25), R25): the owner created the scoped token, and it
+    cannot read the account. The "verify whether it can read the account
+    limits and monthly usage" task is closed by MS2-D-48, since the runtime
+    makes no account read. The remaining owner tasks are the token's
+    **Read** grant on the Actor (R25) and setting the five MS2-D-48
+    settings from the operator verification.
 
 **Acceptance:** AC-7 holds. Admission fails closed on the kill switch, at the
 class cap, at either account check (with reconciled spend still debited and the
@@ -5853,6 +6320,320 @@ closing read (revision 8). Operator operations are reserved in the same ledger,
 and a bound build is settled and monitored from persisted state. Settled spend
 counts in every billing cycle its charge interval touches, however late cleanup
 succeeded (revision 5).
+Revision 12 (owner decision (s5, 2026-09-25), R25): "either account check" now means check 2
+against the configured `P`. "Unknown cycle or unobservable account state"
+means an unset, invalid, future, or conflicting anchor, or an unset or
+invalid account setting. The runtime sends no account read in any path,
+and a 402 start refusal trips the latch. Cycle-discovery allowances no
+longer exist.
+
+### Implementation tasks (rev 12)
+
+Revision 12 (owner decision (s5, 2026-09-25), R25). Design authority: MS2-D-48.
+These tasks land as one PR into `dev` (branch off `dev`). Each numbered task
+is one signed conventional commit that leaves the gate green. The gate is the
+*Global constraints* command plus `makemigrations --check --dry-run`, which
+must report no changes, because revision 12 has no schema change. Every
+behavior task starts with its failing test (correct-reason RED). Paths are
+under `src/hw_radar/` and `tests/`.
+
+**Do not change:** the reservation estimate, the MS2-D-34 predicate apart
+from the discovery term, the lock key and lock order, the latch semantics,
+row-before-start, operator reservations, `E`, the target, the cash ceiling,
+the operator allowance, R38, any model, or any migration.
+
+**E9.1 — Settings and pure cycle derivation (additive).**
+- `settings.py`:
+  - Widen `_env_date` to `default: date | None = None`.
+  - Add `_env_cycle_anchor(name) -> datetime | None`. It returns `None` when
+    the value is absent, empty, unparseable by `datetime.fromisoformat`,
+    naive, at a UTC offset other than zero, not exactly `00:00:00.000000`,
+    or on a day above 28. It returns a valid value converted to
+    `tzinfo=UTC`.
+  - Add the five settings, none with a default:
+    `HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR = _env_cycle_anchor(...)`,
+    `HW_RADAR_APIFY_ACCOUNT_LIMIT_USD = _env_decimal(...)`,
+    `HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD = _env_decimal(...)`,
+    `HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS = _env_int(...)`, and
+    `HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON = _env_date(...)`.
+  - Comment each with MS2-D-48, and state that the value is
+    operator-verified outside the application.
+- `acquisition/apify/budget.py`:
+  - Add the five fields to `BudgetSettings` and `load_budget_settings`:
+    `billing_cycle_anchor: datetime | None`,
+    `account_limit_usd: Decimal | None`,
+    `account_base_price_usd: Decimal | None`,
+    `account_data_retention_days: int | None`, and
+    `account_verified_on: date | None`.
+  - Add the pure `billing_cycle_bounds(anchor: datetime, now: datetime) ->
+    tuple[datetime, datetime] | None` with MS2-D-48 *Derivation* exactly:
+    compute `start(k)` from the anchor, never by iteration; the end is the
+    next start − 1 ms; `None` when `now < anchor`. Export it.
+- Tests:
+  - `tests/unit/test_settings.py`:
+    - `test_billing_cycle_anchor_parsing`, parametrized. Valid:
+      `2026-09-05T00:00:00Z`, `2026-09-05T00:00:00+00:00`, day 1, day 28.
+      `None`: empty, garbage, a naive value, `+02:00`, `00:00:01Z`, days
+      29, 30, and 31, and a date-only value.
+    - `test_account_settings_have_no_default`: all five absent → `None`.
+  - `tests/unit/test_apify_budget.py`:
+    - `test_billing_cycle_bounds_from_anchor`, parametrized. The observed
+      cycle: anchor `2026-09-05T00:00Z`, `now` 2026-09-25 →
+      `(2026-09-05T00:00Z, 2026-10-04T23:59:59.999Z)`. `now` equal to the
+      next start → the next cycle. `now` equal to `cycle_end` → the current
+      cycle. Anchor day 28: Jan 28 → Feb 28, and Feb 28 → Mar 28 in both 2027
+      and leap 2028. Dec → Jan across a year.
+    - `test_billing_cycle_bounds_are_computed_from_the_anchor_not_iterated`:
+      `now` 61 months after a day-28 anchor starts on day 28.
+    - `test_billing_cycle_before_anchor_is_unknown`.
+    - `test_every_derived_cycle_is_at_most_744_hours`: 48 consecutive
+      cycles for anchor days 1 and 28.
+
+**E9.2 — Regression tests first (RED), then switch admission to the
+configured state.** This is the core commit.
+- Write first:
+  - `tests/db/test_apify_no_account_reads.py::test_runtime_paths_never_request_account_endpoints`.
+    Use one `httpx.MockTransport` that records every request and fails on
+    any path starting with `/v2/users`. Drive the real paths:
+    - `start_provider_run` through `LedgerAdmission`, once admitted and
+      once denied (anchor unset);
+    - `recovery_probe_job`;
+    - `apify_poll_tick`s through poll → import → storage delete →
+      settlement → selector-4 monitoring → closing read;
+    - an operator build row bound and read through selector 2.
+    Assert that the recorded paths are non-empty and none is under
+    `/v2/users`, that every `ApifyBudgetCycle.account_read_count` is 0, and
+    that `ApifyCycleDiscovery` has no row. It fails on the current code,
+    because the refresh step reads `/v2/users/me/limits`.
+- `budget.py`:
+  - Change `AccountSnapshot` to the configured state. Keep the name to
+    keep the diff small, and update the docstring. Its fields are
+    `cycle_start`, `cycle_end`, `account_limit_usd`, `base_price_usd`,
+    `data_retention_days`, and `verified_on`. Remove `observed_at`,
+    `prepaid_credit_usd`, and `account_usage_usd`.
+  - Change `account_margin_usd(cfg, limit)` to 10% of the configured limit
+    when absent.
+  - In `decide_admission`, apply the MS2-D-48 *Admission* order.
+    `account_state_unobservable` is returned when:
+    - the limit is `None`, not finite, or ≤ 0;
+    - the base price is `None`, not finite, or < 0;
+    - the retention is `None` or < 1;
+    - `verified_on` is `None`, after `now`'s UTC date, or before the
+      anchor's date.
+    Delete check 1, the `external_liability_exceeded` block, and the
+    `ACCOUNT_SNAPSHOT_MAX_AGE_S` validation. In `_hr_cycle` and the runtime
+    class check, drop `standing`, `discovery_allowance_usd`, and
+    `hr_included_usd`.
+  - Remove `CycleDebits.discovery_allowance_usd` and `hr_included_usd`,
+    `standing_account_read_debit`, `PerCallBounds.account_read`,
+    `DenialReason.EXTERNAL_LIABILITY_EXCEEDED`, `AdmissionDecision.trip_latch`,
+    `BudgetSettings.max_account_reads_per_cycle`, and
+    `account_snapshot_max_age_s`.
+- `acquisition/apify/ledger.py`:
+  - Add `ensure_cycle(config, now) -> ApifyBudgetCycle | None` with MS2-D-48
+    *Materialization* exactly. Assert the caller is in an atomic block, as
+    `take_budget_lock` does.
+  - `reserve`, `claim_origin`, `export_handoff`, and `import_handoff` call
+    it instead of `current_cycle`. Keep `current_cycle` for read-only
+    callers.
+  - `_snapshot(cycle)` becomes `_snapshot(cycle, cfg)`: the row's bounds
+    plus the settings.
+  - `reserve` loses its latch-creating branch.
+  - `_tally` loses `observed_at`, the watermark, and the discovery term.
+  - `_build_record` drops the `discovery_allowance_usd` and
+    `standing_account_read_usd` lines. `HANDOFF_RECORD_VERSION` stays 1.
+  - Add `LatchReason.ACCOUNT_LIMIT_REFUSED = "account_limit_refused"`.
+  - Update the module docstring.
+- `acquisition/apify/jobs.py`:
+  - `BudgetAdmission.admit(self, request)` and `LedgerAdmission.admit`
+    call only `reserve`. The start job calls `admit(request)`.
+  - Remove the `AccountReader`, `account_read_useful`, and
+    `refresh_account_snapshot` imports.
+  - Update the module docstring's "no account read" sentence: it now holds
+    in every configuration.
+- `acquisition/apify/reconcile.py` `invariant_breaches`:
+  - Drop `standing`, discovery, "account snapshot unobserved", and "snapshot
+    check".
+  - Compute `usable = limit − account_margin_usd(cfg, limit)` from
+    settings. An invalid limit or margin appends `unverifiable: <setting>`
+    (a breach, so it fails closed).
+- `acquisition/apify/report.py`:
+  - Remove observed usage, remaining prepaid, snapshot headroom, observed
+    non-Hardware-Radar usage, `[STALE]`, the watermark, `standing`, and
+    `discovery`.
+  - Per cycle, add the configured account state (anchor, limit, `P`, base
+    price, retention days, verified-on) and `external-liability headroom =
+    P − HR_cycle − E`. Add the fixed line "other workloads' spend: not
+    observed by the runtime (MS2-D-48)".
+  - Print the derived current cycle even when its row is not yet
+    materialized, and label it so. The report stays read-only and never
+    calls `ensure_cycle`.
+  - `_place` drops the watermark argument. Keep the `_tally` cross-file
+    contract.
+- `tests/db/ledger_support.py`:
+  - `config()` sets the anchor `C1_START`, limit `19.00`, base price
+    `19.00`, retention 31, and verified-on `C1_START.date()`.
+  - `cycle()` stops writing the `account_*` fields.
+  - Delete `account_client`.
+- Tests updated in the same commit:
+  - `test_apify_budget.py`:
+    - Rewrite `test_cycle_bounds_come_from_account_limits_not_calendar` →
+      `test_cycle_bounds_come_from_configured_anchor_not_calendar`.
+    - `test_stale_or_unreadable_account_snapshot_denies` →
+      `test_unset_or_invalid_account_setting_denies_account_state_unobservable`,
+      parametrized over each MS2-D-48 invalid case.
+    - `test_missing_data_retention_days_denies` → expects
+      `account_state_unobservable`.
+    - Rewrite on the configured values:
+      `test_account_headroom_below_project_target_binds`,
+      `test_project_target_below_account_headroom_binds`,
+      `test_plan_base_price_above_cash_ceiling_denies_all`,
+      `test_configured_account_margin_replaces_the_ten_percent_default`,
+      `test_concurrent_external_consumption_within_declared_bound_cannot_push_account_past_prepaid`
+      (renamed `…_past_configured_limit`), and
+      `test_straddling_reservation_checked_against_both_cycles_external_bound`.
+    - Delete `test_snapshot_exactly_at_max_age_is_fresh`,
+      `test_account_read_bound_is_standing_cycle_debit`, and
+      `test_inclusion_watermark_reduces_only_the_snapshot_check`.
+    - Add `test_admission_admits_with_configured_cycle_and_limit` (all set,
+      `HR_cycle` 0: admitted; with `P = 17.10`, a reservation that would
+      take `HR_cycle + new + 5.00` above 17.10 is denied `account_headroom`)
+      and `test_unset_or_invalid_anchor_denies_cycle_unknown` (unset, and a
+      `now` before the anchor).
+  - `test_apify_ledger.py`:
+    - Delete `test_empty_ledger_bootstrap_read_is_counted_before_it_is_sent`,
+      `test_exhausted_cycle_read_cap_then_rollover_discovers_next_cycle`,
+      `test_failed_discovery_reads_count_and_stop_at_cap`,
+      `test_discovery_reset_stores_the_owners_reason`,
+      `test_external_liability_exceeded_trips_latch`,
+      `test_repeated_reserve_reconcile_against_one_unchanged_snapshot_keeps_debit`,
+      `test_refreshed_snapshot_that_still_lags_keeps_reconciled_debit`,
+      `test_inclusion_watermark_unset_debits_all_reconciled_cycle_spend`, and
+      `test_inclusion_lag_set_drops_only_rows_ended_before_watermark`.
+    - Rewrite `test_unknown_cycle_denies` (anchor unset: denied
+      `cycle_unknown`, and no cycle row is created) and
+      `test_arbitrary_non_calendar_cycle_boundary` (from a day-5 anchor).
+    - Rewrite `test_cycle_shortened_by_plan_change_moves_the_boundary` →
+      `test_anchor_moved_forward_clamps_the_recorded_cycle`.
+    - Rewrite `test_upward_correction_breaching_external_liability_check_trips_latch`
+      on the configured limit.
+    - Add:
+      - `test_first_reserve_materializes_the_configured_cycle_row`: derived
+        bounds, the allocation, null `account_*`, and `account_read_count`
+        0.
+      - `test_rollover_materializes_next_cycle_and_continues_authority`.
+      - `test_anchor_moved_backward_into_recorded_cycle_denies_cycle_unknown`:
+        no row is created, and the existing rows are unchanged.
+      - `test_reconciled_spend_stays_debited_against_configured_limit`: this
+        replaces the R5-01 pair. Repeated reserve → reconcile, and the
+        admission that would exceed `P − E` is denied `account_headroom`.
+      - `test_correction_with_account_limit_unset_is_an_invariant_breach`.
+  - `test_apify_ledger_authority.py`:
+    - Rewrite `test_same_cycle_handoff_carries_account_read_and_monitoring_debits`
+      → `test_same_cycle_handoff_carries_monitoring_debits_without_account_read_lines`.
+      The record's `lines` keys are exactly `settled_runtime_usd`,
+      `settled_operator_usd`, `monitoring_allowance_usd`, and
+      `carried_in_usd`.
+    - Add `test_claim_origin_materializes_configured_cycle_without_a_denied_start`.
+    - Add `test_handoff_record_is_cycle_scoped_under_configured_anchor`:
+      authority rows are keyed by the derived `cycle_start`, and a
+      destination whose anchor derives another cycle refuses the import with
+      `wrong_cycle`.
+  - `test_apify_admission.py`: delete
+    `test_stale_snapshot_is_refreshed_then_start_admitted`,
+    `test_settings_denial_skips_the_account_read`, and
+    `test_over_cap_account_read_trips_latch`.
+  - `test_apify_recovery_probe.py`: drop the fake account endpoints. E8's
+    two tests run on the configured cycle.
+  - `test_apify_spend_report.py`:
+    - Delete `test_inclusion_watermark_set_reports_included_settlement`.
+    - Rewrite `test_empty_ledger_reports_no_cycle_and_discovery_exhaustion`
+      → `test_empty_ledger_reports_no_cycle`.
+    - Update `test_report_for_seeded_ledger_spanning_two_cycles`.
+    - Add `test_report_prints_configured_account_state_without_observed_usage`.
+    - Keep `test_cycle_totals_match_ledger_cycle_debits` green.
+  - `test_apify_budget_schema.py`: unchanged. The schema is unchanged, and
+    the discovery-table constraint tests stay as schema tests.
+
+**E9.3 — Hard-limit refusal (402).**
+- RED first, in `tests/db/test_apify_admission.py`:
+  - `test_start_refused_with_402_trips_account_limit_latch_and_keeps_reservation`:
+    the transport answers the start with 402 `{"error": {"type":
+    "x402-payment-required", "message": "…"}}`. Expect:
+    - `StartResult(START_FAILED, "account_limit_refused", row)`;
+    - `stage_detail["start_error"]` with `status_code` 402 and
+      `error_type`;
+    - exactly one open latch with reason `account_limit_refused` for the row;
+    - the reservation still `reserved`, neither released nor reconciled;
+    - later ticks leave the row to selector 3's `orphaned_start` at its
+      deadline, unchanged.
+  - `test_start_error_other_than_402_does_not_trip_account_limit_latch` (a
+    500 and a transport error).
+- `jobs.start_provider_run`: in the `except` around `client.start_run`, after
+  `_record_start_error` commits, if `isinstance(exc, ApifyApiError) and
+  exc.status_code == 402`, call `await
+  sync_to_async(trip_latch)(LatchReason.ACCOUNT_LIMIT_REFUSED,
+  provider_run_id=row.pk)` and return the result above. Otherwise, keep the
+  current behavior. Add a comment that cites MS2-D-48 and why the type string
+  is not matched.
+- Make the E5 and E6 report and shortlist text show the new latch reason. No
+  code change is expected beyond the enum member.
+
+**E9.4 — Remove the retired machinery.**
+- `client.py`: delete `get_account_limits`, `get_monthly_usage`,
+  `get_account_plan`, `AccountLimits`, `AccountPlan`, `MonthlyUsage`,
+  `DailyUsage`, and any helper used only by them (check `_service_usd` and
+  `_opt_positive_int`), plus the module docstring's account bullet and the
+  `GET /v2/users/me` wire-name note.
+- `ledger.py`: delete `AccountReader`, `RefreshOutcome`, `_Plan`,
+  `_plan_limits_read`, `_count_cycle_read`, `_record_cycle`,
+  `_record_snapshot`, `refresh_account_snapshot`, `_trip_over_cap`,
+  `account_read_useful`, `discovery_status`, `reset_discovery`,
+  `DISCOVERY_EXHAUSTED`, `_discovery_allowance`, the `LedgerConfig` fields
+  `max_discovery_reads`, `discovery_read_interval_s`, and
+  `usage_inclusion_lag_s`, and the unused `httpx`, `AccountLimits`, and
+  `AccountPlan` imports. Remove the retired names from `__all__`. Leave
+  `CycleDiscoveryCloseReason` in the models, which are unchanged.
+- `settings.py`: delete `HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE`,
+  `…_MAX_DISCOVERY_READS`, `…_DISCOVERY_READ_INTERVAL_S`,
+  `…_ACCOUNT_SNAPSHOT_MAX_AGE_S`, and `…_USAGE_INCLUSION_LAG_S`, and update
+  the `ACCOUNT_MARGIN_USD` comment.
+- `catalog/management/commands/apify_budget_reset.py`: remove `--discovery`
+  and the `reset_discovery` import.
+- Tests:
+  - `tests/unit/test_apify_client.py`: delete
+    `test_account_limits_parsed_into_cycle_bounds`,
+    `test_account_limits_without_valid_cycle_fail_closed`,
+    `test_account_plan_parsed_from_users_me`,
+    `test_account_limits_parse_data_retention_days`, and every monthly-usage
+    test. Add `test_client_has_no_account_read_methods`.
+  - `tests/unit/test_settings.py`: add
+    `test_retired_account_read_settings_are_absent`, and update
+    `test_budget_keys_absent_take_the_plan_defaults`.
+  - The command's tests: `apify_budget_reset --discovery` is rejected as an
+    unknown option.
+  - RED first: `tests/db/test_apify_no_account_reads.py::test_no_runtime_module_references_account_endpoints`.
+    No file under `src/hw_radar/` may contain `/v2/users` or `users/me`. It
+    fails until `client.py` loses the account reads, and it is green at this
+    task's commit.
+
+**E9.5 — Environment and docs.**
+- Do not add the new settings to any committed environment file. They are
+  account values, rendered by the operator from the verification.
+- In `docs/TODO.md`, the F5a prerequisites gain the operator verification
+  and the five settings, and lose "verify the runtime token's account reads".
+  The Actor **Read** grant for the runtime token is added.
+- `docs/STATUS.md`: one line for revision 12.
+- `docs/handoff/credentials.md` is already updated by the revision-12
+  decision record.
+
+**E9.6 — Close-out.**
+- Gate.
+- `makemigrations --check --dry-run` reports no changes.
+- The regression tests of E9.2 through E9.4 pass.
+- Record in this plan's E9 a *Landed* note with the commit IDs.
+- The Codex targeted review of revision 12 runs before E9.1 starts. It is
+  pending in *Review lineage*.
 
 ## Slice F — Pilot sources, measurement, end-to-end proof
 
@@ -5952,9 +6733,21 @@ succeeded (revision 5).
   of R38, set as `…_CALL_BILLING_RESIDUAL_ACCEPTED` (given 2026-09-25). Second, the D1 follow-up
   landed in the deployed Actor build. Third, the capability probe run under
   an operator `probe` reservation (MS2-D-46).
+  Revision 12 (owner decision (s5, 2026-09-25), R25): F5a is no longer gated on the runtime
+  token's account reads, because the runtime makes none (MS2-D-48). It gains
+  three gates. First, E9 has merged. Second, the five MS2-D-48 settings are
+  set in the proof environment from an operator verification made with the
+  operator key outside the application; that key is never rendered to the
+  proof environment. Third, the runtime token has **Read** on the Hardware
+  Radar Actor (R25), which runs and builds need. `…_STORAGE_MAX_LIFETIME` is
+  checked against the configured `…_ACCOUNT_DATA_RETENTION_DAYS`.
   1. Create the synthetic site with its idempotent setup command, in a
      non-production environment (MS2-D-42), and claim the cycle's ledger
      authority there (`apify_ledger_claim --origin`, MS2-D-45).
+     Revision 12 (owner decision (s5, 2026-09-25), R25): before the claim, run the MS2-D-48
+     operator verification with the operator key outside the application,
+     and set the five settings. The claim then materializes the configured
+     cycle, and no denied start is needed first.
   2. Reserve the build (`apify_operator_reserve --kind build`, MS2-D-46), deploy
      `hw-radar-synthetic-collector` by the MS2-D-43 procedure, verify the push
      uploaded only the Actor directory, bind the build to its reservation
@@ -5995,6 +6788,20 @@ succeeded (revision 5).
        unexplained difference is recorded as such, never subtracted;
      - (revision 11, R10-02) the run's reported transfer against the Actor's
        counted wire bytes, including a `truncate_bytes` run.
+
+     Revision 12 (owner decision (s5, 2026-09-25), R25): every step above that reads account
+     state is an **operator-side** read. These are the post-run account usage
+     diff, the `date`-parameter cycle read, whether account reads bill, and
+     the R38 per-call `dailyServiceUsages` deltas, including the "account-read
+     batch" item, which now measures operator-key reads only. They use the
+     operator key from the workstation or the Console, never the application,
+     and each read counts as one record read of an operator `inspect`
+     reservation made before the session (MS2-D-46, -48). The operator
+     reserves further envelopes as needed within the 1.00 operator allowance.
+     The account usage inclusion lag is no longer measured for a setting,
+     because `…_USAGE_INCLUSION_LAG_S` is retired. Record whether the
+     observed cycle and limit still match the configured values (R39), and
+     run one MS2-D-48 *Operator reconciliation* at the end of the proof.
 
      Any bound lowered, or R38 narrowed, from these results needs a plan
      revision. F5a shows typical billing, not a worst case (MS2-D-32
@@ -6038,7 +6845,7 @@ drive matcher (ADR 0019, R5).
 | --- | --- | --- | --- |
 | R1 | **Actor-proof source is an owner (legal) decision.** Newegg's Terms of Use (kb.newegg.com policy-agreement page, retrieved 2026-09-24) prohibit access "through any automated means, including ... scripts or web crawlers" and to "'Scrape' ... the Site for any purpose". No non-commercial carve-out was observed. Its robots.txt (retrieved 2026-09-24) fully blocks the `ChangeDetection` price-watch user agent, though it does not disallow product or search paths generally. No sanctioned data feed exists: the affiliate program (Rakuten) is link-based, and the Marketplace API is seller-only. Newegg is therefore **excluded** unless the owner decides otherwise. Whether that KB page is the footer-linked canonical ToU is unconfirmed. B&H, ServerPartDeals, and refurbished server-parts sellers are candidates only after a ToS/robots review. Apify execution does not change permissibility. Revision 5 (owner-clarified (s2, 2026-09-24)): this is now OQ24 part (b) only; each candidate needs a source-admission record (MS2-D-44), and the first Actor proof uses the synthetic source instead (MS2-D-42). | Answer OQ24 for a candidate after its admission record | F5b only |
 | R2 | **Withdrawn in revision 5 (owner-overridden, MS2-D-38).** Revision 1–4 said the separate Actor repository's product-admission gate and branch rules applied to an internal Actor. Hardware Radar Actors are now built, versioned, tested, and deployed in this repository, under its own review and gate, with no dependency on that repository's process. | — | none |
-| R3 | Account-level Apify configuration. **OQ23 is resolved** (revision 5, owner-overridden; `resolved-questions.md#oq23`): the ~$20 ceiling is the account's total cash outlay, the subscription fee counts, prepaid usage is not charged twice, and Hardware Radar uses at most the lesser of its $12 target and the remaining prepaid allowance (MS2-D-40). No deduction setting remains. Open owner actions: keep the account usage limit at or below the prepaid credit (verified equal, $19, 2026-09-24) and never raise it for Hardware Radar; create the scoped runtime token (the R25 residual; revision 9: the owner's dedicated key exists but is unscoped, so it is the operator/deploy credential only). | Keep the limit; create the scoped runtime token | E live admission; F5a |
+| R3 | Account-level Apify configuration. **OQ23 is resolved** (revision 5, owner-overridden; `resolved-questions.md#oq23`): the ~$20 ceiling is the account's total cash outlay, the subscription fee counts, prepaid usage is not charged twice, and Hardware Radar uses at most the lesser of its $12 target and the remaining prepaid allowance (MS2-D-40). No deduction setting remains. Open owner actions: keep the account usage limit at or below the prepaid credit (verified equal, $19, 2026-09-24) and never raise it for Hardware Radar; create the scoped runtime token (the R25 residual; revision 9: the owner's dedicated key exists but is unscoped, so it is the operator/deploy credential only). Revision 12 (owner decision (s5, 2026-09-25), R25): the account limit now also caps the other workloads' spend, which the runtime cannot observe (MS2-D-48). The owner actions add setting the MS2-D-48 account settings from an operator verification, and re-verifying them before re-enabling after any plan or billing change. | Keep the limit; create the scoped runtime token | E live admission; F5a |
 | R4 | GPU/RAM/CPU auto-accept needs an owner-ratified category corpus. The drive corpus does not validate other categories. | Label/ratify F4 corpora | Flipping `auto_accept` |
 | R5 | MS-1e drive-matcher ratification is still pending, and all sources ship disabled. The real-observation exit proof (AC-3 live) needs the owner to enable pilot sources. | Ratify; enable | F6 |
 | R6 | GPU/RAM/CPU reference seeds come from first-party pages. The ToS/licence of each manufacturer spec page should be spot-checked. Curated manual rows are the fallback. | Spot-check | B4 authoritative flag |
@@ -6060,7 +6867,7 @@ drive matcher (ADR 0019, R5).
 | R22 | MS2-D-31's per-scope tolerance uses the FULL lane interval. If Actor runs rotate scopes more slowly than that, per-scope continuity keeps restarting. That fails closed (stale absence does not fire), but it can hide real absence until a complete sweep. | Revisit if per-scope cadence becomes configurable | none |
 | R23 | MS2-D-35 residual. Stale-absence sweeps raise no scope watermark, and `last_seen` is `auto_now`, so an import stamps it at persistence time rather than at `observed_at`. A delayed current-eligible import therefore makes a listing look fresher to stale absence by up to the import delay, which the storage deadline bounds (default 24 h). A previously unknown key that a stale sweep would have treated as absent stays active for about one grace longer. This fails toward keeping a listing active, never toward a false delist. Preserved property (revision 5, verbatim): "a delayed import may delay a correct delist, never cause a false delist". Any improvement needs out-of-order tests (MS2-D-39). The fix, stamping `last_seen` from `observed_at` on the import path, touches the `auto_now` contract that `redact_merchant_content` documents. **Kept (Slice D entry gate, 2026-09-25; revision 10, ED-02):** an accepted MS-2 residual, with no change to `last_seen` stamping in D2 or D10. The effect only ever keeps a listing active; it is bounded by `storage_cleanup_due_at − startedAt ≤ …_STORAGE_CLEANUP_MAX` (default 24 h), because stage 1 re-checks the deadline; it touches only stale absence, which remote runs never reach, and bounded classes have no Actor path (MS2-D-33), so it affects only a merchant-fact source's stale sweep after a switch back to local. Stamping from `observed_at` would need `QuerySet.update()` writes that bypass the `auto_now` contract `mark_delisted`, `redact_merchant_content`, and `redact_expired` rely on (`market.py:285-290`, `:369`, `:399-402`, `:477-479`), or removing `auto_now` across every local writer and the frozen tests that backdate `last_seen`. The property is pinned by MS2-D-30's binding `last_seen` rule and D10's tests `test_current_eligible_observation_bumps_last_seen_and_ineligible_does_not`, `test_listing_observed_in_previous_run_is_not_stale_delisted_within_grace`, and `test_delayed_import_bumps_last_seen_only_forward_and_only_when_current_eligible`. *Reopen if* a bounded source gains an Actor path, or remote runs become stale-eligible. | — (accepted at the entry gate) | none |
 | R24 | **Resolved (owner decision, 2026-09-25; [OQ25](../../resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope)).** `.mcp.json` stays unchanged, with the four anonymous read-only Apify tools, so MCP cannot yet inspect runs, logs, datasets, or KV records. MS2-D-43's read-only list is the target filter, enabled only once a scoped read credential and operator reservations (MS2-D-46) exist. `call-actor`, the RAG web browser, abort, and the task tools stay excluded. The unscoped operator/deploy key is not an MCP credential, and any MCP token stays out of this public repository. MCP is an operator surface, not the runtime protocol; MCP dataset reads are billed account usage (operator allowance). | — (enable the target filter only when its conditions hold) | none; operator inspection uses the CLI or Console under reservations until then |
-| R25 | **Partly resolved (owner decision, 2026-09-25; [OQ25](../../resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope)).** The owner created a dedicated Hardware Radar Apify key, stored at OpenBao `secret/apps/hw-radar/agent/apify`, distinct from the apify-actors venture's token, which Hardware Radar never uses. A 2026-09-25 capability probe showed it is unscoped (full account): it reads account limits and monthly usage and can create Actors, which Apify never allows a scoped token to do. It therefore serves the operator/deploy role only and is never rendered to the production app environment (MS2-D-43). **Residual:** the runtime role needs a separate, owner-created scoped token at `secret/apps/hw-radar/apify`, rendered as `HW_RADAR_APIFY_TOKEN`; its production rendering is deferred until Slice E live admission is ready. Unverified until it exists: whether a scoped token can read `/users/me/limits` and `/users/me/usage/monthly` (MS2-D-15, -40; if not, admission denies with `account_state_unobservable`), and whether the owner's scope (run Hardware Radar-owned Actors, read their runs and default storages) also covers the storage deletes MS2-D-33 needs. Revision 10 (entry gate, ED-19): the same capability probe records whether a delete against storage the token cannot access returns 403 rather than 404, using a throwaway storage created with the operator key under an operator reservation; only then may `…_DELETE_404_IS_ABSENT` be set true (MS2-D-25). Until then a 404 on delete is a failed attempt, which fails closed. | Create the scoped runtime token; confirm its account reads, storage deletes, and 403-for-inaccessible behavior | D3 live verification; E live admission; F5a |
+| R25 | **Partly resolved (owner decision, 2026-09-25; [OQ25](../../resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope)).** The owner created a dedicated Hardware Radar Apify key, stored at OpenBao `secret/apps/hw-radar/agent/apify`, distinct from the apify-actors venture's token, which Hardware Radar never uses. A 2026-09-25 capability probe showed it is unscoped (full account): it reads account limits and monthly usage and can create Actors, which Apify never allows a scoped token to do. It therefore serves the operator/deploy role only and is never rendered to the production app environment (MS2-D-43). **Residual:** the runtime role needs a separate, owner-created scoped token at `secret/apps/hw-radar/apify`, rendered as `HW_RADAR_APIFY_TOKEN`; its production rendering is deferred until Slice E live admission is ready. Unverified until it exists: whether a scoped token can read `/users/me/limits` and `/users/me/usage/monthly` (MS2-D-15, -40; if not, admission denies with `account_state_unobservable`), and whether the owner's scope (run Hardware Radar-owned Actors, read their runs and default storages) also covers the storage deletes MS2-D-33 needs. Revision 10 (entry gate, ED-19): the same capability probe records whether a delete against storage the token cannot access returns 403 rather than 404, using a throwaway storage created with the operator key under an operator reservation; only then may `…_DELETE_404_IS_ABSENT` be set true (MS2-D-25). Until then a 404 on delete is a failed attempt, which fails closed. **Revision 12 (owner decision (s5, 2026-09-25), R25).** The scoped runtime token exists (2026-09-25). Its account reads return 403, and Apify offers no scoped account permission, so the owner dropped runtime account reads (MS2-D-48, [OQ30](../../resolved-questions.md#oq30--runtime-apify-account-reads-r25)). The account-read part of this residual is **closed**. Still open: the token needs **Read** on the Hardware Radar Actor for `GET` runs and builds (its pre-probe got 404), and the 403-versus-404 delete probe under an operator `probe` reservation (`…_DELETE_404_IS_ABSENT` stays false until then). | Create the scoped runtime token; confirm its account reads, storage deletes, and 403-for-inaccessible behavior | D3 live verification; E live admission; F5a |
 | R26 | Usage finalization is unverified on this account: Apify documents a preliminary first figure and advises a re-read after about 10 s, but the actual settle time is unmeasured. Revision 6 (R5-03): elapsed time is only a minimum delay; settlement needs identical consecutive reads, and the default `…_RUN_USAGE_SETTLEMENT=bound` returns no capacity until F5a's readings converge. | Review F5a's finalization trail; approve `stable_reads` only if it converges | E accuracy |
 | R27 | Post-run consumption (dataset reads, storage, transfer) is unmeasured, so the post-run cost counts at its full bound, which makes admission tighter than actual spend. The account is shared: other workloads (the apify-actors venture) reduce the prepaid allowance Hardware Radar may use (bounded only by R33). Revision 6: two environments in one cycle are governed by the ledger authority and drained handoff (MS2-D-45), replacing revision 5's target reduction. | Approve `counted` mode after F5a | E live admission |
 | R28 | The residential-proxy feature is available on the account (verified 2026-09-24), so nothing at the account level stops an Actor from using it. Code tests, the input schema, and the proxy usage latch are the controls (MS2-D-26, MS2-D-38, MS2-D-44). | — | none |
@@ -6073,7 +6880,8 @@ drive matcher (ADR 0019, R5).
 | R35 | The first ledger authority in a cycle (`apify_ledger_claim --origin`, MS2-D-45) rests on an owner attestation that no other environment admitted paid work that cycle; every later authority is machine-checked (continuation, or a drained handoff bound to one destination ledger, revision 7). Residual: a handoff record is a digest-keyed file, not a cryptographically signed one, so the checks protect against mistakes, not against deliberate hand-editing. | Attest only when true | E live admission |
 | R36 | Operator reservations (MS2-D-46) are a procedural control: the Console, CLI, and MCP cannot be intercepted, so an operation run without a reservation is unaccounted. Revision 9 (owner decision, 2026-09-25; [OQ29](../../resolved-questions.md#oq29--operator-allowance-size)): the allowance defaults to 1.00 per cycle, replacing the 0.50 assumption under which one build bound ($0.41) nearly filled it. Revision 11 (R10-12) states the fit by formula. One build reservation is `build_reservation = …_OPERATOR_BUILD_BOUND_USD + (…_MAX_RUN_POLLS + …_MAX_CORRECTION_READS) × api_call_bound` (MS2-D-46). Two fit when `2 × build_reservation ≤ …_OPERATOR_ALLOWANCE_USD < 3 × build_reservation`. At the defaults and Starter prices (approximate; `api_call_bound ≈ $0.000181`, MS2-D-32), one is about $0.423, two about $0.846 (about $0.154 left for inspection and probe envelopes), and a third, about $1.269, does not fit. Revision 9's "$0.82 … leaving $0.18 … $1.23" omitted the call allowance. Under the default `bound` settlement a settled build returns little capacity, so at most two builds fit per cycle, fewer when inspection envelopes are reserved, until F5a evidence allows `stable_reads`. | Reserve before every build or inspection; changing the allowance is an owner decision | F5a deployment cadence |
 | R37 | (Revision 7; revised in revision 8.) Correction monitoring (MS2-D-41, selector 4) runs for a fixed window after a row's last charge (default seven days, an assumption) and closes only when a successful closing read at or after the deadline commits. A provider correction that arises after that closing read is not observed by any environment; window closure is not provider finality. Under the default `bound` settlement the settled amount already equals the enforced execution bound, so the exposure matters mainly under `stable_reads`. The window delays a drained handoff by at least one window (MS2-D-45). Revision 8 residual: a closing read that can never succeed (for example, a run or build record no longer returned) keeps its obligation open, visible as `correction_close_overdue`, and blocks handoff indefinitely; that fails closed, and any release of such an obligation would need a plan revision. | Choose `stable_reads` only if F5a's read trail shows no correction after half the window | E accuracy under `stable_reads`; handoff timing |
-| R38 | **Owner acceptance required (revision 11, R10-01).** Apify's documents name the billing units: compute, data transfer, proxy, and storage reads, writes, lists, and timed storage (`docs.apify.com/platform/actors/running/usage-and-resources`, `apify.com/pricing`, retrieved 2026-09-25). They do not state (a) how many operations one API call is metered as, (b) which bytes are metered as transfer, or (c) the per-call overhead of the Actor SDK's platform calls inside a run. MS2-D-32 *Per-call bound* derives everything the documents support and enforces wire-byte ceilings: a response-body cap, httpcore's response-header limit, a request-body cap, and a pinned socket receive buffer. For the rest it assumes (a) at most one operation per item or record a call returns or deletes, and one for a call that returns none; (b) at most the call's wire bytes; and (c) that the run's own usage breakdown, settled at `max(execution bound, every observed read)`, reveals the overhead, with an actual above the reservation tripping the latch. If an assumption fails, the enforced call counts limit the damage, but no documented monetary ceiling exists. Snapshot check 1 and `external_liability_exceeded` (MS2-D-40) detect it after the fact, because the account figure contains any under-priced charge. At the defaults, the modeled per-run call and transfer bounds come to a few cents (MS2-D-32 illustrative figures). | **Accepted by the owner 2026-09-25** (`…_CALL_BILLING_RESIDUAL_ACCEPTED` defaults to that date). Re-review if F5a's measurements contradict an assumption | E live admission; F5a |
+| R38 | **Owner acceptance required (revision 11, R10-01).** Apify's documents name the billing units: compute, data transfer, proxy, and storage reads, writes, lists, and timed storage (`docs.apify.com/platform/actors/running/usage-and-resources`, `apify.com/pricing`, retrieved 2026-09-25). They do not state (a) how many operations one API call is metered as, (b) which bytes are metered as transfer, or (c) the per-call overhead of the Actor SDK's platform calls inside a run. MS2-D-32 *Per-call bound* derives everything the documents support and enforces wire-byte ceilings: a response-body cap, httpcore's response-header limit, a request-body cap, and a pinned socket receive buffer. For the rest it assumes (a) at most one operation per item or record a call returns or deletes, and one for a call that returns none; (b) at most the call's wire bytes; and (c) that the run's own usage breakdown, settled at `max(execution bound, every observed read)`, reveals the overhead, with an actual above the reservation tripping the latch. If an assumption fails, the enforced call counts limit the damage, but no documented monetary ceiling exists. Snapshot check 1 and `external_liability_exceeded` (MS2-D-40) detect it after the fact, because the account figure contains any under-priced charge. At the defaults, the modeled per-run call and transfer bounds come to a few cents (MS2-D-32 illustrative figures). Revision 12 (owner decision (s5, 2026-09-25), R25): the after-the-fact runtime detection by check 1 and `external_liability_exceeded` is retired. Detection is now the operator's cycle reconciliation, F5a step 4, and Apify's 402 (`account_limit_refused`). The owner accepted R38 before this change; R39 asks whether that acceptance still holds. | **Accepted by the owner 2026-09-25** (`…_CALL_BILLING_RESIDUAL_ACCEPTED` defaults to that date). Re-review if F5a's measurements contradict an assumption | E live admission; F5a |
+| R39 | **New (revision 12, owner decision (s5, 2026-09-25), R25).** The runtime no longer observes account state (MS2-D-48). (a) The other workloads' actual spend is invisible. Only `E` (5.00) and Apify's hard limit (verified $19, equal to the prepaid credit) bound it, and Apify documents enforcement deviation of about 10%. (b) Cycle drift: a plan or billing change moves the real cycle, and the runtime keeps the configured anchor until the operator re-verifies. Hardware Radar's spend in one real cycle could then span two derived cycles. Its cash exposure stays behind the account limit, but it could consume the other workloads' share. (c) The configured limit, base price, and retention can go stale in the same way. Mitigations: a billing change is an owner action; re-verification is required before re-enabling; a 402 start refusal latches (`account_limit_refused`); the operator's cycle reconciliation; a backward anchor move denies `cycle_unknown`. **Owner points:** (1) whether to add a re-verification age, for example `…_ACCOUNT_VERIFIED_ON` within the current cycle; (2) whether R38's acceptance stands without after-the-fact runtime detection; (3) whether master spec C-011's "prepaid allowance actually remaining" is satisfied by Apify's limit, or needs a spec clarification. | Owner answers points 1–3; operator verification before enabling | E9; F5a |
 
 No new ADR or OQ file is created by this plan. Revision 5: OQ23 is resolved and
 OQ24 split by the owner's 2026-09-24 decisions, recorded in
@@ -6086,11 +6894,19 @@ decisions ([OQ25](../../resolved-questions.md#oq25--hardware-radar-apify-credent
 [OQ29](../../resolved-questions.md#oq29--operator-allowance-size)), recorded in `resolved-questions.md`
 and ADR 0021's 2026-09-25 amendment (not by this plan). R24, R31, R32, R33, and
 R36 are resolved, and R25 is resolved except for its runtime-token residual.
+Revision 12 (owner decision (s5, 2026-09-25), R25): that residual's account-read part is closed
+by MS2-D-48. Its Actor Read grant and delete-probe parts stay open.
 R12 still offers an optional ADR for MS2-D-07. The owner items this plan still
 needs are:
 
 - the scoped runtime token at `secret/apps/hw-radar/apify` and the
   verification of its account reads (the R25 residual);
+  Revision 12 (owner decision (s5, 2026-09-25), R25): the token exists and cannot read the
+  account, and MS2-D-48 removes the need. What remains is the token's Actor
+  **Read** grant, the delete probe, and the operator verification that sets
+  the five MS2-D-48 settings;
+- (revision 12) the R39 owner points: a re-verification age, whether R38's
+  acceptance stands, and the C-011 wording;
 - the R35 attestation at the first origin claim;
 - F4 corpus labeling and ratification (R4), and the MS-1e drive-matcher
   ratification and pilot-source enabling (R5), which stays a distinct gate that
@@ -6449,6 +7265,15 @@ with no new critical or high finding. Both were completed in-house in revision
 
 The column goes into Slice E's unmerged `0022`. The review loop closes here:
 later medium or low issues are handled in implementation review.
+
+**Revision 12 (owner decision (s5, 2026-09-25), R25).** No review round
+produced this revision. The owner decided on 2026-09-25 to drop runtime
+account reads after the scoped-token evidence. MS2-D-48 and E9 carry it.
+A Codex targeted review of revision 12 is **pending**, and it should run
+before E9 starts. The review should focus on the anchor derivation and
+conflict rules, the admission order, the 402 classification, the
+retired-machinery list, and whether any invariant listed as unchanged was
+weakened.
 
 ## Next slice after A
 
