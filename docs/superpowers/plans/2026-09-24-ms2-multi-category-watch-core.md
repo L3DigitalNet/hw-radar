@@ -4647,6 +4647,10 @@ the then-current code. D-prep (D1, D3) is not gated.
     crosses the cap in raw bytes while decoding little). The existing
     `test_byte_and_time_limits_binding_on_one_chunk_are_both_reported`
     stays unchanged.
+  - Landed 2026-09-25 (Actor side). The drift test above and the estimator
+    test below land in **E2** with the estimator constants they compare
+    against (`HTTP_READ_CHUNK_BYTES`, `request_wire_overhead`); the Actor's
+    constants are plain literals so the drift guard can read them.
   - hw-radar estimator test (E2):
     `test_apify_budget.py::test_transfer_bound_covers_actor_overshoot_of_one_read_and_in_flight_window`.
     With `maxBytes = B`, it covers `B − 1` counted bytes, then a final
