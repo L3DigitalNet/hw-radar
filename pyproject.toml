@@ -82,6 +82,10 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
+# Ruff 0.16 also formats Python code blocks inside Markdown. Docs here include
+# historical plans/research and converged specs whose snippets are records, not
+# code to maintain, so the formatter stays scoped to real Python sources.
+exclude = ["*.md"]
 
 [tool.basedpyright]
 include = ["src", "tests"]
