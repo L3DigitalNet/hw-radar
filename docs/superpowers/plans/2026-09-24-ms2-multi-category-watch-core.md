@@ -5665,6 +5665,34 @@ the then-current code. D-prep (D1, D3) is not gated.
       `test_rebinding_a_different_build_id_is_refused`;
       `test_build_row_without_build_id_stays_at_bound_and_never_reconciles`;
       `test_inspection_settle_sets_last_charge_at_and_no_correction_obligation`.
+  - Landed 2026-09-25 (E4). `acquisition/apify/reconcile.py` holds settlement,
+    selector 4, build binding and settlement, and the envelope settle; the
+    latch primitives (`trip_latch`, `clear_latch`, the estimator-version clear
+    inside `reserve`) are in `ledger.py`. `jobs.apify_poll_tick` runs the
+    selector-2 reconcile unit, bound-build reads, and selector 4, and takes
+    `ledger_config` and `clock`. D hand-offs: stage 5, Reject, and the
+    verified-deletion commit stamp `final_charge_op_at` once; the latch trips
+    on `delete_failed` at the cap, `orphaned_start_at`, a start mismatch, an
+    observed restart, a dataset over `max_items`, and an over-cap response,
+    each after the row transaction commits. Every test named above is in
+    `test_apify_ledger.py` except the kill-switch test and
+    `test_start_option_mismatch_aborts_and_trips_latch` (`test_apify_poll_job.py`).
+    E3 residuals: 0022 exempts `denied` rows from the envelope CHECK (a
+    denied envelope row is persisted with its set limits) and adds
+    `ApifySpendReservation.reason`, `probe_dataset_id`, and
+    `ApifyCycleDiscovery.reason` (an `owner_reset` close needs it).
+    `ApifyUsageRead` refuses update and delete at the model and queryset
+    level, and refuses a read whose `provider_run` is not its reservation's.
+    Choices this plan left open: `bound` mode settles on the first eligible
+    non-null read; the stable-read settled figure is the highest eligible
+    read; the latch trip is idempotent per open (reason, run); a stage-1
+    re-read is blocked only when `dataset_read_count ≥ 1`; counted post-run
+    storage is priced over admission-to-deletion hours and falls back to the
+    bound when a price is unset; stale selector-4 markers are resolved at
+    every tick against the process start (`jobs.PROCESS_STARTED_AT`), because
+    the poller service is outside this slice. Not wired: the KV-store byte-cap
+    trip (the importer never sees the OUTPUT record's size; `provider.py`
+    would have to expose it).
 - **E5 — Wire admission.** Replace `DenyAllAdmission` with the ledger in the
   start job, and derive `budget_paused` into C's freshness.
   - Tests: `test_denied_start_records_denial_and_starts_nothing`;

@@ -321,6 +321,9 @@ def _tally(
     Raises BudgetDenied when the discovery allowance cannot be priced; callers
     decide whether that denies (reserve) or refuses (export).
     """
+    # Cross-file contract: report._place re-implements this per-row cycle
+    # membership for attribution; change both together (pinned by
+    # test_apify_spend_report.py::test_cycle_totals_match_ledger_cycle_debits).
     g = _guard(config)
     tally = _Tally()
     # SQL prefilter only; the exact MS2-D-34 predicate is applied per row

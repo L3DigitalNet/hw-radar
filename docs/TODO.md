@@ -68,11 +68,9 @@ Instructions for AI agents:
   start response has no storage ids to delete, residual R21 + E latch; `delete_failed` at the
   attempt cap; overdue cleanup *starts* at the deadline). No production path can start a live
   run. Live Actor runs remain owner-gated (scoped runtime token, Slice E admission, operator
-  reservation before any build). Remaining hand-offs to E/F5a: E sets the write-once
-  `final_charge_op_at` at the later of the import-terminal and storage-deleted commits and trips
-  the latch on `delete_failed` at the cap, `orphaned_start_at`, `stage_detail.start_mismatch`,
-  and `restart_count`; E5 replaces `BUDGET_ADMISSION` and records probe budget denials as ledger
-  rows (D12 only logs them); F5a registers the synthetic site's `ActorRunSpec` in
+  reservation before any build). Remaining hand-offs to E/F5a (E4 landed the
+  `final_charge_op_at` stamp and the D-side latch trips): E5 replaces `BUDGET_ADMISSION` and
+  records probe budget denials as ledger rows (D12 only logs them); F5a registers the synthetic site's `ActorRunSpec` in
   `jobs.RUN_SPECS` (empty in production, so every `apify` source is refused `no_run_spec`). Open:
   the start job does not yet refuse a new FULL start while a previous run of the same scope is
   outstanding (only PROBE runs have the one-outstanding rule, D12). Apify push/build/run: none
@@ -91,14 +89,19 @@ Instructions for AI agents:
   (reserve only), `apify_budget_reset --discovery`; 0022 gained the authority's
   `imported_record_digest` and `handoff_record`). **E6 done** (`acquisition.apify.report` and the
   read-only `apify_spend_report` command: per-cycle figures, attribution, unsettled/overrun rows,
-  trailing-31-day trend). **Next:** E4 reconcile/latch (take
-  `ledger.take_budget_lock` first; add `apify_operator_reserve --settle` and the latch
-  `apify_budget_reset --reason`; mirror any `ledger._tally` predicate change in `report._place`,
-  pinned by `test_cycle_totals_match_ledger_cycle_debits`), E5 binding (`BudgetRequest` must add `maxRequests`/`maxBytes`;
-  refresh the snapshot before `reserve`, attach the provider_run to the reserved row), E8,
-  E7. E4 owns the write-once rules the schema cannot express (`usage_finalized_usd`,
-  `provider_build_id`, `provider_run.final_charge_op_at`) and `ApifyUsageRead` append-only; E3
-  writes none of those fields. Owner/operator before F5a: set the eight unit prices from
+  trailing-31-day trend). **E4 done** (`acquisition.apify.reconcile`: stable-read/bound
+  settlement from the write-once work-completion anchor, post-run cost, selector-2 reconcile
+  unit and bound-build reads, selector 4 with pending markers and closing reads, MS2-D-47
+  correction re-checks; latch trips/reset/estimator-version clear in `ledger`;
+  `apify_operator_reserve --settle` and `apify_budget_reset --reason`; `ApifyUsageRead`
+  append-only; E3 residuals: denied envelope rows persisted, `--reason` stored). **Next:** E5
+  binding (`BudgetRequest` must add `maxRequests`/`maxBytes`; refresh the snapshot before
+  `reserve`, attach the provider_run to the reserved row, which is what makes selector 2
+  reconcile it), E8, E7. Mirror any `ledger._tally` predicate change in `report._place` (pinned
+  by `test_cycle_totals_match_ledger_cycle_debits`); `report.py` also derives
+  `correction_close_overdue`/`unreconciled_stale` separately from `reconcile`'s predicates.
+  Open from E4: the KV-store byte-cap latch trip is not wired (the importer never sees the
+  OUTPUT record's size; needs `provider.py` to expose it). Owner/operator before F5a: set the eight unit prices from
   `apify.com/pricing`, plus `…_MARGIN`, `…_MAX_TIMEOUT_S`, `…_MAX_KV_WRITES`, `…_MAX_KV_BYTES`,
   and `…_STORAGE_MAX_LIFETIME` (no plan defaults; unset denies).
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class

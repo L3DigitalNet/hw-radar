@@ -42,8 +42,9 @@ the same commit. A failed read closes nothing and backs off.
 
 SCOPE: no Apify call is made here; jobs.py sends the calls and hands the
 results in. Admission (reserve) and the cycle predicate are ledger.py's; the
-spend report is E6's (it reads `is_unreconciled_stale` and
-`correction_close_overdue` from here).
+spend report is report.py's, which derives its own `unreconciled_stale` and
+`correction_close_overdue` flags from the same columns. The two predicates
+here state the settlement side's definitions; keep them in step with it.
 
 Requirements: PostgreSQL (the advisory lock and row locks), a Django context
 with the catalog app, and the LedgerConfig settlement settings.
