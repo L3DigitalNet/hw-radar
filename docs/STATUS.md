@@ -21,7 +21,7 @@
   2026-08-16): Approach-A evaluator, `EvalReport`, `ms1_ratification_gate`, `harvest_corpus`. The
   live harvest/label-draft/audit/ratification/ADR-0019 flip remain the deferred owner-in-the-loop
   step; `tests/db/test_ratification_corpus.py` skips until it lands.
-- Full gate @4ba8dce (D11 leg, integrated): 1546 passed/1 skip, 96% cov; Actor 75 passed, 99%; pip-audit clean (`--skip-editable`).
+- Full gate @40b7295 (integrated): 1902 passed/1 skip, 95% cov; Actor 75 passed, 99%; pip-audit clean (`--skip-editable`).
 - **MS-2 multi-category watch-core plan converged at revision 8**
   (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`). Eight-round Codex
   delegate review lineage: r1-r4 converged rev 4 (session 1); r5 `0469e098` REVISION NEEDED (5) ->
@@ -54,7 +54,16 @@
   AC-4/5/6 fixture proofs, D11 storage cleanup, D12 provider-dispatched probes. Verifier: 10/11
   acceptance bullets hold, the storage-deadline bullet with the plan's accepted exceptions (R21).
   Production remains deny-all (`DenyAllAdmission`, empty `RUN_SPECS`, `HW_RADAR_APIFY_ENABLED`
-  false). No Apify push/build/run has occurred. Next: Slice E (budget ledger/admission), then F5a.
+  false). No Apify push/build/run has occurred.
+- **Slice E complete on `dev` 2026-09-25 (`40b7295`, not deployed):** Apify spend ledger
+  (migration `0022`, undeployed), DB-free budget policy, ledger service (advisory-lock
+  `reserve`, cycle discovery, MS2-D-45 claim/handoff, operator reservations), reconcile + overrun
+  latch + correction monitoring, `apify_spend_report` (AC-7), `LedgerAdmission` bound in
+  production, `budget_paused` in the shortlist, ledger-settled recovery probe (E8). Verifier:
+  16/16 Slice E acceptance claims hold; two crash windows it found (lost latch trips,
+  unattached reservations) fixed in `40b7295`. FULL Actor starts are refused while a same-scope
+  run is outstanding (`3c117c9`). Production still cannot start or pay for a run: `RUN_SPECS`
+  empty, kill switch off, no Actor id, unit prices unset. F5a prerequisites are in `docs/TODO.md`.
 - **Owner decisions 2026-09-25 (OQ25–OQ29 resolved):** Apify credential split — unscoped
   operator key `secret/apps/hw-radar/agent/apify`, scoped runtime token pending; $5.00/cycle
   external-liability bound; no new non-first-party retention class; MS-2 exits on the

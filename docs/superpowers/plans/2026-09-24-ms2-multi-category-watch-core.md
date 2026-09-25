@@ -5821,6 +5821,18 @@ the then-current code. D-prep (D1, D3) is not gated.
   its conditions hold (R24), the external-liability bound is 5.00 by default
   (R33), and the operator allowance is 1.00 by default (R36). OQ23 is
   resolved; no deduction setting remains.
+  - *Landed 2026-09-25 (`40b7295`).* A read-only verifier held all 16
+    acceptance claims below at `ca4b9c2`. It found two crash windows, fixed in
+    `40b7295`: the orphaned-start and delete-attempts-exhausted latch trips now
+    commit with their row mark and are re-detected every tick, and runtime
+    reservations left without a `provider_run` past
+    `HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S` (900) are released (MS2-D-32
+    *Settlement*: `released` = a start that never ran; row-before-start makes
+    that provable). Owner tasks are recorded in `docs/TODO.md` as the F5a
+    prerequisites, including the settings with no plan default (the eight unit
+    prices, `…_MARGIN`, `…_MAX_TIMEOUT_S`, `…_MAX_KV_WRITES`,
+    `…_MAX_KV_BYTES`, `…_STORAGE_MAX_LIFETIME`, `…_LEDGER_ID`, `…_ACTOR_ID`).
+    Settled as recorded above: R24, R33, R36; OQ23.
 
 **Acceptance:** AC-7 holds. Admission fails closed on the kill switch, at the
 class cap, at either account check (with reconciled spend still debited and the
