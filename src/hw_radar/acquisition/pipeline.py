@@ -41,7 +41,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import statistics
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import date, datetime
 
 from asgiref.sync import sync_to_async
@@ -58,12 +58,15 @@ from hw_radar.acquisition.contracts import (
     ListingResolver,
     NormalizedListing,
     ParsedListing,
+    ProviderRunEvidence,
     RawBatch,
+    ScopeSweepReport,
     SourceAdapter,
 )
 from hw_radar.acquisition.persist import ObservationRetention
 from hw_radar.acquisition.providers import (
     LocalCollectionProvider,
+    aggregate_local_evidence,
     counts_toward_sweep_continuity,
     gate_delist_scope,
 )
@@ -139,6 +142,12 @@ def _median_body_bytes(site: SourceSite) -> int | None:
     # A run that predates provider evidence has no "provider" key and is local.
     # Without this filter, a window of remote runs after a provider switch would
     # replace the page-size basis and soft-block the next ordinary local run.
+    #
+    # The basis still averages over every item of a run, including items that
+    # opt out of the comparison (RawItem.body_size_comparable, e.g. eBay's
+    # short final sweep pages). They can only pull the average DOWN, which
+    # makes the rule less sensitive for the remaining full pages, never
+    # trigger it; a few-KB challenge page stays far below either basis.
     rows = (
         ScraperRun.objects.filter(source_site=site, status=RunStatus.SUCCESS, run_kind=RunKind.FULL)
         .filter(
@@ -161,7 +170,9 @@ def _classify_batch(batch: RawBatch, *, expects_json: bool, median: int | None) 
             content_type=item.content_type,
             expected_json=expects_json,
             body_text=item.payload_text or "",
-            median_body_bytes=median,
+            # RawItem.body_size_comparable: a legitimately short page (the last
+            # page of a paginated sweep) skips only the body-size rule.
+            median_body_bytes=median if item.body_size_comparable else None,
         )
         if verdict is not None:
             raise FetchFailure(verdict, f"{item.url} classified {verdict}")
@@ -348,9 +359,20 @@ async def run_collection(
         # shorten the window — the conservative direction for stale absence.
         #
         # The swept scope is the DelistScope's scope_key; a scope-less run swept
-        # the legacy NULL scope (MS2-D-31).
+        # the legacy NULL scope (MS2-D-31). A local adapter that sweeps several
+        # scopes in one run (MultiScopeDelistDetector, the eBay category sweeps)
+        # goes through _apply_scope_reports instead, which applies these same
+        # rules once per swept scope.
         delisted = 0
-        if effective_kind is RunKind.FULL:
+        scope_outcomes: list[dict[str, object]] | None = None
+        reports = (
+            _scope_reports(provider, batch, parsed) if effective_kind is RunKind.FULL else None
+        )
+        if reports:
+            evidence, delisted, scope_outcomes = await _apply_scope_reports(
+                site, provider, batch, parsed, reports
+            )
+        elif effective_kind is RunKind.FULL:
             scope = provider.delist_scope(batch, parsed)
             evidence = provider.run_evidence(batch, parsed, scope, run_kind=effective_kind)
             delisted = await absence_local(
@@ -385,6 +407,8 @@ async def run_collection(
             "listings_delisted": delisted,
             "provider": evidence.model_dump(mode="json"),
         }
+        if scope_outcomes is not None:
+            run.detail_json["scopes"] = scope_outcomes
         if batch.scrapy_stats:
             run.detail_json["scrapy_stats"] = _filter_scrapy_stats(batch.scrapy_stats)
         run.status = RunStatus.SUCCESS
@@ -400,6 +424,79 @@ async def run_collection(
         return await _finalize_failure(run, exc.failure_class, str(exc), effective_kind)
     except Exception as exc:  # every crash must classify + record (NFR-001)
         return await _finalize_failure(run, classify_exception(exc), repr(exc), effective_kind)
+
+
+def _scope_reports(
+    provider: CollectionProvider, batch: RawBatch, parsed: list[ParsedListing]
+) -> Sequence[ScopeSweepReport] | None:
+    """The run's per-scope sweep reports, or None for the single-scope path.
+
+    Only a LocalCollectionProvider is asked (MultiScopeDelistDetector): a remote
+    provider's run stays on the single-scope gate even if it grew a
+    delist_scopes method, so no remote-provider invariant depends on this path.
+    """
+    if not isinstance(provider, LocalCollectionProvider):
+        return None
+    return provider.delist_scopes(batch, parsed)
+
+
+async def _apply_scope_reports(
+    site: SourceSite,
+    provider: CollectionProvider,
+    batch: RawBatch,
+    parsed: list[ParsedListing],
+    reports: Sequence[ScopeSweepReport],
+) -> tuple[ProviderRunEvidence, int, list[dict[str, object]]]:
+    """Apply absence and continuity to each swept scope of one multi-scope FULL run.
+
+    Every scope goes through the same per-scope rules as a single-scope run —
+    gate_delist_scope, counts_toward_sweep_continuity and absence_local with
+    swept_scope_key=report.scope_key — in its own transaction, so a complete
+    sweep of one scope can only delist listings recorded under that scope
+    (apply_delist filters on collection_scope). Order is deterministic: the
+    NULL scope first, then scope keys ascending.
+
+    Two deviations from applying each report as if it were its own run:
+    - a non-NULL report with no scope BREAKS that scope's continuity (see
+      ScopeSweepReport.scope); the NULL scope keeps the single-scope rule;
+    - when the run also swept the NULL scope, the non-NULL calls pass
+      null_scope_swept=True so they leave the NULL lane to its own sweep's
+      evidence (apply_absence, MS2-D-31).
+
+    Returns the run-level evidence (record-only; aggregate_local_evidence), the
+    total delisted, and per-scope outcomes for detail_json["scopes"].
+    """
+    ordered = sorted(reports, key=lambda r: (r.scope_key is not None, r.scope_key or ""))
+    null_swept = any(r.scope_key is None for r in ordered)
+    per_scope: list[ProviderRunEvidence] = []
+    outcomes: list[dict[str, object]] = []
+    total = 0
+    for report in ordered:
+        evidence = provider.run_evidence(batch, parsed, report.scope, run_kind=RunKind.FULL)
+        eligible = counts_toward_sweep_continuity(evidence, report.scope) and (
+            report.scope is not None or report.scope_key is None
+        )
+        delisted = await absence_local(
+            site,
+            swept_scope_key=report.scope_key,
+            eligible=eligible,
+            gated=gate_delist_scope(report.scope, evidence),
+            event_time=batch.fetched_at,
+            null_scope_swept=null_swept,
+        )
+        per_scope.append(evidence)
+        total += delisted
+        outcomes.append(
+            {
+                "scope_key": report.scope_key,
+                "pages": report.pages,
+                "complete": report.scope is not None and report.scope.complete,
+                "reason": report.reason,
+                "continuity": "recorded" if eligible else "broken",
+                "delisted": delisted,
+            }
+        )
+    return aggregate_local_evidence(per_scope), total, outcomes
 
 
 async def persist_local(
@@ -434,11 +531,14 @@ async def absence_local(
     eligible: bool,
     gated: DelistScope | None,
     event_time: datetime,
+    null_scope_swept: bool = False,
 ) -> int:
     """Run the local delist step in its own transaction, after the persist step's commit.
 
     A crash between the two transactions leaves observations without absence,
     which fails toward keeping listings active; the next complete sweep delists.
+    A multi-scope run calls this once per scope; a crash between those calls
+    leaves the remaining scopes unapplied, which fails the same way.
     """
 
     def absence() -> int:
@@ -450,6 +550,7 @@ async def absence_local(
                 eligible=eligible,
                 gated=gated,
                 event_time=event_time,
+                null_scope_swept=null_scope_swept,
             ),
             label=f"delist {site.normalized_name}",
         )

@@ -75,6 +75,7 @@ Instructions for AI agents:
   drive-corpus precision does not validate other categories.
 - [ ] Deliberately enable each source × category combination only after its operational,
   retention/ToS, completeness, match-quality, and cost gates pass.
+- [ ] re-verify eBay category ids via Taxonomy API quarterly (last 2026-09-25, tree 0 v134)
 - [ ] Add the remaining SanDisk/WD real-corpus alias verification; blocked on the owner-gated
   drive harvest / first SSD seed.
 - [ ] Confirm the first post-migration-0015 continuous-sweep log before relying on

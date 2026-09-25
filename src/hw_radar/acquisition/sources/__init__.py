@@ -5,7 +5,7 @@ from typing import Final
 
 from hw_radar.acquisition.contracts import SourceAdapter
 from hw_radar.acquisition.sources.demo import DemoAdapter
-from hw_radar.acquisition.sources.ebay import EbayAdapter
+from hw_radar.acquisition.sources.ebay import category_sweep_adapter
 from hw_radar.acquisition.sources.goharddrive import GoHardDriveAdapter
 from hw_radar.acquisition.sources.seagate import SeagateAdapter
 from hw_radar.acquisition.sources.serverpartdeals import ServerPartDealsAdapter
@@ -14,7 +14,7 @@ from hw_radar.acquisition.sources.wd import WdAdapter
 
 ADAPTERS: dict[str, Callable[[], SourceAdapter]] = {
     "demo": DemoAdapter,
-    "ebay": EbayAdapter,
+    "ebay": category_sweep_adapter,
     "goharddrive": GoHardDriveAdapter,
     "seagate-recertified": SeagateAdapter,
     "serverpartdeals": ServerPartDealsAdapter,
