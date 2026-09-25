@@ -5247,6 +5247,26 @@ the then-current code. D-prep (D1, D3) is not gated.
     listed there (revision 7 adds `handed_off_to` and
     `handoff_record_digest`), unique on `cycle_start`; the imported record's
     digest is unique.
+  - Landed 2026-09-25: the six models in `catalog/models/provider.py` and
+    `0022_apify_spend_ledger` (tables `apify_spend_reservation`,
+    `apify_usage_read`, `apify_budget_latch`, `apify_budget_cycle`,
+    `apify_cycle_discovery`, `apify_ledger_authority`), with
+    `monitoring_call_pending_since` (MS2-D-34, R10-03). Choices the plan left
+    open: `source_site` is nullable (operator rows) but required on runtime
+    rows; `estimate_usd` and `monitoring_bound_usd` are NULL only on a
+    denial (a `pricing_unverified` denial has no estimate); `denial_reason`
+    and the latch `reason` are free text with a denied ⇔ non-blank CHECK, not
+    a closed vocabulary, because E2 emits the reasons and the kill-switch
+    reason is unnamed; the inspection envelope is
+    `envelope_max_items|_record_reads|_bytes` and the probe's is
+    `envelope_max_calls`; Apify's account figures and `usage_total_usd` keep
+    `ProviderRun.usage_total_usd`'s (14,8), and hw-radar's money is (10,4);
+    the one-open discovery row is a partial unique index on `close_reason`
+    where `closed_at` is NULL. The schema holds single-row invariants only;
+    write-once rules (`usage_finalized_usd`, `provider_build_id`,
+    `provider_run.final_charge_op_at`) and `ApifyUsageRead`'s append-only
+    rule are E3/E4 service rules. Tests: `tests/db/test_apify_budget_schema.py`,
+    `tests/db/test_apify_ledger_migration.py`.
 - **E2 — Pure policy.** Implement `estimate_run_cost` (the MS2-D-26 component
   sum) and `decide_admission`.
   - Before writing the price defaults, re-verify every unit price on the

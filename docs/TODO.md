@@ -81,6 +81,10 @@ Instructions for AI agents:
   initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential
   proxy / paid third-party Actor escalation. Design is in the MS-2 plan; implementation is Slice E.
+  **E1 done** (migration `0022_apify_spend_ledger`: reservation, usage-read, latch, cycle,
+  cycle-discovery, and ledger-authority tables with their single-row CHECKs). Remaining: E2–E8.
+  E3/E4 own the write-once rules the schema cannot express (`usage_finalized_usd`,
+  `provider_build_id`, `provider_run.final_charge_op_at`) and `ApifyUsageRead` append-only.
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
   categories and both local + self-owned-Apify provider paths. Measure cost, completeness,
   identifier quality, condition/shipping coverage, freshness, and failure recovery before adding

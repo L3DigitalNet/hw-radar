@@ -23,10 +23,33 @@ in `RawPayload` under the source's registered retention (MS2-D-25).
 
 Every column a later guard reads as a bound is nullable and starts NULL, which
 means "no bound": deployed rows need no backfill (plan D2).
+
+The Apify spend ledger (MS-2 Slice E, migration 0022) lives here too, because
+its runtime rows attach to `ProviderRun`:
+
+- `ApifySpendReservation` — one row per admission decision, paid or denied,
+  runtime or operator (MS2-D-17, -26, -32, -34, -41, -46, -47).
+- `ApifyUsageRead` — append-only usage evidence; reconciliation state lives on
+  the reservation and cites these rows (MS2-D-41).
+- `ApifyBudgetLatch` — one row per overrun-latch trip and its clear (MS2-D-26).
+- `ApifyBudgetCycle` — one row per observed Apify billing cycle with the latest
+  account snapshot and the per-cycle account-read counter (MS2-D-40, -32).
+- `ApifyCycleDiscovery` — the read counter for account reads made while no
+  cycle row covers `now` (MS2-D-32 *Cycle discovery*).
+- `ApifyLedgerAuthority` — this environment's paid-admission authority per
+  cycle (MS2-D-45).
+
+The schema pins only invariants a single row can prove (state coherence,
+write-together pairs, non-negative money). Aggregates, the budget lock, and
+write-once rules that need the previous value (`usage_finalized_usd`,
+`provider_build_id`, `provider_run.final_charge_op_at`) are the ledger
+service's (E3, E4). None of these tables holds merchant content, so none is
+retention-governed.
 """
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import ClassVar
 
 from django.contrib.postgres.fields import ArrayField
@@ -327,3 +350,652 @@ class ScopeSweepContinuity(models.Model):
 
     def __str__(self) -> str:
         return f"{self.source_site_id}:{self.collection_scope}"  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no <field>_id stubs
+
+
+# ── Apify spend ledger (MS-2 Slice E, migration 0022) ──
+
+
+class ReservationStatus(models.TextChoices):
+    """Ledger row lifecycle (MS2-D-32 *Settlement*, MS2-D-41 *Usage states*).
+
+    RESERVED → USAGE_PROVISIONAL → USAGE_FINALIZED → RECONCILED; RELEASED is a
+    start that never ran, DENIED a refused admission. Every state before
+    RECONCILED counts at the full estimate (MS2-D-26 *Invariant*).
+    """
+
+    RESERVED = "reserved", "Reserved"
+    USAGE_PROVISIONAL = "usage_provisional", "Usage provisional"
+    USAGE_FINALIZED = "usage_finalized", "Usage finalized"
+    RECONCILED = "reconciled", "Reconciled"
+    RELEASED = "released", "Released"
+    DENIED = "denied", "Denied"
+
+
+class SettlementBasis(models.TextChoices):
+    """How the settled run usage was reached (MS2-D-41)."""
+
+    STABLE_READS = "stable_reads", "Stable reads"
+    BOUND = "bound", "Bound"
+    BOUND_UNFINALIZED = "bound_unfinalized", "Bound (unfinalized at deadline)"
+
+
+class PostRunCostMode(models.TextChoices):
+    """`HW_RADAR_APIFY_POST_RUN_COST_MODE` in force at reconciliation (MS2-D-41)."""
+
+    BOUND = "bound", "Bound"
+    COUNTED = "counted", "Counted"
+
+
+class OperatorKind(models.TextChoices):
+    """Kind of an `operator` reservation (MS2-D-46)."""
+
+    BUILD = "build", "Build"
+    INSPECT = "inspect", "Inspect"
+    PROBE = "probe", "Capability probe"
+
+
+class CycleDiscoveryCloseReason(models.TextChoices):
+    """Why an `ApifyCycleDiscovery` row closed (MS2-D-32 *Cycle discovery*)."""
+
+    DISCOVERED = "discovered", "Discovered"
+    OWNER_RESET = "owner_reset", "Owner reset"
+
+
+class LedgerAuthorityKind(models.TextChoices):
+    """How this environment came to hold a cycle's authority (MS2-D-45)."""
+
+    ORIGIN = "origin", "Origin (owner attestation)"
+    HANDOFF = "handoff", "Handoff (imported record)"
+    CONTINUED = "continued", "Continued at rollover"
+
+
+def _money() -> models.DecimalField[Decimal | None]:
+    """Ledger money column: hw-radar's own figures, (10,4) per plan E1."""
+    return models.DecimalField(max_digits=10, decimal_places=4, null=True, blank=True)
+
+
+def _provider_money() -> models.DecimalField[Decimal | None]:
+    # Apify's own figures keep ProviderRun.usage_total_usd's width: they are
+    # stored as reported, before the ledger compares or rounds them, so a
+    # rounding step can never make a debit smaller than the provider's number.
+    return models.DecimalField(max_digits=14, decimal_places=8, null=True, blank=True)
+
+
+def _non_negative(prefix: str, *fields: str) -> list[models.CheckConstraint]:
+    return [
+        models.CheckConstraint(
+            condition=models.Q(**{f"{field}__isnull": True}) | models.Q(**{f"{field}__gte": 0}),
+            name=f"{prefix}_{field}_non_negative",
+        )
+        for field in fields
+    ]
+
+
+_RESERVATION_MONEY = (
+    "estimate_usd",
+    "actual_usd",
+    "execution_bound_usd",
+    "post_run_liability_usd",
+    "monitoring_bound_usd",
+    "usage_provisional_usd",
+    "usage_finalized_usd",
+    "post_run_cost_usd",
+    "settled_run_usage_usd",
+)
+_RUNTIME_CLASSES = [AdmissionClass.WATCH_REFRESH.value, AdmissionClass.DISCOVERY.value]
+
+
+class ApifySpendReservation(models.Model):
+    """One admission decision in the Apify spend ledger (MS2-D-17, -32, -41, -46).
+
+    Runtime rows (`watch_refresh`, `discovery`) attach to the `ProviderRun`
+    they admitted; denials and every `operator` row have no run. A build row is
+    identified instead by `provider_build_id`, bound once by `--settle
+    --build-id`. An unreconciled row counts at `estimate_usd` in every cycle
+    from its admission onward; a reconciled row counts at `actual_usd` in every
+    cycle its charge interval `[reserved_at, last_charge_at]` touches, and
+    `monitoring_bound_usd` separately by the monitoring interval (MS2-D-34).
+
+    `reserved_at` is provenance only and never changes; `last_charge_at` is the
+    window anchor, set at reconciliation.
+    """
+
+    # ── identity ──
+    provider_run = models.OneToOneField(
+        ProviderRun,
+        on_delete=models.PROTECT,
+        related_name="spend_reservation",
+        null=True,
+        blank=True,
+    )
+    source_site = models.ForeignKey(
+        SourceSite,
+        on_delete=models.PROTECT,
+        related_name="spend_reservations",
+        null=True,
+        blank=True,
+    )
+    admission_class = models.CharField(max_length=20, choices=AdmissionClass.choices)
+    operator_kind = models.CharField(
+        max_length=10, choices=OperatorKind.choices, blank=True, default=""
+    )
+    # Apify's build id for an operator build row; written once by the settle
+    # command's binding transaction (MS2-D-46 *Build identity*).
+    provider_build_id = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    status = models.CharField(
+        max_length=20, choices=ReservationStatus.choices, default=ReservationStatus.RESERVED
+    )
+    # Free text, not a closed vocabulary: the plan names most reasons
+    # (class_cap, account_headroom, overrun_latch, cycle_unknown, ...), but
+    # the policy function that emits them is E2's, and a reason it adds must
+    # still be recordable rather than failing the denial row it explains.
+    denial_reason = models.CharField(max_length=60, blank=True, default="")
+
+    # ── admission-time bounds (MS2-D-26, -32) ──
+    # NULL only on a denial, which may be refused before an estimate exists
+    # (pricing_unverified).
+    estimate_usd = _money()
+    execution_bound_usd = _money()
+    post_run_liability_usd = _money()
+    # The selector-4 read allowance, held outside the settled amount and debited
+    # by its own interval (MS2-D-34 *Monitoring charges*); 0 for inspect/probe.
+    monitoring_bound_usd = _money()
+    component_bounds: models.JSONField[dict[str, object]] = models.JSONField(
+        default=dict, blank=True
+    )
+    estimator_version = models.CharField(max_length=50, blank=True, default="")
+    # Operator envelope limits (MS2-D-46): the inspection envelope's three
+    # limits, and the capability probe's call limit.
+    envelope_max_items = models.PositiveIntegerField(null=True, blank=True)
+    envelope_max_record_reads = models.PositiveIntegerField(null=True, blank=True)
+    envelope_max_bytes = models.PositiveBigIntegerField(null=True, blank=True)
+    envelope_max_calls = models.PositiveIntegerField(null=True, blank=True)
+
+    # ── usage and settlement (MS2-D-41) ──
+    usage_provisional_usd = _money()
+    # The first finalized figure, recorded once; later reads are evidence in
+    # ApifyUsageRead and raise settled_run_usage_usd instead.
+    usage_finalized_usd = _money()
+    usage_finalized_at = models.DateTimeField(null=True, blank=True)
+    settlement_basis = models.CharField(
+        max_length=20, choices=SettlementBasis.choices, blank=True, default=""
+    )
+    # Raised by upward corrections, never lowered (MS2-D-47). On a build row it
+    # is the settled build usage.
+    settled_run_usage_usd = _money()
+    post_run_cost_usd = _money()
+    post_run_cost_mode = models.CharField(
+        max_length=10, choices=PostRunCostMode.choices, blank=True, default=""
+    )
+    actual_usd = _money()
+
+    # ── clocks (MS2-D-34, -39) ──
+    reserved_at = models.DateTimeField()
+    reconciled_at = models.DateTimeField(null=True, blank=True)
+    last_charge_at = models.DateTimeField(null=True, blank=True)
+
+    # ── correction monitoring (MS2-D-23 selector 4, MS2-D-41, -47) ──
+    correction_monitor_until = models.DateTimeField(null=True, blank=True)
+    next_usage_read_at = models.DateTimeField(null=True, blank=True)
+    correction_monitor_closed_at = models.DateTimeField(null=True, blank=True)
+    correction_closing_read = models.ForeignKey(
+        "ApifyUsageRead",
+        on_delete=models.PROTECT,
+        related_name="+",
+        null=True,
+        blank=True,
+    )
+    # Stamped by the commit that completes a selector-4 read (MS2-D-34).
+    monitoring_charge_last_at = models.DateTimeField(null=True, blank=True)
+    # Set in the same commit as the counter increment, before the read is sent,
+    # and cleared when it completes: while set, the monitoring interval stays
+    # open, so a worker suspended past a cycle boundary cannot end the interval
+    # before its counted call runs (MS2-D-34, R10-03).
+    monitoring_call_pending_since = models.DateTimeField(null=True, blank=True)
+
+    # ── operator build call counters (MS2-D-32, -46) ──
+    # A build row has no provider_run, so its GET-build polls and correction
+    # reads are counted here, incremented and committed before each call.
+    run_poll_count = models.PositiveIntegerField(default=0)
+    correction_read_count = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "apify_spend_reservation"
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(fields=["reserved_at"], name="apify_resv_reserved_at"),
+            models.Index(fields=["status"], name="apify_resv_status"),
+            models.Index(fields=["status", "last_charge_at"], name="apify_resv_status_last_charge"),
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=models.Q(admission_class__in=_choice_values(AdmissionClass)),
+                name="apify_resv_admission_class_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(status__in=_choice_values(ReservationStatus)),
+                name="apify_resv_status_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(operator_kind__in=["", *_choice_values(OperatorKind)]),
+                name="apify_resv_operator_kind_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(settlement_basis__in=["", *_choice_values(SettlementBasis)]),
+                name="apify_resv_settlement_basis_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(post_run_cost_mode__in=["", *_choice_values(PostRunCostMode)]),
+                name="apify_resv_post_run_cost_mode_valid",
+            ),
+            # operator_kind is set exactly on operator rows (MS2-D-46).
+            models.CheckConstraint(
+                condition=(
+                    models.Q(admission_class=AdmissionClass.OPERATOR.value)
+                    & ~models.Q(operator_kind="")
+                )
+                | (
+                    ~models.Q(admission_class=AdmissionClass.OPERATOR.value)
+                    & models.Q(operator_kind="")
+                ),
+                name="apify_resv_operator_kind_iff_operator",
+            ),
+            # Operator rows never have a provider_run, whatever their kind
+            # (MS2-D-46, revision 8); a denial admitted nothing to attach.
+            models.CheckConstraint(
+                condition=models.Q(provider_run__isnull=True)
+                | (
+                    models.Q(admission_class__in=_RUNTIME_CLASSES)
+                    & ~models.Q(status=ReservationStatus.DENIED.value)
+                ),
+                name="apify_resv_run_only_on_admitted_runtime",
+            ),
+            # Usage can only have been read from a run the row is attached to;
+            # without the run, reconciliation could never check the import and
+            # deletion barriers.
+            models.CheckConstraint(
+                condition=~models.Q(admission_class__in=_RUNTIME_CLASSES)
+                | ~models.Q(
+                    status__in=[
+                        ReservationStatus.USAGE_PROVISIONAL.value,
+                        ReservationStatus.USAGE_FINALIZED.value,
+                        ReservationStatus.RECONCILED.value,
+                    ]
+                )
+                | models.Q(provider_run__isnull=False),
+                name="apify_resv_runtime_usage_needs_run",
+            ),
+            # Every runtime row names its source, for attribution and for the
+            # budget_paused freshness state (MS2-D-17).
+            models.CheckConstraint(
+                condition=~models.Q(admission_class__in=_RUNTIME_CLASSES)
+                | models.Q(source_site__isnull=False),
+                name="apify_resv_runtime_has_source",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(status=ReservationStatus.DENIED.value) & ~models.Q(denial_reason="")
+                )
+                | (~models.Q(status=ReservationStatus.DENIED.value) & models.Q(denial_reason="")),
+                name="apify_resv_denial_reason_iff_denied",
+            ),
+            # Fail closed: a non-denied row without an estimate or a monitoring
+            # allowance would be counted as $0 by every aggregate.
+            models.CheckConstraint(
+                condition=models.Q(status=ReservationStatus.DENIED.value)
+                | models.Q(estimate_usd__isnull=False, monitoring_bound_usd__isnull=False),
+                name="apify_resv_admitted_has_bounds",
+            ),
+            # Inspection and probe envelopes have no provider figure to re-read,
+            # so they carry no monitoring allowance (MS2-D-32, -46).
+            models.CheckConstraint(
+                condition=~models.Q(
+                    operator_kind__in=[OperatorKind.INSPECT.value, OperatorKind.PROBE.value]
+                )
+                | models.Q(monitoring_bound_usd__isnull=True)
+                | models.Q(monitoring_bound_usd=0),
+                name="apify_resv_envelope_rows_no_monitoring",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        operator_kind=OperatorKind.INSPECT.value,
+                        envelope_max_items__isnull=False,
+                        envelope_max_record_reads__isnull=False,
+                        envelope_max_bytes__isnull=False,
+                        envelope_max_calls__isnull=True,
+                    )
+                    | models.Q(
+                        operator_kind=OperatorKind.PROBE.value,
+                        envelope_max_items__isnull=True,
+                        envelope_max_record_reads__isnull=True,
+                        envelope_max_bytes__isnull=True,
+                        envelope_max_calls__isnull=False,
+                    )
+                    | (
+                        ~models.Q(
+                            operator_kind__in=[
+                                OperatorKind.INSPECT.value,
+                                OperatorKind.PROBE.value,
+                            ]
+                        )
+                        & models.Q(
+                            envelope_max_items__isnull=True,
+                            envelope_max_record_reads__isnull=True,
+                            envelope_max_bytes__isnull=True,
+                            envelope_max_calls__isnull=True,
+                        )
+                    )
+                ),
+                name="apify_resv_envelope_limits_by_kind",
+            ),
+            # A build id belongs only to a build row, and a build row cannot
+            # reconcile unbound: without the id nothing can re-read or monitor
+            # the build (MS2-D-46, revision 8).
+            models.CheckConstraint(
+                condition=models.Q(provider_build_id__isnull=True)
+                | models.Q(operator_kind=OperatorKind.BUILD.value),
+                name="apify_resv_build_id_only_on_build",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(
+                    operator_kind=OperatorKind.BUILD.value,
+                    status=ReservationStatus.RECONCILED.value,
+                )
+                | models.Q(provider_build_id__isnull=False),
+                name="apify_resv_reconciled_build_has_build_id",
+            ),
+            # A reconciled row must carry its settled amount and its charge
+            # interval, or MS2-D-34's cycle predicate cannot place it.
+            models.CheckConstraint(
+                condition=~models.Q(status=ReservationStatus.RECONCILED.value)
+                | models.Q(
+                    actual_usd__isnull=False,
+                    reconciled_at__isnull=False,
+                    last_charge_at__isnull=False,
+                ),
+                name="apify_resv_reconciled_has_settlement",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(usage_finalized_usd__isnull=True, usage_finalized_at__isnull=True)
+                    | models.Q(usage_finalized_usd__isnull=False, usage_finalized_at__isnull=False)
+                ),
+                name="apify_resv_finalized_usage_pair",
+            ),
+            # Closure commits with its closing read or not at all (MS2-D-47
+            # step 5), and only on a row that has a monitoring deadline.
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        correction_monitor_closed_at__isnull=True,
+                        correction_closing_read__isnull=True,
+                    )
+                    | models.Q(
+                        correction_monitor_closed_at__isnull=False,
+                        correction_closing_read__isnull=False,
+                        correction_monitor_until__isnull=False,
+                    )
+                ),
+                name="apify_resv_closure_with_closing_read",
+            ),
+            *_non_negative("apify_resv", *_RESERVATION_MONEY),
+        ]
+
+    def __str__(self) -> str:
+        kind = f"/{self.operator_kind}" if self.operator_kind else ""
+        return f"reservation {self.pk} {self.admission_class}{kind} [{self.status}]"
+
+
+class ApifyUsageRead(models.Model):
+    """One usage read of a run or build, kept as immutable evidence (MS2-D-41).
+
+    Rows are appended and never updated or deleted: settlement cites them, and
+    the handoff drain check compares post-reconciliation reads against the
+    settled usage (MS2-D-45). A build read has a null `provider_run` and
+    identifies its build through `reservation.provider_build_id`.
+    """
+
+    provider_run = models.ForeignKey(
+        ProviderRun,
+        on_delete=models.PROTECT,
+        related_name="usage_reads",
+        null=True,
+        blank=True,
+    )
+    reservation = models.ForeignKey(
+        ApifySpendReservation, on_delete=models.PROTECT, related_name="usage_reads"
+    )
+    read_at = models.DateTimeField()
+    # NULL when the record carried no dollar usage; the read is still evidence.
+    usage_total_usd = _provider_money()
+    usage_usd: models.JSONField[dict[str, object]] = models.JSONField(default=dict, blank=True)
+    finished_at_reported = models.DateTimeField(null=True, blank=True)
+    price_settings_version = models.CharField(max_length=50, blank=True, default="")
+
+    class Meta:
+        db_table = "apify_usage_read"
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(fields=["reservation", "read_at"], name="apify_usage_read_resv_time"),
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *_non_negative("apify_usage_read", "usage_total_usd"),
+        ]
+
+    def __str__(self) -> str:
+        return f"usage read {self.pk} @ {self.read_at:%Y-%m-%dT%H:%M:%SZ}"
+
+
+class ApifyBudgetLatch(models.Model):
+    """One overrun-latch trip and, once cleared, its clear (MS2-D-26).
+
+    The latch is tripped while any row has a NULL `cleared_at`. A clear comes
+    only from the owner's `apify_budget_reset --reason` or an estimator-version
+    bump, recorded as `cleared_reason`.
+    """
+
+    tripped_at = models.DateTimeField()
+    provider_run = models.ForeignKey(
+        ProviderRun,
+        on_delete=models.PROTECT,
+        related_name="budget_latch_trips",
+        null=True,
+        blank=True,
+    )
+    reason = models.CharField(max_length=60)
+    cleared_at = models.DateTimeField(null=True, blank=True)
+    cleared_reason = models.TextField(blank=True, default="")
+    estimator_version = models.CharField(max_length=50, blank=True, default="")
+
+    class Meta:
+        db_table = "apify_budget_latch"
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["tripped_at"],
+                name="apify_latch_open",
+                condition=models.Q(cleared_at__isnull=True),
+            ),
+        ]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=~models.Q(reason=""), name="apify_latch_reason_nonblank"
+            ),
+            # An unexplained clear would reopen paid admission with no record
+            # of who decided the overrun was resolved.
+            models.CheckConstraint(
+                condition=models.Q(cleared_at__isnull=True, cleared_reason="")
+                | (models.Q(cleared_at__isnull=False) & ~models.Q(cleared_reason="")),
+                name="apify_latch_clear_has_reason",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(cleared_at__isnull=True)
+                | models.Q(cleared_at__gte=models.F("tripped_at")),
+                name="apify_latch_cleared_after_trip",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        state = "open" if self.cleared_at is None else "cleared"
+        return f"latch {self.reason} [{state}]"
+
+
+class ApifyBudgetCycle(models.Model):
+    """One observed Apify billing cycle and its latest account snapshot (MS2-D-40).
+
+    Consumed usage, outstanding reservations, and remaining budget are always
+    computed from reservation rows under the budget lock and never stored
+    here, so they cannot drift from the ledger. The account figures are Apify's
+    as last observed; NULL until the read that carries each one.
+    """
+
+    cycle_start = models.DateTimeField(unique=True)
+    cycle_end = models.DateTimeField()
+    allocation_usd = _money()
+    account_prepaid_credit_usd = _provider_money()
+    account_base_price_usd = _provider_money()
+    account_limit_usd = _provider_money()
+    account_usage_usd = _provider_money()
+    account_observed_at = models.DateTimeField(null=True, blank=True)
+    account_data_retention_days = models.PositiveIntegerField(null=True, blank=True)
+    # Incremented and committed before each account read in this cycle
+    # (MS2-D-32 *Account reads*); the cap's full bound is a standing debit.
+    account_read_count = models.PositiveIntegerField(default=0)
+    opened_at = models.DateTimeField()
+
+    class Meta:
+        db_table = "apify_budget_cycle"
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=models.Q(cycle_end__gt=models.F("cycle_start")),
+                name="apify_cycle_end_after_start",
+            ),
+            *_non_negative(
+                "apify_cycle",
+                "allocation_usd",
+                "account_prepaid_credit_usd",
+                "account_base_price_usd",
+                "account_limit_usd",
+                "account_usage_usd",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"cycle {self.cycle_start:%Y-%m-%d} → {self.cycle_end:%Y-%m-%d}"
+
+
+class ApifyCycleDiscovery(models.Model):
+    """Read counter for account reads made while no cycle row covers `now`.
+
+    An empty ledger or a rollover has no `ApifyBudgetCycle` row to count on,
+    so those reads count here (MS2-D-32 *Cycle discovery*). At most one row is
+    open; the read that finds a covering cycle closes it with `discovered`, and
+    the owner's `apify_budget_reset --discovery` closes an exhausted one with
+    `owner_reset`.
+    """
+
+    opened_at = models.DateTimeField()
+    read_count = models.PositiveIntegerField(default=0)
+    last_read_at = models.DateTimeField(null=True, blank=True)
+    closed_at = models.DateTimeField(null=True, blank=True)
+    cycle_start = models.DateTimeField(null=True, blank=True)
+    close_reason = models.CharField(
+        max_length=20, choices=CycleDiscoveryCloseReason.choices, blank=True, default=""
+    )
+
+    class Meta:
+        db_table = "apify_cycle_discovery"
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            # Every open row has close_reason "" (next CHECK), so uniqueness of
+            # that column among open rows admits exactly one open row. A unique
+            # index on closed_at alone would not: Postgres treats NULLs as
+            # distinct, and open rows are exactly the NULL ones.
+            models.UniqueConstraint(
+                fields=["close_reason"],
+                condition=models.Q(closed_at__isnull=True),
+                name="apify_discovery_one_open",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(
+                    close_reason__in=["", *_choice_values(CycleDiscoveryCloseReason)]
+                ),
+                name="apify_discovery_close_reason_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(closed_at__isnull=True, close_reason="")
+                | (models.Q(closed_at__isnull=False) & ~models.Q(close_reason="")),
+                name="apify_discovery_closed_with_reason",
+            ),
+            # A discovered close records the cycle it found in the same commit.
+            models.CheckConstraint(
+                condition=~models.Q(close_reason=CycleDiscoveryCloseReason.DISCOVERED.value)
+                | models.Q(cycle_start__isnull=False),
+                name="apify_discovery_discovered_has_cycle",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"cycle discovery {self.pk} [{self.close_reason or 'open'}]"
+
+
+class ApifyLedgerAuthority(models.Model):
+    """This environment's paid-admission authority for one billing cycle (MS2-D-45).
+
+    Paid admission of every class needs the current cycle's row with
+    `handed_off_at` NULL. An export marks the row handed off to exactly one
+    destination, irrevocably; an import creates a `handoff` row keyed by the
+    record's digest, so re-importing the same record is a no-op.
+    """
+
+    cycle_start = models.DateTimeField(unique=True)
+    kind = models.CharField(max_length=10, choices=LedgerAuthorityKind.choices)
+    ledger_id = models.CharField(max_length=100)
+    carried_consumption_usd = models.DecimalField(
+        max_digits=10, decimal_places=4, default=Decimal(0)
+    )
+    attested_by = models.CharField(max_length=200, blank=True, default="")
+    created_at = models.DateTimeField()
+    handed_off_at = models.DateTimeField(null=True, blank=True)
+    handed_off_to = models.CharField(max_length=100, null=True, blank=True)
+    handoff_record_digest = models.CharField(max_length=128, unique=True, null=True, blank=True)
+
+    class Meta:
+        db_table = "apify_ledger_authority"
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=models.Q(kind__in=_choice_values(LedgerAuthorityKind)),
+                name="apify_authority_kind_valid",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(ledger_id=""), name="apify_authority_ledger_id_nonblank"
+            ),
+            # Origin is the one row whose truth is an attestation (R35), so it
+            # must say who attested.
+            models.CheckConstraint(
+                condition=~models.Q(kind=LedgerAuthorityKind.ORIGIN.value)
+                | ~models.Q(attested_by=""),
+                name="apify_authority_origin_attested",
+            ),
+            # A handoff row exists only because a record was imported; the
+            # digest is its idempotency key.
+            models.CheckConstraint(
+                condition=~models.Q(kind=LedgerAuthorityKind.HANDOFF.value)
+                | models.Q(handoff_record_digest__isnull=False),
+                name="apify_authority_handoff_has_digest",
+            ),
+            # The export binds destination and record together with the
+            # hand-off itself; a handed-off row without them could be exported
+            # again to a second destination (MS2-D-45 *Exclusive destination*).
+            models.CheckConstraint(
+                condition=models.Q(handed_off_at__isnull=True, handed_off_to__isnull=True)
+                | models.Q(
+                    handed_off_at__isnull=False,
+                    handed_off_to__isnull=False,
+                    handoff_record_digest__isnull=False,
+                ),
+                name="apify_authority_handoff_binds_destination",
+            ),
+            *_non_negative("apify_authority", "carried_consumption_usd"),
+        ]
+
+    def __str__(self) -> str:
+        state = f" → {self.handed_off_to}" if self.handed_off_at else ""
+        return f"authority {self.cycle_start:%Y-%m-%d} {self.kind} {self.ledger_id}{state}"
