@@ -34,8 +34,6 @@ Instructions for AI agents:
   `prepare_run_input`'s `extra=forbid`, but a dedicated nested-key guard is a cleaner fix (low).
 - [ ] Add listing-row fields (`title_raw`, `condition_label_raw`, `is_international`) to the
   eligibility evaluation binding; not currently read by the evaluator (verifier finding, low).
-- [ ] Run the Slice D entry-gate design review before D2 (plan: Slice D entry gate): a focused
-  review of the D/E async-ordering design (watermarks, continuity, retention, charge horizon, R23).
 - [ ] **Blocked on owner:** create the scoped runtime Apify token (OpenBao
   `secret/apps/hw-radar/apify`, env `HW_RADAR_APIFY_TOKEN`); the unscoped operator/deploy key
   exists at `secret/apps/hw-radar/agent/apify` (OQ25 resolved 2026-09-25). Permissions needed:
