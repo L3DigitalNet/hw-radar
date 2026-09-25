@@ -112,6 +112,8 @@ from hw_radar.acquisition.apify.ledger import (
     load_ledger_config,
     take_budget_lock,
     trip_latch_locked,
+    trip_stranded_start_refusals_locked,
+    unrecorded_start_refusals,
 )
 from hw_radar.acquisition.apify.reconcile import stamp_work_completion
 from hw_radar.catalog.models import ProviderRun
@@ -326,7 +328,7 @@ def _stranded() -> tuple[QuerySet[ProviderRun], QuerySet[ProviderRun]]:
 
 
 def trip_stranded_latches(now: datetime | None = None) -> list[int]:
-    """Trip the latch for every orphaned or exhausted row that never tripped it.
+    """Trip the latch for every orphaned, exhausted, or 402-refused row that never tripped it.
 
     Run once per apify-poll tick (module docstring). Returns the provider_run
     ids it tripped for. The candidate check is lock-free, so an ordinary tick
@@ -335,7 +337,10 @@ def trip_stranded_latches(now: datetime | None = None) -> list[int]:
     and never duplicated.
     """
     orphaned, exhausted = _stranded()
-    if not orphaned.exists() and not exhausted.exists():
+    # The 402 refusals (MS2-D-48 *Durable recovery*) join the same lock-free
+    # precheck, so a tick with nothing stranded still takes no budget lock.
+    refused = unrecorded_start_refusals()
+    if not orphaned.exists() and not exhausted.exists() and not refused.exists():
         return []
     cap: int = settings.HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS
     version = load_ledger_config().budget.estimator_version
@@ -351,6 +356,7 @@ def trip_stranded_latches(now: datetime | None = None) -> list[int]:
         for row in ProviderRun.objects.select_for_update().filter(pk__in=pks).order_by("pk"):
             _mark_delete_failed(row, cap, version, at)
             tripped.append(row.pk)
+        tripped += trip_stranded_start_refusals_locked(version, at)
     return tripped
 
 

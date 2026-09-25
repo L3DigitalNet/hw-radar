@@ -74,7 +74,7 @@ from test_apify_import import _fixture as import_fixture  # pyright: ignore[repo
 from test_apify_import import (
     _provider_run as import_provider_run_row,  # pyright: ignore[reportPrivateUsage]
 )
-from test_apify_ledger_authority import PRICED
+from test_apify_ledger_authority import priced
 
 from hw_radar.acquisition.apify import importer, jobs, ledger, storage_cleanup
 from hw_radar.acquisition.apify import reconcile as reconcile_mod
@@ -1685,7 +1685,7 @@ def test_build_row_without_build_id_stays_at_bound_and_never_reconciles() -> Non
 @pytest.mark.django_db
 def test_inspection_settle_sets_last_charge_at_and_no_correction_obligation() -> None:
     claim(live_cycle_start())
-    with override_settings(**PRICED, HW_RADAR_APIFY_ENABLED=True):
+    with override_settings(**priced(), HW_RADAR_APIFY_ENABLED=True):
         call_command("apify_operator_reserve", "--kind", "inspect", "--reason", "look at run")
     row = ApifySpendReservation.objects.get(operator_kind="inspect")
     out = StringIO()

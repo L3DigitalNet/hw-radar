@@ -1,7 +1,7 @@
 """MS-2 Slice E5: the start job admitted by the real spend ledger, and budget_paused.
 
 jobs.LedgerAdmission is bound with the ledger_support settings (round test
-prices, never Apify's live ones) and the configured LIVE_ANCHOR cycle around
+prices, never Apify's live ones) and the configured live-anchor cycle around
 the real now, because the start job stamps provider rows with real time.
 Apify is served by test_apify_recovery_probe's LedgerFakeApify over
 httpx.MockTransport, so no test touches the network. Also here: the E4
@@ -17,6 +17,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Any, Final
 
+import httpx
 import ledger_support
 import pytest
 from django.test import override_settings
@@ -99,7 +100,7 @@ def _start(config: SourceConfig, fake: LedgerFakeApify) -> StartResult:
     return _run(
         start_provider_run(
             config,
-            admission=LedgerAdmission(config=ledger_support.LIVE_CONFIG),
+            admission=LedgerAdmission(config=ledger_support.live_config()),
             run_specs=_specs(),
             client_factory=fake.client,
         )
@@ -285,6 +286,108 @@ def test_open_latch_pauses_only_actor_sources(actor_source: SourceConfig) -> Non
     assert by_source["demo"].freshness is Freshness.FRESH
     # Cross-package contract: the shortlist's literal is the ledger's reason.
     assert OVERRUN_LATCH_REASON == DenialReason.OVERRUN_LATCH
+
+
+# ── E9.3: a start refused at the account's hard limit (MS2-D-48) ────────────
+
+# Apify's documented example body for a 402 on POST /v2/acts/{id}/runs; the
+# classification must rest on the status code, never on this type string.
+PAYMENT_REQUIRED: Final = {
+    "error": {"type": "x402-payment-required", "message": "usage limit exceeded"}
+}
+
+
+class RefusingApify(LedgerFakeApify):
+    """LedgerFakeApify whose run start answers `status` (or loses the response)."""
+
+    def __init__(self, status: int = 402, *, lose_response: bool = False) -> None:
+        super().__init__(_fixture("complete"))
+        self.status = status
+        self.lose_response = lose_response
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path.endswith("/runs"):
+            self.requests.append(request)
+            if self.lose_response:
+                raise httpx.ReadTimeout("response lost", request=request)
+            body = PAYMENT_REQUIRED if self.status == 402 else {"error": {"type": "internal"}}
+            return httpx.Response(self.status, json=body)
+        return super().__call__(request)
+
+
+def _refusal_trips() -> list[tuple[str, int | None, bool]]:
+    return [
+        (reason, run_id, cleared is None)
+        for reason, run_id, cleared in ApifyBudgetLatch.objects.filter(
+            reason=LatchReason.ACCOUNT_LIMIT_REFUSED
+        ).values_list("reason", "provider_run_id", "cleared_at")
+    ]
+
+
+@LIVE
+def test_start_refused_with_402_trips_account_limit_latch_and_keeps_reservation(
+    actor_source: SourceConfig,
+) -> None:
+    _live_cycle()
+    fake = RefusingApify(402)
+
+    result = _start(actor_source, fake)
+
+    assert (result.status, result.reason) == (StartStatus.START_FAILED, "account_limit_refused")
+    row = ProviderRun.objects.get(pk=result.provider_run_id)
+    error = row.stage_detail["start_error"]
+    assert error == {
+        "type": "ApifyApiError",
+        "status_code": 402,
+        "error_type": "x402-payment-required",
+    }
+    assert _refusal_trips() == [("account_limit_refused", row.pk, True)]
+    resv = ApifySpendReservation.objects.get(provider_run=row)
+    estimate = resv.estimate_usd
+    assert resv.status == ReservationStatus.RESERVED  # neither released nor reconciled
+
+    # A tick before the deadline leaves the unstarted row alone ...
+    _run(
+        apify_poll_tick(
+            resolver=NullResolver(),
+            client_factory=fake.client,
+            ledger_config=ledger_support.live_config(),
+        )
+    )
+    row.refresh_from_db()
+    resv.refresh_from_db()
+    assert (row.external_run_id, row.orphaned_start_at) == (None, None)
+    assert (resv.status, resv.estimate_usd) == (ReservationStatus.RESERVED, estimate)
+    # ... and at its deadline selector 3 handles it as orphaned_start, unchanged.
+    _run(
+        apify_poll_tick(
+            resolver=NullResolver(),
+            client_factory=fake.client,
+            ledger_config=ledger_support.live_config(),
+            clock=ledger_support.Clock(row.storage_cleanup_due_at + timedelta(minutes=1)),
+        )
+    )
+    row.refresh_from_db()
+    assert row.orphaned_start_at is not None
+    assert _refusal_trips() == [("account_limit_refused", row.pk, True)]
+
+
+@LIVE
+@pytest.mark.parametrize(
+    ("fake_kwargs", "reason"),
+    [({"status": 500}, "ApifyApiError"), ({"lose_response": True}, "ReadTimeout")],
+    ids=["http-500", "transport-error"],
+)
+def test_start_error_other_than_402_does_not_trip_account_limit_latch(
+    actor_source: SourceConfig, fake_kwargs: dict[str, Any], reason: str
+) -> None:
+    _live_cycle()
+
+    result = _start(actor_source, RefusingApify(**fake_kwargs))
+
+    assert (result.status, result.reason) == (StartStatus.START_FAILED, reason)
+    assert _refusal_trips() == []
+    assert ledger_support.open_latches() == []
 
 
 # ── r1: the KV byte cap (MS2-D-32) ──────────────────────────────────────────

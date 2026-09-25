@@ -88,7 +88,7 @@ def _tick(fake: _RecordingFake, clock: ledger_support.Clock | None = None) -> Ti
         apify_poll_tick(
             resolver=NullResolver(),
             client_factory=fake.client,
-            ledger_config=ledger_support.LIVE_CONFIG,
+            ledger_config=ledger_support.live_config(),
             clock=clock,
         )
     )
@@ -115,7 +115,7 @@ def test_runtime_paths_never_request_account_endpoints(
     assert (denied.status, denied.reason) == (StartStatus.DENIED, "cycle_unknown")
 
     # recovery_probe_job starts an admitted run through LedgerAdmission.
-    _bind_start(monkeypatch, fake, LedgerAdmission(config=ledger_support.LIVE_CONFIG))
+    _bind_start(monkeypatch, fake, LedgerAdmission(config=ledger_support.live_config()))
     _probe()
     row = _probe_row()
     resv = ApifySpendReservation.objects.get(provider_run=row)
@@ -137,7 +137,7 @@ def test_runtime_paths_never_request_account_endpoints(
     assert resv.correction_monitor_closed_at is not None
 
     # An operator build row, bound, then read through selector 2.
-    build = reserve_operator(OperatorKind.BUILD, config=ledger_support.LIVE_CONFIG, reason="b")
+    build = reserve_operator(OperatorKind.BUILD, config=ledger_support.live_config(), reason="b")
     assert build.admitted
     assert bind_build(build.reservation_id, BUILD_ID, now=closing)
     _tick(fake, ledger_support.Clock(closing + ledger_support.HOUR))

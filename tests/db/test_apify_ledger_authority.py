@@ -33,7 +33,6 @@ from ledger_support import (
     HOUR,
     LEDGER_A,
     LEDGER_B,
-    LIVE_ANCHOR,
     NOW,
     RUN_DEBIT,
     WATCH,
@@ -41,6 +40,7 @@ from ledger_support import (
     close_monitoring,
     config,
     cycle,
+    live_account_settings,
     live_cycle_start,
     open_row,
     provider_run,
@@ -489,11 +489,6 @@ def test_admission_racing_handoff_export_serializes() -> None:
 # Settings-level prices and the live configured account state for the
 # commands, which read Django settings and the real clock.
 PRICED = {
-    "HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR": LIVE_ANCHOR,
-    "HW_RADAR_APIFY_ACCOUNT_LIMIT_USD": D("19.00"),
-    "HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD": D("19.00"),
-    "HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS": 31,
-    "HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON": LIVE_ANCHOR.date(),
     "HW_RADAR_APIFY_USD_PER_CU": D("0.20"),
     "HW_RADAR_APIFY_DATASET_READS_USD_PER_1000": D("0.0004"),
     "HW_RADAR_APIFY_DATASET_WRITES_USD_PER_1000": D("0.005"),
@@ -507,13 +502,18 @@ PRICED = {
 }
 
 
+def priced() -> dict[str, object]:
+    """PRICED plus the live configured account state, computed at call time."""
+    return {**PRICED, **live_account_settings()}
+
+
 # ── Owner commands (thin wrappers; the service above carries the rules) ──
 
 
 @pytest.mark.django_db
 def test_claim_and_handoff_commands_round_trip(tmp_path: Path) -> None:
     out = StringIO()
-    with override_settings(**PRICED, HW_RADAR_APIFY_LEDGER_ID=LEDGER_A):
+    with override_settings(**priced(), HW_RADAR_APIFY_LEDGER_ID=LEDGER_A):
         call_command("apify_ledger_claim", "--origin", "--reason", "fresh cycle", stdout=out)
         with pytest.raises(CommandError, match="authority_exists"):
             call_command("apify_ledger_claim", "--origin", "--reason", "again")
@@ -526,7 +526,7 @@ def test_claim_and_handoff_commands_round_trip(tmp_path: Path) -> None:
     _become_other_environment()
     ApifyBudgetCycle.objects.all().delete()  # the destination derives its own row
     out = StringIO()
-    with override_settings(**PRICED, HW_RADAR_APIFY_LEDGER_ID=LEDGER_B):
+    with override_settings(**priced(), HW_RADAR_APIFY_LEDGER_ID=LEDGER_B):
         exported = json.loads(record.read_text(encoding="utf-8"))
         assert exported["cycle_start"] == live_cycle_start().isoformat()
         call_command("apify_ledger_handoff", "--import", str(record), stdout=out)
@@ -540,7 +540,7 @@ def test_claim_and_handoff_commands_round_trip(tmp_path: Path) -> None:
 
 @pytest.mark.django_db
 def test_operator_reserve_command_reserves_or_refuses() -> None:
-    with override_settings(**PRICED, HW_RADAR_APIFY_ENABLED=True):
+    with override_settings(**priced(), HW_RADAR_APIFY_ENABLED=True):
         with pytest.raises(CommandError, match="ledger_authority_missing"):
             call_command("apify_operator_reserve", "--kind", "build", "--reason", "rebuild")
         claim(live_cycle_start())

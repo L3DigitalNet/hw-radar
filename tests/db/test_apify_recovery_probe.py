@@ -582,7 +582,7 @@ class LedgerFakeApify(FakeApify):
 
 
 def _live_cycle() -> ApifyBudgetCycle:
-    """The configured LIVE_ANCHOR cycle covering the real now, with this ledger's authority."""
+    """The configured live cycle covering the real now, with this ledger's authority."""
     cycle = ledger_support.live_cycle()
     ledger_support.claim(cycle.cycle_start)
     return cycle
@@ -596,7 +596,7 @@ def test_budget_admitted_actor_probe_recovers_source_with_ledger(
 ) -> None:
     cycle = _live_cycle()
     fake = LedgerFakeApify(_fixture("complete"))
-    _bind_start(monkeypatch, fake, LedgerAdmission(config=ledger_support.LIVE_CONFIG))
+    _bind_start(monkeypatch, fake, LedgerAdmission(config=ledger_support.live_config()))
 
     _probe()
 
@@ -643,7 +643,7 @@ def test_probe_denied_when_discovery_exhausted(
     # watch_refresh reserve above it is untouched (discovery degrades first).
     ledger_support.open_row(discovery_cap - Decimal("0.0001"), cycle.cycle_start)
     fake = LedgerFakeApify(_fixture("complete"))
-    _bind_start(monkeypatch, fake, LedgerAdmission(config=ledger_support.LIVE_CONFIG))
+    _bind_start(monkeypatch, fake, LedgerAdmission(config=ledger_support.live_config()))
 
     _probe()
 

@@ -124,26 +124,48 @@ ALLOCATION: Final = project_allocation(BUDGET)
 
 
 # Tests driven by the real clock (the start job and the commands stamp real
-# time) configure the anchor as the first of the current UTC month, so the
-# configured cycle always covers their now, whatever the date the suite runs.
-_TODAY: Final = datetime.now(UTC)
-LIVE_ANCHOR: Final = datetime(_TODAY.year, _TODAY.month, 1, tzinfo=UTC)
-LIVE_BUDGET: Final = dataclasses.replace(
-    BUDGET, billing_cycle_anchor=LIVE_ANCHOR, account_verified_on=LIVE_ANCHOR.date()
-)
-LIVE_CONFIG: Final = dataclasses.replace(CONFIG, budget=LIVE_BUDGET)
+# time) configure an anchor derived per call from the real now, 14 days
+# earlier with the day clamped to 28: the next boundary is then at least 11
+# days after now and the last one at least 14 days before, so a test can never
+# straddle a cycle boundary, whatever date the suite runs (a fixed "first of
+# the month" anchor computed at import would, across a month end).
+def live_anchor() -> datetime:
+    at = datetime.now(UTC) - timedelta(days=14)
+    return datetime(at.year, at.month, min(at.day, 28), tzinfo=UTC)
+
+
+def live_config() -> LedgerConfig:
+    anchor = live_anchor()
+    return dataclasses.replace(
+        CONFIG,
+        budget=dataclasses.replace(
+            BUDGET, billing_cycle_anchor=anchor, account_verified_on=anchor.date()
+        ),
+    )
+
+
+def live_account_settings() -> dict[str, object]:
+    """The live configured account state as Django settings (for commands)."""
+    anchor = live_anchor()
+    return {
+        "HW_RADAR_APIFY_BILLING_CYCLE_ANCHOR": anchor,
+        "HW_RADAR_APIFY_ACCOUNT_LIMIT_USD": D("19.00"),
+        "HW_RADAR_APIFY_ACCOUNT_BASE_PRICE_USD": D("19.00"),
+        "HW_RADAR_APIFY_ACCOUNT_DATA_RETENTION_DAYS": 31,
+        "HW_RADAR_APIFY_ACCOUNT_VERIFIED_ON": anchor.date(),
+    }
 
 
 def live_cycle_start() -> datetime:
-    """The start of the cycle LIVE_ANCHOR derives for the real clock."""
-    bounds = billing_cycle_bounds(LIVE_ANCHOR, datetime.now(UTC))
+    """The start of the cycle live_anchor() derives for the real clock."""
+    bounds = billing_cycle_bounds(live_anchor(), datetime.now(UTC))
     assert bounds is not None
     return bounds[0]
 
 
 def live_cycle() -> ApifyBudgetCycle:
-    """The recorded LIVE_ANCHOR cycle covering the real now, as ensure_cycle writes it."""
-    bounds = billing_cycle_bounds(LIVE_ANCHOR, datetime.now(UTC))
+    """The recorded live cycle covering the real now, as ensure_cycle writes it."""
+    bounds = billing_cycle_bounds(live_anchor(), datetime.now(UTC))
     assert bounds is not None
     return cycle(*bounds)
 

@@ -101,6 +101,7 @@ from hw_radar.acquisition.apify.ledger import (
     reserve,
     take_budget_lock,
     trip_latch,
+    trip_start_refusal,
 )
 from hw_radar.acquisition.contracts import AdapterRetention, ListingResolver
 from hw_radar.acquisition.retention_policy import UnknownSourceRetention, source_retention
@@ -479,6 +480,22 @@ async def start_provider_run(
             )
         except Exception as exc:  # never retried: see the docstring
             await sync_to_async(_record_start_error)(row.pk, exc)
+            # MS2-D-48 *Hard-limit refusal*: Apify documents 402 on a run start
+            # when the account has exceeded its usage limit (or lacks credits).
+            # Classified by the status code alone: the error.type for that
+            # cause is undocumented (the docs show only an example), so
+            # matching a type string could miss a real refusal. After the
+            # commit above (ED-05). The row stays unstarted and its
+            # reservation open for selector 3's orphaned_start, unchanged:
+            # the rule for a lost response is not relaxed for a 402. A trip
+            # lost to a crash here is repaired by the next reserve or tick
+            # (ledger.trip_stranded_start_refusals_locked).
+            if isinstance(exc, ApifyApiError) and exc.status_code == 402:
+                logger.error("apify start for provider_run %s refused with HTTP 402", row.pk)
+                await sync_to_async(trip_start_refusal)(row.pk)
+                return StartResult(
+                    StartStatus.START_FAILED, LatchReason.ACCOUNT_LIMIT_REFUSED, row.pk
+                )
             logger.exception("apify start for provider_run %s lost its response", row.pk)
             return StartResult(StartStatus.START_FAILED, type(exc).__name__, row.pk)
 

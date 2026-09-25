@@ -21,14 +21,18 @@ whole module failing to import.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import dataclasses
 from collections.abc import Callable
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any, Final
 
 import httpx
+import ledger_support
 import pytest
 from asgiref.sync import sync_to_async
+from django.core.management import call_command
 from django.test import override_settings
 from django.utils import timezone
 from ledger_support import (
@@ -43,6 +47,8 @@ from ledger_support import (
     claim,
     config,
     cycle,
+    live_config,
+    live_cycle,
     open_latches,
     open_row,
     provider_run,
@@ -52,10 +58,12 @@ from ledger_support import (
 from test_apify_poll_job import ACTOR_ID, LIVE, FakeApify
 from test_apify_poll_job import _specs as synthetic_specs  # pyright: ignore[reportPrivateUsage]
 
-from hw_radar.acquisition.apify import reconcile, report
+from hw_radar.acquisition.apify import jobs, ledger, reconcile, report, storage_cleanup
+from hw_radar.acquisition.apify.budget import OperatorKind
 from hw_radar.acquisition.apify.jobs import (
     BudgetDecision,
     BudgetRequest,
+    LedgerAdmission,
     StartStatus,
     TickReport,
     apify_poll_tick,
@@ -345,3 +353,169 @@ def test_fake_apify_start_route_is_the_one_asserted_above() -> None:
     with httpx.Client(transport=httpx.MockTransport(fake)) as client:
         client.post(f"https://api.apify.com/v2/actors/{ACTOR_ID}/runs")
     assert fake.paths("POST", f"/v2/actors/{ACTOR_ID}/") == [f"/v2/actors/{ACTOR_ID}/runs"]
+
+
+# ── E9.3: a 402 whose latch trip was lost between commits (MS2-D-48, R12-01) ──
+#
+# The start job records the 402 in stage_detail (one commit), then trips
+# `account_limit_refused` (a second, budget-locked commit: ED-05 forbids the
+# budget lock under the provider-row lock). A process lost between the two
+# leaves the 402 recorded and the latch open. `jobs.trip_start_refusal` is
+# looked up through the module, so replacing it injects the loss exactly there;
+# raising=False keeps the injection valid against code without it.
+
+PAYMENT_REQUIRED: Final = {
+    "error": {"type": "x402-payment-required", "message": "usage limit exceeded"}
+}
+
+
+def _live_start(synthetic: SourceConfig, fake: FakeApify) -> Any:
+    return asyncio.run(
+        start_provider_run(
+            synthetic,
+            admission=LedgerAdmission(config=live_config()),
+            run_specs=synthetic_specs(),
+            client_factory=fake.client,
+        )
+    )
+
+
+def _refusing_fake() -> FakeApify:
+    fake = FakeApify()
+    fake.start_response = lambda _r: httpx.Response(402, json=PAYMENT_REQUIRED)
+    return fake
+
+
+def _start_losing_the_trip(synthetic: SourceConfig, monkeypatch: pytest.MonkeyPatch) -> ProviderRun:
+    """A 402 start whose process is lost after _record_start_error committed."""
+    claim(live_cycle().cycle_start)
+
+    def lost(_provider_run_id: int) -> bool:
+        raise Crash
+
+    monkeypatch.setattr(jobs, "trip_start_refusal", lost, raising=False)
+    with contextlib.suppress(Crash):
+        _live_start(synthetic, _refusing_fake())
+    monkeypatch.undo()
+    row = ProviderRun.objects.get()
+    assert row.stage_detail["start_error"] == {
+        "type": "ApifyApiError",
+        "status_code": 402,
+        "error_type": "x402-payment-required",
+    }
+    return row
+
+
+def _refusal_trips(row: ProviderRun) -> list[bool]:
+    """One entry per account_limit_refused trip of `row`: True while it is open."""
+    return [
+        cleared is None
+        for cleared in ApifyBudgetLatch.objects.filter(
+            reason=LatchReason.ACCOUNT_LIMIT_REFUSED, provider_run=row
+        ).values_list("cleared_at", flat=True)
+    ]
+
+
+def _live_tick() -> TickReport:
+    return asyncio.run(
+        apify_poll_tick(
+            resolver=NullResolver(), client_factory=FakeRuns().client, ledger_config=live_config()
+        )
+    )
+
+
+@LIVE
+def test_402_trip_lost_between_commits_is_repaired_before_next_admission(
+    synthetic: SourceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _start_losing_the_trip(synthetic, monkeypatch)
+    resv = ApifySpendReservation.objects.get(provider_run=row)
+    before = (resv.status, resv.estimate_usd, row.pk)
+
+    # No tick in between: the next admissions of both classes repair it first.
+    other = site("other-shop")
+    runtime = ledger.reserve(ledger_support.WATCH, source_site_id=other.pk, config=live_config())
+    operator = ledger.reserve_operator(OperatorKind.INSPECT, config=live_config())
+
+    assert _refusal_trips(row) == [True]
+    assert ApifyBudgetLatch.objects.count() == 1
+    assert (runtime.admitted, runtime.reason) == (False, "overrun_latch")
+    assert (operator.admitted, operator.reason) == (False, "overrun_latch")
+    assert ApifySpendReservation.objects.filter(status=ReservationStatus.RESERVED).count() == 1
+    resv.refresh_from_db()
+    attached = ApifySpendReservation.objects.filter(pk=resv.pk, provider_run=row).exists()
+    assert attached and (resv.status, resv.estimate_usd, row.pk) == before
+
+
+@LIVE
+def test_402_trip_lost_between_commits_is_repaired_by_the_next_tick(
+    synthetic: SourceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _start_losing_the_trip(synthetic, monkeypatch)
+
+    _live_tick()
+
+    assert _refusal_trips(row) == [True]
+
+
+@LIVE
+def test_owner_cleared_402_trip_is_never_retripped(
+    synthetic: SourceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _start_losing_the_trip(synthetic, monkeypatch)
+    _live_tick()
+    call_command("apify_budget_reset", "--reason", "account limit re-verified")
+
+    # The cleared trip is the record that the 402 was handled (R21 rule).
+    outcome = ledger.reserve(
+        ledger_support.WATCH, source_site_id=site("other-shop").pk, config=live_config()
+    )
+    _live_tick()
+
+    assert _refusal_trips(row) == [False]
+    assert outcome.reason != "overrun_latch"
+    assert not ledger.latch_tripped()
+
+
+@LIVE
+def test_estimator_bump_does_not_clear_account_limit_refused(
+    synthetic: SourceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    row = _start_losing_the_trip(synthetic, monkeypatch)
+    _live_tick()
+    ledger.trip_latch(LatchReason.OVERRUN, config=live_config())
+    bumped = dataclasses.replace(
+        live_config(), budget=dataclasses.replace(live_config().budget, estimator_version="2")
+    )
+
+    outcome = ledger.reserve(
+        ledger_support.WATCH, source_site_id=site("other-shop").pk, config=bumped
+    )
+
+    # The bump clears the overrun trip (a replaced price bound) but not the
+    # hard-limit refusal, which says nothing about the estimator.
+    assert _refusal_trips(row) == [True]
+    assert ApifyBudgetLatch.objects.get(reason=LatchReason.OVERRUN).cleared_at is not None
+    assert outcome.reason == "overrun_latch"
+
+
+@LIVE
+def test_delayed_402_callback_after_repair_and_owner_clear_does_not_retrip(
+    synthetic: SourceConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    claim(live_cycle().cycle_start)
+
+    def delayed(provider_run_id: int) -> bool:
+        # The callback stalls after _record_start_error committed; meanwhile
+        # a tick's repair trips the latch and the owner clears it.
+        storage_cleanup.trip_stranded_latches()
+        call_command("apify_budget_reset", "--reason", "account limit re-verified")
+        return ledger.trip_start_refusal(provider_run_id)  # pyright: ignore[reportAttributeAccessIssue]
+
+    monkeypatch.setattr(jobs, "trip_start_refusal", delayed, raising=False)
+    result = _live_start(synthetic, _refusing_fake())
+
+    assert (result.status, result.reason) == (StartStatus.START_FAILED, "account_limit_refused")
+    row = ProviderRun.objects.get()
+    assert _refusal_trips(row) == [False]
+    assert not ledger.latch_tripped()

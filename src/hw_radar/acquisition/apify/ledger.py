@@ -57,7 +57,7 @@ from enum import StrEnum
 from typing import Final, cast
 
 from django.conf import settings
-from django.db import connection, transaction
+from django.db import connection, models, transaction
 from django.db.models import F, Q
 from django.utils import timezone
 
@@ -84,6 +84,7 @@ from hw_radar.catalog.models import (
     ApifyLedgerAuthority,
     ApifySpendReservation,
     ApifyUsageRead,
+    ProviderRun,
     ReservationStatus,
 )
 from hw_radar.catalog.models.provider import LedgerAuthorityKind
@@ -113,6 +114,9 @@ __all__ = [
     "take_budget_lock",
     "trip_latch",
     "trip_latch_locked",
+    "trip_start_refusal",
+    "trip_stranded_start_refusals_locked",
+    "unrecorded_start_refusals",
 ]
 
 # The one budget advisory lock (MS2-D-41 *Reserve*, MS2-D-45 *Serialization*).
@@ -541,16 +545,71 @@ def trip_latch(
         return trip_latch_locked(reason, provider_run_id, version, now or timezone.now())
 
 
+def unrecorded_start_refusals() -> models.QuerySet[ProviderRun]:
+    """Rows whose start Apify refused with HTTP 402 and that have never had the trip.
+
+    The one predicate behind both 402 trip paths (MS2-D-48 *Durable
+    recovery*). Any `account_limit_refused` trip of the row, open OR cleared,
+    means the refusal was recorded: a cleared one is the owner's deliberate
+    reset (the R21 rule of storage_cleanup._stranded). Re-tripping on "no
+    OPEN trip" instead would undo every owner reset on the next admission.
+    """
+    return ProviderRun.objects.filter(stage_detail__start_error__status_code=402).exclude(
+        budget_latch_trips__reason=LatchReason.ACCOUNT_LIMIT_REFUSED
+    )
+
+
+def trip_stranded_start_refusals_locked(estimator_version: str, now: datetime) -> list[int]:
+    """Trip `account_limit_refused` for every 402 whose trip was lost; the caller holds the lock.
+
+    The start job commits the 402 (stage_detail.start_error) and its trip in
+    two transactions, because the ED-05 lock order forbids the budget lock
+    under the provider-row lock; a process lost between them leaves the 402
+    as the only durable record. Called by `reserve` before the latch is
+    read, so no later admission of any class slips past it, and by every
+    poll tick's storage_cleanup.trip_stranded_latches. Returns the row ids.
+    """
+    tripped: list[int] = []
+    for pk in unrecorded_start_refusals().values_list("pk", flat=True).order_by("pk"):
+        logger.error("provider_run %s: HTTP 402 start refusal without a latch trip; tripping", pk)
+        trip_latch_locked(LatchReason.ACCOUNT_LIMIT_REFUSED, pk, estimator_version, now)
+        tripped.append(pk)
+    return tripped
+
+
+def trip_start_refusal(
+    provider_run_id: int, *, config: LedgerConfig | None = None, now: datetime | None = None
+) -> bool:
+    """The start job's own trip for a 402 it just recorded; False when already recorded.
+
+    Deliberately not `trip_latch`, whose idempotence covers only OPEN trips:
+    a callback delayed past a tick's repair and the owner's reset would then
+    trip an already-handled 402 again (R12-201). Same budget-locked
+    transaction and lock order as trip_latch; the caller holds no row lock.
+    """
+    version = (config or load_ledger_config()).budget.estimator_version
+    with transaction.atomic():
+        take_budget_lock()
+        if not unrecorded_start_refusals().filter(pk=provider_run_id).exists():
+            return False
+        return trip_latch_locked(
+            LatchReason.ACCOUNT_LIMIT_REFUSED, provider_run_id, version, now or timezone.now()
+        )
+
+
 def _clear_on_estimator_bump(estimator_version: str, now: datetime) -> int:
     """Clear open trips recorded under another estimator version; caller holds the lock.
 
     An estimator correction is the plan's second way to clear the latch
     (MS2-D-26): a bump of HW_RADAR_APIFY_ESTIMATOR_VERSION says the bound that
     was overrun has been replaced, and the clear is recorded like an owner's.
+    `account_limit_refused` is exempt (MS2-D-48): a replaced price bound says
+    nothing about the account's hard limit, so only the owner's reset clears it.
     """
     return (
         ApifyBudgetLatch.objects.filter(cleared_at__isnull=True)
         .exclude(estimator_version=estimator_version)
+        .exclude(reason=LatchReason.ACCOUNT_LIMIT_REFUSED)
         .update(
             cleared_at=now,
             cleared_reason=f"estimator_version bumped to {estimator_version}",
@@ -663,6 +722,9 @@ def reserve(
         # with the time it started waiting.
         now = now or timezone.now()
         _clear_on_estimator_bump(cfg.estimator_version, now)
+        # Before the latch is read: a 402 whose trip a lost process never
+        # committed must pause this admission, not the one after it.
+        trip_stranded_start_refusals_locked(cfg.estimator_version, now)
         latch = latch_tripped()
         cycle = ensure_cycle(config, now)
         current = CycleDebits()
