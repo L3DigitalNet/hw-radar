@@ -322,8 +322,10 @@ architecture (resolves OQ26, OQ29).** `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD = 5
 settings inside the cash ceiling and attributable-consumption rule item 2 already states; they
 are not part of the architecture itself and may be revised without an ADR change. The
 external-liability bound reserves headroom in the shared account's prepaid usage for workloads
-Hardware Radar does not control or observe; paid admission, including the Slice D synthetic
-proof, fails closed until the bound is set. The operator allowance is the ledger class item 6
+Hardware Radar does not control or observe; paid admission, including the F5a synthetic
+proof, still fails closed whenever the account snapshot or the external-liability invariant
+cannot be satisfied. The $5.00 is a Hardware Radar accounting bound, not permission for any
+other workload to spend that amount. The operator allowance is the ledger class item 6
 reserves for Actor builds and bounded operator inspection.
 
 **12. MS-2's Apify exit is the synthetic proof (resolves OQ28, sharpens item 8).** The
