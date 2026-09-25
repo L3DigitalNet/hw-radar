@@ -12,7 +12,7 @@
   requirement matching / watches / shortlist / alerting the launch-critical workflow.
 - Bounded-retention expiry, eBay delete-on-delist (CR-004), and per-lane scheduling-state split
   landed `5a7f5b7`/`db62b6f`/`6e68585`. OQ22 resolved via migration 0017 (`8101504`). Migrations
-  0014-0017 DEPLOYED (PR #22, `f3303b1`, 2026-09-06). Source go-live gated by SA-004 + MS-1e.
+  0014-0017 deployed 2026-09-06 (PR #22). Source go-live gated by SA-004 + MS-1e.
 - MS-2 scoring design revision 14 (`a3ec96b`) is owner-accepted (2026-09-06). The MS-2a
   scoring-substrate plan reached revision 4 (`05f130f`) across three Codex `delegate` passes
   (`a626c2f0`/`8755be2a`/`b92dd220`); design and plan are the accepted advanced drive-scoring
@@ -42,7 +42,8 @@
   `actors/hw-radar-synthetic-collector` + contract schemas + `classify_run` + CI Actor gates. No
   Apify push/build/run has occurred. Open: `ProviderRunEvidence.truncation_reason` (MS2-D-11) not
   yet added; private-helper coupling in `eligibility/service.py`/`shortlist.py` (drift-tested).
-  Migrations 0018-0020 unmerged; production unchanged at 0017 (`f3303b1`); gate-runner verified.
+  gate-runner verified. **Deployed 2026-09-25** (`ac8d608`, run 36078378772): 0018-0020 applied,
+  sources disabled, no Actor run; evidence in `docs/handoff/deployed.md`.
 - Battery @62e670b green: 1226 passed/1 expected skip, 96% coverage, pip-audit clean; Actor
   project 64 passed, 99% coverage. Migrations empty->head and head->0017->head both OK; A0 oracle
   unchanged. Verifiers: Slice B C1-C9, Slice C/D-prep V1-V10 all CONFIRMED. Post-battery hardening
@@ -55,6 +56,5 @@
 - Verified read-only account state (2026-09-24): Apify plan STARTER, `maxMonthlyUsageUsd` 19
   (prepaid credit), billing cycle 5th 00:00Z -> 4th 23:59:59Z (anniversary). No settings changed.
   Deviation: this used the apify-actors agent namespace's token once, read-only (no HR token yet).
-- Contributed 5 reference pages to `llm-wiki` (`443b921`): Apify/eBay/Newegg/CPU/GPU/RAM sources.
 - Project Standards Catalog 5 pinned to 5.29.0 (Agent Handoff 1.17); upstream issue #80 resolved
   and re-verified 2026-09-06 under this pin.

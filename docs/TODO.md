@@ -33,8 +33,6 @@ Instructions for AI agents:
   `prepare_run_input`'s `extra=forbid`, but a dedicated nested-key guard is a cleaner fix (low).
 - [ ] Add listing-row fields (`title_raw`, `condition_label_raw`, `is_international`) to the
   eligibility evaluation binding; not currently read by the evaluator (verifier finding, low).
-- [ ] Land the post-battery hardening leg started this session: `classify_run`
-  complete-with-count-mismatch -> failed; Actor total wall-clock time budget.
 - [ ] Run the Slice D entry-gate design review before D2 (plan: Slice D entry gate): a focused
   review of the D/E async-ordering design (watermarks, continuity, retention, charge horizon, R23).
 - [ ] **Blocked on owner (OQ25):** provision a Hardware Radar Apify credential
@@ -79,6 +77,12 @@ Instructions for AI agents:
   drive harvest / first SSD seed.
 - [ ] Confirm the first post-migration-0015 continuous-sweep log before relying on
   `ABSENT_STALE` delisting (deployed 2026-09-06; expected 6h grace).
+- [ ] **Blocked on owner:** choose the fix for production `/static/` 403 (nginx cannot traverse the
+  `0750` app root; admin CSS only) — [bug 001](handoff/bugs/001-nginx-static-403.md).
+- [ ] Adopt Django 6.1 as its own gated change (Dependabot PR #19 closed: it could not update
+  `uv.lock`). 6.0 mainstream support ended 2026-08-04; security fixes run to April 2027.
+- [ ] Confirm the first uv-ecosystem Dependabot run opens PRs against `dev` and that one merges
+  under the `dev` signed-commit rule (config `001a5b6` takes effect once it reaches `main`).
 - [ ] Give the Seller table a retention policy before merchant usernames enter IR-002 redaction.
 - [ ] Decide the WD Purple recert opt-in question.
 - [ ] **Deferred:** MS-2a scoring-substrate execution

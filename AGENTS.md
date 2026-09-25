@@ -84,7 +84,8 @@ hand-edit `uv.lock`.
 
 Work on `dev` unless the user asks for a feature branch. `main` is protected and
 advances by PR from `dev` with a merge commit after CI passes. Use conventional,
-GPG-signed commits.
+GPG-signed commits: both `dev` and `main` reject unverified commits (admins
+included), so an unsigned PR cannot merge into either branch.
 
 <!-- prettier-ignore-start -->
 
