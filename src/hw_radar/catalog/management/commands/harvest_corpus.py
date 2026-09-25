@@ -231,8 +231,19 @@ class Command(BaseCommand):
         if limit is not None:
             parsed = parsed[:limit]
         usable = [p for p in parsed if p.title.strip() and p.source_listing_key.strip()]
-        entries = [_staging_entry(key, p) for p in usable]
-        return entries, {
+        # One entry per id, first wins: the corpus loader rejects a duplicate
+        # id (matching.eval.corpus), and a source may return one listing twice
+        # (eBay: the same item in two sweeps or across pages). The count is
+        # recorded only when non-zero, so manifests of duplicate-free runs are
+        # unchanged.
+        entries: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for listing in usable:
+            entry = _staging_entry(key, listing)
+            if entry["id"] not in seen_ids:
+                seen_ids.add(entry["id"])
+                entries.append(entry)
+        report: dict[str, Any] = {
             "status": "ok",
             "harvested": len(entries),
             # Both halves of the malformed picture (B3): records the adapter itself
@@ -241,6 +252,9 @@ class Command(BaseCommand):
             # so `harvested + skipped_malformed` need not equal the capped slice.
             "skipped_malformed": dropped_in_parse + (len(parsed) - len(usable)),
         }
+        if len(usable) > len(entries):
+            report["duplicates_dropped"] = len(usable) - len(entries)
+        return entries, report
 
     def _write(self, out_dir: Path, entries: list[dict[str, Any]], summary: dict[str, Any]) -> None:
         out_dir.mkdir(parents=True, exist_ok=True)

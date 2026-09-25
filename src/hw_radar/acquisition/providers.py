@@ -9,6 +9,8 @@ the pipeline applies to every run, whoever collected it:
   the run's completeness is known;
 - counts_toward_sweep_continuity decides whether the run extends the FULL lane's
   CR-004 polling-continuity window.
+- aggregate_local_evidence folds a multi-scope local run's per-scope evidence
+  into the one record detail_json["provider"] keeps (record-only).
 
 Both are pure so their full truth tables are unit-tested
 (tests/unit/test_provider_evidence.py) independently of the pipeline.
@@ -22,14 +24,17 @@ are exactly what they were before the seam existed.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 
 from hw_radar.acquisition.contracts import (
     DelistDetector,
     DelistScope,
+    MultiScopeDelistDetector,
     ParsedListing,
     ProviderRunEvidence,
     RawBatch,
+    ScopeSweepReport,
     SourceAdapter,
 )
 from hw_radar.catalog.models import ProviderKind, RunCompleteness, RunKind
@@ -118,6 +123,41 @@ def counts_toward_sweep_continuity(
     )
 
 
+def aggregate_local_evidence(per_scope: Sequence[ProviderRunEvidence]) -> ProviderRunEvidence:
+    """Summarize a multi-scope local run's per-scope evidence into one run record.
+
+    RECORD-ONLY: the result lands in ScraperRun.detail_json["provider"] so run
+    history keeps one evidence object per run; no gate reads it. Absence and
+    continuity are decided per scope from `per_scope` itself (pipeline), so this
+    summary can never widen what any single scope proved.
+
+    The run is COMPLETE only when every scope is; a shared reason is kept,
+    otherwise the run reads adapter_sweep_incomplete. A single entry is
+    returned unchanged, so a run that swept only the legacy NULL scope records
+    exactly the evidence the single-scope path would have.
+    """
+    if not per_scope:
+        raise ValueError("aggregate_local_evidence needs at least one scope's evidence")
+    if any(e.provider_kind is not ProviderKind.LOCAL for e in per_scope):
+        # Multi-scope runs are local-only (MultiScopeDelistDetector); a remote
+        # entry here means a caller bypassed that rule.
+        raise ValueError("only local evidence may be aggregated")
+    if len(per_scope) == 1:
+        return per_scope[0]
+    first = per_scope[0]
+    complete = all(e.completeness is RunCompleteness.COMPLETE for e in per_scope)
+    reasons = {e.completeness_reason for e in per_scope}
+    return ProviderRunEvidence(
+        provider_kind=first.provider_kind,
+        provider_key=first.provider_key,
+        completeness=RunCompleteness.COMPLETE if complete else RunCompleteness.TRUNCATED,
+        completeness_reason=(
+            reasons.pop() if len(reasons) == 1 else REASON_ADAPTER_SWEEP_INCOMPLETE
+        ),
+        stale_absence_eligible=all(e.stale_absence_eligible for e in per_scope),
+    )
+
+
 class LocalCollectionProvider:
     """CollectionProvider over an in-process SourceAdapter, delegating unchanged.
 
@@ -149,6 +189,19 @@ class LocalCollectionProvider:
         # run_source probed the adapter directly: no adapter changes for the seam.
         if isinstance(self.adapter, DelistDetector):
             return self.adapter.delist_scope(batch, parsed)
+        return None
+
+    def delist_scopes(
+        self, batch: RawBatch, parsed: list[ParsedListing]
+    ) -> Sequence[ScopeSweepReport] | None:
+        """The adapter's per-scope reports, or None when it is not multi-scope.
+
+        Deliberately not a CollectionProvider member: the pipeline asks only a
+        LocalCollectionProvider, so no remote provider can ever reach the
+        per-scope path.
+        """
+        if isinstance(self.adapter, MultiScopeDelistDetector):
+            return self.adapter.delist_scopes(batch, parsed)
         return None
 
     def run_evidence(

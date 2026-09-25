@@ -7,7 +7,7 @@ per-source code beyond the adapter").
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -36,6 +36,10 @@ from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG
 # back. ParsedListing rejects it in `attrs` so the two can never disagree.
 CATEGORY_HINT_ATTR: Final = "category_hint"
 
+# F1: the ScraperRun.detail_json key under which the pipeline records one
+# outcome object per swept collection scope; pilot_report (F3) reads it.
+SCOPE_OUTCOMES_KEY: Final = "scopes"
+
 # MS2-D-12 collection scope key, "<site_key>:<category>:<query_id>". It is
 # provider-independent, so a local sweep and an Actor sweep of the same query
 # share one key and one continuity record. Cross-file contract: the Actor
@@ -53,6 +57,14 @@ class RawItem(BaseModel):
     content_type: str = "application/json"
     payload_json: dict[str, object] | None = None
     payload_text: str | None = None
+    # Whether the EC-007 body-size outlier rule may judge this item against the
+    # site's median page size (pipeline._classify_batch). False is for pages
+    # whose size legitimately varies with the result count, such as the short
+    # final page of a paginated API sweep: without the opt-out, a 16-item last
+    # page read against a median built from 200-item pages classifies as a soft
+    # block and fails the whole run ANTI_BOT. Every other check (status,
+    # content type, challenge markers) still applies to the item.
+    body_size_comparable: bool = True
 
 
 class RawBatch(BaseModel):
@@ -185,6 +197,53 @@ class DelistDetector(Protocol):
     source for delete-on-delist needs no change in the poller's run_source call."""
 
     def delist_scope(self, batch: RawBatch, parsed: list[ParsedListing]) -> DelistScope | None: ...
+
+
+@dataclass(frozen=True)
+class ScopeSweepReport:
+    """One collection scope a multi-scope local run swept, and what it proved.
+
+    scope_key — the swept MS2-D-12 scope; None is the legacy NULL scope.
+    scope — the DelistScope the sweep supports, or None when it supports
+        nothing: the sweep returned no listings (an empty result, or it failed
+        before its first page). The pipeline BREAKS a non-NULL scope's
+        continuity for a None scope instead of recording it, because a sweep
+        that saw nothing cannot vouch that the scope was polled.
+    pages — result pages the sweep contributed to the batch (diagnostic).
+    reason — why the sweep is or is not complete, recorded verbatim in
+        ScraperRun.detail_json["scopes"] (the F3 pilot report reads it).
+    """
+
+    scope_key: str | None
+    scope: DelistScope | None
+    pages: int
+    reason: str
+
+    def __post_init__(self) -> None:
+        # The pipeline applies absence under report.scope_key but delists with
+        # report.scope; a mismatch would delist one scope on another's sweep.
+        if self.scope is not None and self.scope.scope_key != self.scope_key:
+            raise ValueError("ScopeSweepReport.scope must carry the report's own scope_key")
+
+
+@runtime_checkable
+class MultiScopeDelistDetector(Protocol):
+    """Optional LOCAL adapter capability: one run sweeps several collection scopes.
+
+    Discovered structurally like DelistDetector, and preferred over it when an
+    adapter implements both. Each report is gated, continuity-tracked and
+    delisted on its own (acquisition.pipeline), so a complete sweep of one
+    scope never delists listings of another. Only LocalCollectionProvider
+    consults it: remote providers are never multi-scope (ADR 0021), so their
+    single-scope completeness gate stays the only path for their runs.
+
+    An empty sequence means the run supports no scope at all; the pipeline then
+    behaves exactly as for a DelistDetector returning None.
+    """
+
+    def delist_scopes(
+        self, batch: RawBatch, parsed: list[ParsedListing]
+    ) -> Sequence[ScopeSweepReport]: ...
 
 
 @dataclass(frozen=True)

@@ -31,13 +31,20 @@ from hw_radar.acquisition.contracts import ParsedListing, RawBatch, RawItem
 from hw_radar.acquisition.scrapy_support import run_spider
 from hw_radar.catalog.models import RunKind
 
-# Production entry point: the Volusion category listing recert/enterprise drives.
+# Production entry point: the Volusion "Desktop Hard Drive (3.5")" category.
 # The poller (or a test) overrides this via GoHardDriveAdapter(start_url=...).
-CATEGORY_URL = "https://www.goharddrive.com/hard-drives-s/1.htm"
+# Re-verified 2026-09-25: the earlier /hard-drives-s/1.htm now redirects to
+# category 1, "External Enclosure", which silently yielded no drive listings.
+CATEGORY_URL = "https://www.goharddrive.com/3-5-inch-Desktop-SATA-IDE-SCSI-SAS-Hard-Drive-s/3.htm"
 
 # Volusion product links carry the SKU as `-p/<sku>.htm`; used both to follow
 # products and to derive the stable source_listing_key.
 _SKU_RE = re.compile(r"-p/([^/]+)\.htm")
+
+
+def _first_text(nodes: list[str]) -> str:
+    """Return the first non-blank text node, stripped, or "" when there is none."""
+    return next((node.strip() for node in nodes if node.strip()), "")
 
 
 class GoHardDriveSpider(scrapy.Spider):
@@ -52,7 +59,16 @@ class GoHardDriveSpider(scrapy.Spider):
             href = block.css('a[href*="-p/"]::attr(href)').get()
             if not href:
                 continue
-            title = block.css('a[href*="-p/"]::text').get() or ""
+            # Volusion moved the name into <span itemprop="name"> inside the
+            # title anchor (seen 2026-09-25); the anchor's own text is then
+            # whitespace. Fall back to the older direct-text layout (the frozen
+            # MS-1d fixture) and finally to the anchor's title attribute.
+            title = (
+                _first_text(block.css('[itemprop="name"]::text').getall())
+                or _first_text(block.css('a[href*="-p/"]::text').getall())
+                or block.css("a.v-product__title::attr(title)").get()
+                or ""
+            )
             # Join every text node under the price block: Volusion nests the
             # amount inside .pricecolor spans, so a single ::text would miss it.
             price_text = "".join(block.css(".product_productprice ::text").getall())

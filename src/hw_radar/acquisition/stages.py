@@ -466,6 +466,7 @@ def apply_absence(
     eligible: bool,
     gated: DelistScope | None,
     event_time: datetime,
+    null_scope_swept: bool = False,
 ) -> int:
     """Record or break continuity for the swept scope, then apply the gated delist.
 
@@ -476,7 +477,13 @@ def apply_absence(
     - eligible: record continuity for the swept scope at event_time; else break.
     - A run that swept a non-NULL scope also breaks the NULL scope at its own
       time (MS2-D-31), so a scoped run can never serve as the NULL scope's
-      predecessor in the site-wide ScraperRun lookup.
+      predecessor in the site-wide ScraperRun lookup — UNLESS
+      `null_scope_swept`: a multi-scope run (MultiScopeDelistDetector) that
+      also swept the NULL scope applies that scope in its own call, which
+      records or breaks the NULL continuity from the NULL sweep's evidence.
+      Breaking it here as well would clear the continuous_since that call
+      just recorded, so the legacy drive lane's continuity would restart on
+      every run and its stale-absence path would never open.
     - A gated complete scope raises that scope's complete-sweep watermark in
       the same transaction as its ABSENT_FROM_SWEEP marks (MS2-D-35),
       complete-empty and zero-delist sweeps included.
@@ -493,7 +500,7 @@ def apply_absence(
         break_continuity(
             event_time, scope_key=swept_scope_key, lane=scopes.lane, scope_row=scope_row
         )
-    if swept_scope_key is not None:
+    if swept_scope_key is not None and not null_scope_swept:
         break_continuity(event_time, scope_key=None, lane=scopes.lane, scope_row=None)
     if gated is None:
         return 0
