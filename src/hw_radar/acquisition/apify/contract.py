@@ -26,11 +26,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Final, Literal, NamedTuple
+from typing import Annotated, Final, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic.alias_generators import to_camel
 
+from hw_radar.acquisition.contracts import SCOPE_KEY_MAX_LENGTH, SCOPE_KEY_PATTERN
 from hw_radar.catalog.models import RunCompleteness
 from hw_radar.catalog.models.ops import TruncationReason
 from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG_RE
@@ -85,15 +86,17 @@ _UTC_TIMESTAMP_PATTERN: Final = (
     r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,6})?Z$"
 )
 _SLUG_KEY_PATTERN: Final = r"^[a-z0-9][a-z0-9_-]*$"
-# "<site_key>:<category>:<query_id>" (MS2-D-12): provider-independent, so local
-# and Actor collection of the same sweep share one key.
-_SCOPE_KEY_PATTERN: Final = r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9_-]*$"
+# "<site_key>:<category>:<query_id>" (MS2-D-12): owned by acquisition.contracts,
+# so an imported row's scope and ParsedListing.collection_scope cannot disagree.
+_SCOPE_KEY_PATTERN: Final = SCOPE_KEY_PATTERN
 # Relative, lowercase, .json only, no "..": the Actor joins it to a base URL fixed
 # in its code, so input can never redirect a fetch off the pinned repository.
 _FIXTURE_PATH_PATTERN: Final = r"^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*\.json$"
 
 _SiteKey = Annotated[str, Field(min_length=1, max_length=100, pattern=_SLUG_KEY_PATTERN)]
-_ScopeKey = Annotated[str, Field(min_length=5, max_length=100, pattern=_SCOPE_KEY_PATTERN)]
+_ScopeKey = Annotated[
+    str, Field(min_length=5, max_length=SCOPE_KEY_MAX_LENGTH, pattern=_SCOPE_KEY_PATTERN)
+]
 _CategorySlug = Annotated[
     str,
     Field(min_length=1, max_length=CATEGORY_SLUG_MAX_LENGTH, pattern=CATEGORY_SLUG_RE.pattern),
@@ -282,6 +285,113 @@ CONTRACT_SCHEMA_MODELS: Final[Mapping[str, type[BaseModel]]] = {
     "hw-radar-listing-v1.schema.json": ListingRow,
     "hw-radar-run-v1.schema.json": RunOutput,
 }
+
+
+# ── Dataset page sizing (MS2-D-32 *Dataset page size*, revision 11 R10-08) ──
+#
+# Cross-file contract: the importer (acquisition.apify.provider) sends
+# page_limit(settings.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES, MAX_LISTING_ROW_BYTES)
+# as every dataset page's `limit`, and the D3 follow-up's client reads each
+# dataset page body up to the same setting. A contract-valid dataset therefore
+# never yields an over-cap page; an over-cap page means the Actor broke the
+# contract, which is an error for that call, not a reason to shrink the page.
+
+# Fixed allowance for the JSON array brackets and separators around one page's
+# rows (a code constant in the plan, not a setting).
+DATASET_PAGE_ENVELOPE_BYTES: Final = 1024
+
+# Per-element costs of the serialized-row bound. Each string code point is
+# priced as a JSON-escaped astral code point (a surrogate pair, "😀",
+# 12 bytes) because maxLength counts code points and the response may use
+# ensure_ascii escaping; each property pays its quoted key, colon, and comma
+# plus a whitespace allowance, because Apify's pretty-printing of dataset items
+# is undocumented.
+_STRING_QUOTES_BYTES: Final = 2
+_ESCAPED_CODE_POINT_BYTES: Final = 12
+_NULL_BYTES: Final = 4
+_PROPERTY_OVERHEAD_BYTES: Final = 4
+_PROPERTY_WHITESPACE_BYTES: Final = 32
+_OBJECT_OVERHEAD_BYTES: Final = 34
+
+
+def _value_bound(name: str, prop: Mapping[str, object]) -> int:
+    branches_raw = prop.get("anyOf")
+    if isinstance(branches_raw, list):
+        bounds: list[int] = []
+        for branch in cast(list[object], branches_raw):
+            if not isinstance(branch, Mapping):
+                raise ValueError(f"property {name!r} has a non-object anyOf branch")
+            bounds.append(_value_bound(name, cast(Mapping[str, object], branch)))
+        return max(bounds)
+    const = prop.get("const")
+    enum = prop.get("enum")
+    if isinstance(const, str):
+        return _STRING_QUOTES_BYTES + _ESCAPED_CODE_POINT_BYTES * len(const)
+    if isinstance(enum, list):
+        literals = [str(v) for v in cast(list[object], enum)]
+        return _STRING_QUOTES_BYTES + _ESCAPED_CODE_POINT_BYTES * max(map(len, literals))
+    kind = prop.get("type")
+    if kind == "string":
+        max_length = prop.get("maxLength")
+        if not isinstance(max_length, int):
+            raise ValueError(f"string property {name!r} has no maxLength: the row is unbounded")
+        return _STRING_QUOTES_BYTES + _ESCAPED_CODE_POINT_BYTES * max_length
+    if kind == "integer":
+        minimum, maximum = prop.get("minimum"), prop.get("maximum")
+        if not isinstance(minimum, int) or not isinstance(maximum, int):
+            raise ValueError(f"integer property {name!r} lacks minimum/maximum: unbounded")
+        return max(len(str(minimum)), len(str(maximum)))
+    if kind == "null":
+        return _NULL_BYTES
+    raise ValueError(f"property {name!r} has a type the row bound cannot price: {kind!r}")
+
+
+def max_serialized_row_bytes(schema: Mapping[str, object]) -> int:
+    """Return the most bytes one schema-valid row can serialize to (`max_item_bytes`).
+
+    Computed from the listing schema alone (MS2-D-32): each string
+    `2 + 12 x maxLength` (a const or enum prices its longest literal), each
+    integer its longest decimal form, null 4, each property `len(key) + 4` plus
+    a 32-byte whitespace allowance, and 34 bytes for the object. Every property
+    is priced as present, optional ones included. Raises ValueError for a
+    property it cannot bound (a string without maxLength, an unbounded integer,
+    or an unpriced type): an unbounded row makes the page size and the MS2-D-26
+    transfer bound meaningless, so it must fail loudly, never default.
+    """
+    properties = schema.get("properties")
+    if not isinstance(properties, Mapping):
+        raise ValueError("schema has no properties to bound")
+    total = _OBJECT_OVERHEAD_BYTES
+    for name, prop in cast(Mapping[str, object], properties).items():
+        if not isinstance(prop, Mapping):
+            raise ValueError(f"property {name!r} is not a schema object")
+        total += len(name) + _PROPERTY_OVERHEAD_BYTES + _PROPERTY_WHITESPACE_BYTES
+        total += _value_bound(name, cast(Mapping[str, object], prop))
+    return total
+
+
+def page_limit(max_dataset_page_bytes: int, max_item_bytes: int) -> int:
+    """Return how many rows one dataset page may request so its body fits the page cap.
+
+    `floor((max_dataset_page_bytes - DATASET_PAGE_ENVELOPE_BYTES) / max_item_bytes)`.
+    Raises ValueError when not even one worst-case row fits: MS2-D-32 admission
+    denies that configuration (`unbounded_component`), and a page of zero rows
+    would make pagination spin without progress.
+    """
+    if max_item_bytes <= 0:
+        raise ValueError("max_item_bytes must be positive")
+    limit = (max_dataset_page_bytes - DATASET_PAGE_ENVELOPE_BYTES) // max_item_bytes
+    if limit < 1:
+        raise ValueError(
+            f"page_limit < 1: a {max_dataset_page_bytes}-byte page cannot hold one "
+            f"{max_item_bytes}-byte row"
+        )
+    return limit
+
+
+# The v1 listing row's bound, 32,735 bytes (MS2-D-32's worked figure; pinned by
+# tests/unit/test_apify_contract.py against the committed schema file).
+MAX_LISTING_ROW_BYTES: Final = max_serialized_row_bytes(ListingRow.model_json_schema())
 
 
 class ContractViolation(ValueError):

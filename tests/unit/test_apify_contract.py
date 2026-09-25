@@ -20,6 +20,8 @@ from pydantic import BaseModel
 
 from hw_radar.acquisition.apify.contract import (
     CONTRACT_SCHEMA_MODELS,
+    DATASET_PAGE_ENVELOPE_BYTES,
+    MAX_LISTING_ROW_BYTES,
     AdmittedRun,
     CollectorInput,
     ContractViolation,
@@ -27,6 +29,8 @@ from hw_radar.acquisition.apify.contract import (
     QueryScope,
     RunClassification,
     classify_run,
+    max_serialized_row_bytes,
+    page_limit,
     prepare_run_input,
     usable_rows,
 )
@@ -524,3 +528,51 @@ def test_impossible_usable_count_is_a_caller_error() -> None:
 
     with pytest.raises(ValueError, match="usable_count"):
         classify_run("SUCCEEDED", fixture["output"], 1, 2, admitted=_admitted(fixture))
+
+
+# ── Dataset page sizing (MS2-D-32 *Dataset page size*, revision 11 R10-08) ────
+
+
+def _worst_case_value(prop: dict[str, Any]) -> object:
+    """The largest JSON value a property schema admits, astral-escaped where a string."""
+    branches: list[dict[str, Any]] = prop.get("anyOf", [prop])
+    string_branch = next((b for b in branches if b.get("type") == "string"), None)
+    if "const" in prop:
+        return prop["const"]
+    if "enum" in prop:
+        return max(prop["enum"], key=len)
+    if string_branch is not None:
+        # U+1F600 serializes as a 12-byte surrogate pair under ensure_ascii=True,
+        # the dearest single code point a maxLength can admit.
+        return "\U0001f600" * string_branch["maxLength"]
+    integer = next(b for b in branches if b.get("type") == "integer")
+    return max((integer["minimum"], integer["maximum"]), key=lambda n: len(str(n)))
+
+
+def test_serialized_row_bound_covers_worst_case_escaped_row() -> None:
+    schema = json.loads((CONTRACT_DIR / "hw-radar-listing-v1.schema.json").read_text("utf-8"))
+    bound = max_serialized_row_bytes(schema)
+    # The plan's worked figure for v1: a change to the listing schema that moves
+    # it must be a deliberate edit here and in the admission bound together.
+    assert bound == MAX_LISTING_ROW_BYTES == 32_735
+    worst = {name: _worst_case_value(prop) for name, prop in schema["properties"].items()}
+    for indent in (None, 2, 4):
+        encoded = json.dumps(worst, ensure_ascii=True, indent=indent).encode("ascii")
+        assert len(encoded) <= bound
+
+
+def test_serialized_row_bound_refuses_an_unbounded_string() -> None:
+    schema = {"type": "object", "properties": {"free": {"type": "string"}}}
+    with pytest.raises(ValueError, match="free"):
+        max_serialized_row_bytes(schema)
+
+
+def test_page_limit_derived_from_row_bound_and_page_cap() -> None:
+    assert DATASET_PAGE_ENVELOPE_BYTES == 1024
+    # floor((1_048_576 - 1024) / 32_735) = 32 at the plan's defaults.
+    assert page_limit(1_048_576, MAX_LISTING_ROW_BYTES) == 32
+    assert page_limit(1024 + 3 * 100 + 99, 100) == 3
+    # A page cap that cannot hold one worst-case row is refused, not rounded up:
+    # admission denies with unbounded_component in that configuration.
+    with pytest.raises(ValueError, match="page_limit"):
+        page_limit(1024 + 99, 100)

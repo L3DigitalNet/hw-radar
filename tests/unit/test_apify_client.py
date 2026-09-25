@@ -5,6 +5,7 @@ Response bodies are hand-built in Apify's documented ``{"data": ...}`` shape.
 """
 
 import asyncio
+import inspect
 import json
 import logging
 from collections.abc import Callable, Coroutine
@@ -648,3 +649,12 @@ def test_identifiers_cannot_escape_their_path_segment(bad: str) -> None:
                 await client.get_run(bad)
 
     _run(go())
+
+
+def test_iter_dataset_items_requires_an_explicit_page_size() -> None:
+    # MS2-D-32 (revision 11, R10-08): the importer must send the derived
+    # page_limit, so iteration has no default a caller could fall back to and
+    # silently read 1000-row pages past the dataset page byte cap.
+    parameter = inspect.signature(ApifyClient.iter_dataset_items).parameters["page_size"]
+    assert parameter.default is inspect.Parameter.empty
+    assert parameter.kind is inspect.Parameter.KEYWORD_ONLY

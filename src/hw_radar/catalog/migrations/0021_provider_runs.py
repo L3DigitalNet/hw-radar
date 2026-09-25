@@ -105,6 +105,7 @@ class Migration(migrations.Migration):
                         max_length=20,
                     ),
                 ),
+                ("run_output", models.JSONField(blank=True, null=True)),
                 (
                     "usage_total_usd",
                     models.DecimalField(blank=True, decimal_places=8, max_digits=14, null=True),

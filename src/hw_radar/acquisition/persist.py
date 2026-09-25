@@ -56,18 +56,23 @@ def upsert_listing(
     *,
     expires_at: datetime | None = None,
 ) -> tuple[Listing, bool]:
+    defaults: dict[str, object] = {
+        "canonical_url": normalized.url,
+        "url_hash": url_hash(normalized.url),
+        "title_raw": normalized.title,
+        "condition_label_raw": normalized.condition_label,
+        "is_international": normalized.is_international,
+        "retention_class": retention_class,
+        "expires_at": expires_at,
+    }
+    # MS2-D-12: a scope is written only when the observation asserts one, so a
+    # scope-less local adapter never moves an imported listing back to the
+    # legacy NULL scope (where its own scope's complete sweep could no longer
+    # see it, and the NULL scope's could delist it).
+    if normalized.collection_scope is not None:
+        defaults["collection_scope"] = normalized.collection_scope
     return Listing.objects.update_or_create(
-        source_site=site,
-        source_listing_key=normalized.source_listing_key,
-        defaults={
-            "canonical_url": normalized.url,
-            "url_hash": url_hash(normalized.url),
-            "title_raw": normalized.title,
-            "condition_label_raw": normalized.condition_label,
-            "is_international": normalized.is_international,
-            "retention_class": retention_class,
-            "expires_at": expires_at,
-        },
+        source_site=site, source_listing_key=normalized.source_listing_key, defaults=defaults
     )
 
 

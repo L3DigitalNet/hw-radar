@@ -130,8 +130,9 @@ __all__ = [
 
 APIFY_TOKEN_ENV = "HW_RADAR_APIFY_TOKEN"
 DEFAULT_BASE_URL = "https://api.apify.com"
-# Bounds the memory one page holds; the caller's own item caps decide how many
-# pages are read at all.
+# Default ``limit`` for a direct ``list_dataset_items`` call outside the
+# importer. The importer never uses it: it passes the derived page_limit to
+# ``iter_dataset_items``, which has no default (MS2-D-32, revision 11).
 DEFAULT_DATASET_PAGE_SIZE = 1000
 # Per-HTTP-request budget. Deliberately independent of any Actor run timeout:
 # the start call returns as soon as the run is queued (no waitForFinish).
@@ -478,10 +479,13 @@ class ApifyClient:
             total=_header_int(total_header),
         )
 
-    async def iter_dataset_items(
-        self, dataset_id: str, *, page_size: int = DEFAULT_DATASET_PAGE_SIZE
-    ) -> AsyncIterator[object]:
+    async def iter_dataset_items(self, dataset_id: str, *, page_size: int) -> AsyncIterator[object]:
         """Yield every item of the dataset, one page request at a time.
+
+        ``page_size`` is sent as every page's ``limit`` and has no default: the
+        importer must pass the ``page_limit`` derived from the dataset page byte
+        cap and the serialized-row bound (MS2-D-32), and a default would let a
+        caller silently read pages that exceed that cap.
 
         Stops on an empty page, on a page shorter than ``page_size``, or once
         ``offset`` reaches the reported total. Each page is billed as dataset

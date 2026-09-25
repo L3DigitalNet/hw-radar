@@ -11,6 +11,10 @@ Environment contract (see .env.example for dev values):
   HW_RADAR_STATIC_ROOT      optional collectstatic target override; defaults to
                             PRODUCTION_STATIC_ROOT in production (served by nginx)
                             and BASE_DIR/staticfiles otherwise
+  HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES
+                            optional; byte cap of one Apify dataset page body
+                            (default 1048576). The importer derives its page size
+                            from it (MS2-D-32 *Dataset page size*)
 Production values arrive via the bao-agent tmpfs render (systemd
 EnvironmentFile=/run/bao-agent/hw-radar.env) - never a plaintext file at rest.
 """
@@ -144,6 +148,15 @@ STATIC_ROOT = Path(
 )
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# MS2-D-32 *Response caps*: the most bytes one Apify dataset page body may hold
+# (1 MiB, an assumption). Cross-file contract: acquisition.apify.provider sends
+# page_limit(this, MAX_LISTING_ROW_BYTES) as every page's `limit`, so a
+# contract-valid dataset can never produce a page over this cap; the client's
+# dataset-page body cap (plan D3 follow-up) must read this same setting.
+HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES = int(
+    os.environ.get("HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES", "1048576")
+)
 
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"

@@ -27,7 +27,10 @@ Instructions for AI agents:
 - [ ] Add `ProviderRunEvidence.truncation_reason` (MS2-D-11), deferred out of D1. The DB side
   landed in D2 (`provider_run.truncation_reason`, migration `0021`, with a CHECK that it is set
   iff completeness is `truncated`); the evidence-model field and its None-omitting serializer
-  remain, needed by D4/D8.
+  remain, needed by D8. D4 records the reason on `provider_run.truncation_reason` only. Conflict
+  to resolve first: MS2-D-11's validator ("required for non-local truncated evidence") would fail
+  the frozen `tests/db/test_collection_provider.py` remote fakes, which build non-local
+  `truncated` evidence without a reason.
 - [ ] Split the committed input contract into a common schema + synthetic extension so a future
   merchant Actor can't inherit `faultMode` (verifier finding, low priority).
 - [ ] Harden D3 client's proxy guard: currently top-level only; nested proxy config is blocked via
@@ -47,9 +50,15 @@ Instructions for AI agents:
   **D-prep code-complete:** D3 client and D1 Actor project (`actors/hw-radar-synthetic-collector`,
   contract schemas, `classify_run`, CI Actor gates). **D2 schema done** (migration `0021`:
   `provider_run`, `scope_sweep_continuity`, `SourceConfig.collection_provider`, listing scope and
-  ordering watermarks, NULL-scope lane watermarks, scope-filtered `_apply_delist`). **Next
-  (Slice D core):** D4 → D10 → D5 → D6 → D7 → D8 → D11 → D12 → D9; Apify push/build/run (none
-  has occurred yet); truncation_reason on the evidence model (above).
+  ordering watermarks, NULL-scope lane watermarks, scope-filtered `_apply_delist`). **D4 done**
+  (`ApifyImportProvider`, `provider_run.run_output` in `0021`, `source_retention` registry,
+  derived dataset `page_limit`, remote runs skip the soft-block classifier). **Next (Slice D
+  core):** D10 → D5 → D6 → D7 → D8 → D11 → D12 → D9; Apify push/build/run (none has occurred
+  yet); truncation_reason on the evidence model (above). D4 hand-offs: D10 counts dataset/KV
+  reads against the MS2-D-32 caps around `ApifyImportProvider.fetch`, rejects `failed` runs
+  before persistence, and passes `provider.retention` as the required stage keyword; D5 must
+  write `provider_run.query_scope` as the camelCase `QueryScope` wire JSON the run was started
+  with, and supply the admitted Actor name the provider checks OUTPUT against.
 - [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
   initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential

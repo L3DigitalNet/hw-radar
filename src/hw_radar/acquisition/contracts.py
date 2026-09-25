@@ -23,6 +23,14 @@ from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG
 # back. ParsedListing rejects it in `attrs` so the two can never disagree.
 CATEGORY_HINT_ATTR: Final = "category_hint"
 
+# MS2-D-12 collection scope key, "<site_key>:<category>:<query_id>". It is
+# provider-independent, so a local sweep and an Actor sweep of the same query
+# share one key and one continuity record. Cross-file contract: the Actor
+# contract's collectionScope pattern (acquisition.apify.contract) is this
+# constant, and the committed JSON Schema files carry the same literal.
+SCOPE_KEY_PATTERN: Final = r"^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9_-]*$"
+SCOPE_KEY_MAX_LENGTH: Final = 100
+
 
 class RawItem(BaseModel):
     model_config = ConfigDict(frozen=True)
@@ -65,6 +73,14 @@ class ParsedListing(BaseModel):
         default=None,
         max_length=CATEGORY_SLUG_MAX_LENGTH,
         pattern=CATEGORY_SLUG_RE.pattern,
+    )
+
+    # MS2-D-12: the collection scope this observation was swept under; the
+    # persist stage writes it to Listing.collection_scope, where it decides
+    # which scope's complete sweep may delist the listing. None = no scope
+    # asserted, which never clears a scope already recorded on the listing.
+    collection_scope: str | None = Field(
+        default=None, max_length=SCOPE_KEY_MAX_LENGTH, pattern=SCOPE_KEY_PATTERN
     )
 
     @model_validator(mode="after")

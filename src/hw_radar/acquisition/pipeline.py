@@ -39,6 +39,7 @@ from collections.abc import Callable
 from datetime import date, datetime, timedelta
 
 from asgiref.sync import sync_to_async
+from django.db.models import Q
 from django.utils import timezone
 from pydantic import ValidationError
 
@@ -64,6 +65,7 @@ from hw_radar.acquisition.scheduling.lifecycle import LifecycleEvent
 from hw_radar.catalog.models import (
     DelistReason,
     Listing,
+    ProviderKind,
     RawPayload,
     ResolutionGrain,
     RetentionClass,
@@ -236,8 +238,18 @@ def _median_body_bytes(site: SourceSite) -> int | None:
     # taking the median, and restrict the window to FULL runs — heartbeat/probe
     # runs fetch a single item, which would otherwise inject a distorted
     # "average of 1" and skew the basis.
+    #
+    # Local runs only (MS2-D-28): an imported run's "items" are small dataset
+    # rows, not HTTP pages, so its body sizes are not a basis for judging a page.
+    # A run that predates provider evidence has no "provider" key and is local.
+    # Without this filter, a window of remote runs after a provider switch would
+    # replace the page-size basis and soft-block the next ordinary local run.
     rows = (
         ScraperRun.objects.filter(source_site=site, status=RunStatus.SUCCESS, run_kind=RunKind.FULL)
+        .filter(
+            Q(detail_json__provider__provider_kind=ProviderKind.LOCAL.value)
+            | Q(detail_json__provider__provider_kind__isnull=True)
+        )
         .order_by("-started_at")
         .values_list("detail_json__body_bytes", "records_fetched")[:MEDIAN_BODY_WINDOW]
     )
@@ -456,8 +468,13 @@ async def run_collection(
     try:
         async with asyncio.timeout(fetch_timeout_s):
             batch = await provider.fetch()
-        median = await sync_to_async(_median_body_bytes)(site)
-        _classify_batch(batch, expects_json=provider.expects_json, median=median)
+        # MS2-D-28: only a local provider's items are HTTP responses. A remote
+        # provider's items are dataset rows with no body text, which the EC-007
+        # body-size rule would call ANTI_BOT against any local median; remote
+        # transport health is classify_run's job, inside the provider.
+        if provider.provider_kind is ProviderKind.LOCAL:
+            median = await sync_to_async(_median_body_bytes)(site)
+            _classify_batch(batch, expects_json=provider.expects_json, median=median)
         try:
             parsed = provider.parse(batch)
         except ValidationError as exc:

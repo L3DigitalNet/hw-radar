@@ -147,6 +147,16 @@ class ProviderRun(models.Model):
     truncation_reason = models.CharField(
         max_length=20, choices=TruncationReason.choices, blank=True, default=""
     )
+    # The run's default-KV `OUTPUT` record (MS2-D-14), stored here and never as a
+    # RawItem, so the zero-record parser-rot guard still passes a proven-empty
+    # sweep. Holds the record's canonical hw-radar-run/v1 JSON (camelCase wire
+    # form) only when it validates against that contract; NULL when the record
+    # is absent, not JSON, or not contract-valid, and completeness_reason then
+    # says which (missing_output / invalid_output / unknown_schema_version).
+    # Storing only validated records keeps this table free of merchant content:
+    # it is not retention-governed (MS2-D-13), and a contract-valid OUTPUT holds
+    # counts, scope, and errors only (MS2-D-25).
+    run_output: models.JSONField[dict[str, object] | None] = models.JSONField(null=True, blank=True)
     # Wider than the Slice E ledger's (10,4) money columns: this is the
     # provider's own figure, stored before E compares or rounds it.
     usage_total_usd = models.DecimalField(max_digits=14, decimal_places=8, null=True, blank=True)
