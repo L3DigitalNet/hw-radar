@@ -39,8 +39,9 @@ Instructions for AI agents:
   permissions can name it; Apify scopes only to existing resources.
   **2026-09-25 finding:** the owner-created scoped token authenticates but gets `403
   insufficient-permissions` on `/v2/users/me`, `/users/me/limits`, and `/users/me/usage/monthly`,
-  and `404` on its own Actor (GET). Admission therefore denies `account_state_unobservable`;
-  R25 needs an owner decision on the account-read path before F5a can admit a run.
+  and `404` on its own Actor (GET). **Resolved the same day** (owner decision, OQ30): the
+  runtime reads no account state (plan rev 12, MS2-D-48, implemented on `dev`); the token still
+  needs **Read** on the Actor.
 - [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
   saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
   Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.
