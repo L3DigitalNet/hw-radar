@@ -29,6 +29,10 @@ Environment contract (see .env.example for dev values):
                             unset id refuses every start), its build tag (default
                             "prod"), and the Actor name its OUTPUT must report
                             (default "hw-radar-synthetic-collector", MS2-D-38)
+  HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT
+                            optional; the 40-hex commit whose fixture pages the
+                            synthetic proof site's scheduled spec pins (MS2-D-42).
+                            Unset (the default) registers no spec for the site
   HW_RADAR_APIFY_STORAGE_CLEANUP_MAX / HW_RADAR_APIFY_IMPORT_MARGIN
                             optional, in seconds; the remote-storage deadline after
                             admission (default 86400) and the import time a start's
@@ -225,6 +229,16 @@ HW_RADAR_APIFY_ACTOR_BUILD = os.environ.get("HW_RADAR_APIFY_ACTOR_BUILD", "prod"
 HW_RADAR_APIFY_ACTOR_NAME = os.environ.get(
     "HW_RADAR_APIFY_ACTOR_NAME", "hw-radar-synthetic-collector"
 )
+# MS2-D-42: the fixture commit the synthetic site's RUN_SPECS entry pins. No
+# default: a commit is an operator choice per proof, not a code constant, and
+# while it is empty the entry returns no spec, so the site is refused
+# `no_run_spec` exactly as an unregistered one. A present but malformed value is
+# passed through so the start refuses it loudly as `invalid_input` rather than
+# silently looking unconfigured. apify_smoke takes its commit per invocation and
+# ignores this setting.
+HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT = os.environ.get(
+    "HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT", ""
+).strip()
 # MS2-D-25/-33, in seconds: storage_cleanup_due_at = admitted_at +
 # min(STORAGE_CLEANUP_MAX, bounded_ttl / 2) (24 h, an assumption), and a start is
 # refused unless timeout_s + IMPORT_MARGIN fits before that deadline (1 h, an

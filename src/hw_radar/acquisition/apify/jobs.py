@@ -31,9 +31,12 @@ Slice E spend ledger, which records every denial as a ledger row and fails
 closed on every unset price, cap, or configured account setting (MS2-D-17,
 -40, -48). Nothing in production binds anything else. In front of it, the
 kill switch settings.HW_RADAR_APIFY_ENABLED (default false) refuses every
-start, an unset HW_RADAR_APIFY_ACTOR_ID refuses every start, and no site has
-an ActorRunSpec registered in RUN_SPECS, so even an `apify` source with
-everything else allowed is refused `no_run_spec`. With the production defaults
+start, an unset HW_RADAR_APIFY_ACTOR_ID refuses every start, and RUN_SPECS
+holds only the synthetic proof site, whose factory returns no spec while
+HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT is unset (its default), so even an
+`apify` source with everything else allowed is refused `no_run_spec`. The
+synthetic site also needs a SourceConfig row, which only the non-production
+apify_synthetic_setup command creates (MS2-D-42). With the production defaults
 no start request is ever sent, and in every configuration no Apify account
 endpoint is read (MS2-D-48: the billing cycle and the account limits are
 operator-verified settings). The poll tick never starts a run; with no
@@ -77,7 +80,7 @@ from django.db.models import Q
 from django.utils import timezone
 from pydantic import ValidationError
 
-from hw_radar.acquisition.apify import importer, reconcile
+from hw_radar.acquisition.apify import importer, reconcile, synthetic
 from hw_radar.acquisition.apify.budget import AdmissionRequest, BudgetClass, RunShape
 from hw_radar.acquisition.apify.client import (
     ApifyApiError,
@@ -92,6 +95,7 @@ from hw_radar.acquisition.apify.contract import (
     TERMINAL_RUN_STATUSES,
     CollectorInput,
     QueryScope,
+    SyntheticCollectorInput,
 )
 from hw_radar.acquisition.apify.importer import RejectReason, import_provider_run
 from hw_radar.acquisition.apify.ledger import (
@@ -267,12 +271,52 @@ class ActorRunSpec:
     admission_class: AdmissionClass = AdmissionClass.WATCH_REFRESH
 
 
-type RunSpecFactory = Callable[[SourceConfig, RunKind], ActorRunSpec]
+# None means "no spec in this configuration" and is refused exactly like an
+# unregistered site (`no_run_spec`), so a registered factory can stay inert
+# until the operator supplies what its input needs.
+type RunSpecFactory = Callable[[SourceConfig, RunKind], ActorRunSpec | None]
 
-# SCOPE: empty on purpose. No production source is Actor-backed in MS-2 until a
-# source-admission record exists (OQ24, MS2-D-44); F5a registers the synthetic
-# site's spec. A site absent here is refused `no_run_spec` before any spend.
-RUN_SPECS: Final[Mapping[str, RunSpecFactory]] = MappingProxyType({})
+
+def synthetic_spec(
+    fixture_commit: str,
+    *,
+    fault_mode: str = synthetic.DEFAULT_FAULT_MODE,
+    caps: synthetic.SyntheticCaps = synthetic.DEFAULT_CAPS,
+) -> ActorRunSpec:
+    """Return the synthetic proof site's spec for one start (MS2-D-42, F5a).
+
+    The admission class is the ActorRunSpec default, so a FULL start is
+    admitted as `watch_refresh` and a PROBE as `discovery`, as for any site.
+    """
+    return ActorRunSpec(
+        input_model=SyntheticCollectorInput,
+        run_input=synthetic.run_input(fixture_commit, fault_mode=fault_mode, caps=caps),
+        memory_mb=synthetic.MEMORY_MB,
+        timeout_s=synthetic.TIMEOUT_S,
+    )
+
+
+def synthetic_run_spec(_config: SourceConfig, _run_kind: RunKind) -> ActorRunSpec | None:
+    """The synthetic site's RUN_SPECS factory: fault mode `none`, the default caps.
+
+    Returns None while HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT is empty. The
+    commit is read per call rather than captured at import, so the pinned
+    fixture is always the configured one and never a code constant.
+    """
+    commit: str = settings.HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT
+    if not commit:
+        return None
+    return synthetic_spec(commit)
+
+
+# SCOPE: the synthetic proof site only. No merchant source is Actor-backed in
+# MS-2 until a source-admission record exists (OQ24, MS2-D-44). A site absent
+# here is refused `no_run_spec` before any spend, and so is the synthetic site
+# while its factory returns None (synthetic_run_spec). apify_smoke never uses
+# this entry: it passes its own per-invocation spec through `run_specs`.
+RUN_SPECS: Final[Mapping[str, RunSpecFactory]] = MappingProxyType(
+    {synthetic.SITE_KEY: synthetic_run_spec}
+)
 
 
 class StartStatus(StrEnum):
@@ -361,6 +405,7 @@ async def start_provider_run(
     admission: BudgetAdmission | None = None,
     run_specs: Mapping[str, RunSpecFactory] | None = None,
     client_factory: ClientFactory | None = None,
+    build_tag: str | None = None,
 ) -> StartResult:
     """Start one Actor run for an `apify` source; never retries the start request.
 
@@ -373,13 +418,20 @@ async def start_provider_run(
     started a billable run; selector 3 treats it as `orphaned_start` at its
     deadline (MS2-D-33). A response that fails start_mismatches rejects the
     import and sends the mismatch abort (module docstring).
+
+    `build_tag` names the Actor build to start, defaulting to
+    HW_RADAR_APIFY_ACTOR_BUILD; the scheduler never passes it, so only an
+    explicit caller (apify_smoke's `candidate` run, MS2-D-43) starts another
+    tag. The same tag is sent and then required of the echoed options, and the
+    MS2-D-38 version-line check reads the build number, not the tag, so any
+    tag still has to resolve to a build on the contract's major.
     """
     site_key = config.source_site.normalized_name
     specs = RUN_SPECS if run_specs is None else run_specs
     factory = specs.get(site_key)
-    if factory is None:
+    spec = None if factory is None else factory(config, run_kind)
+    if spec is None:
         return StartResult(StartStatus.REFUSED, StartRefusal.NO_RUN_SPEC)
-    spec = factory(config, run_kind)
     try:
         validated = spec.input_model.model_validate(dict(spec.run_input))
     except ValidationError as exc:
@@ -405,7 +457,7 @@ async def start_provider_run(
     if not settings.HW_RADAR_APIFY_ENABLED:
         return StartResult(StartStatus.REFUSED, StartRefusal.APIFY_DISABLED)
     actor_id: str = settings.HW_RADAR_APIFY_ACTOR_ID
-    build_tag: str = settings.HW_RADAR_APIFY_ACTOR_BUILD
+    build: str = settings.HW_RADAR_APIFY_ACTOR_BUILD if build_tag is None else build_tag
     if not actor_id:
         return StartResult(StartStatus.REFUSED, StartRefusal.ACTOR_UNCONFIGURED)
     if run_kind is RunKind.FULL and await sync_to_async(_has_outstanding_full_run)(
@@ -476,7 +528,7 @@ async def start_provider_run(
                 validated.model_dump(mode="json"),
                 memory_mbytes=spec.memory_mb,
                 timeout_secs=spec.timeout_s,
-                build=build_tag,
+                build=build,
             )
         except Exception as exc:  # never retried: see the docstring
             await sync_to_async(_record_start_error)(row.pk, exc)
@@ -500,7 +552,7 @@ async def start_provider_run(
             return StartResult(StartStatus.START_FAILED, type(exc).__name__, row.pk)
 
         mismatches = start_mismatches(
-            run, memory_mb=spec.memory_mb, timeout_s=spec.timeout_s, build_tag=build_tag
+            run, memory_mb=spec.memory_mb, timeout_s=spec.timeout_s, build_tag=build
         )
         await sync_to_async(_record_start)(row.pk, run, mismatches)
         if not mismatches:

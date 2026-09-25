@@ -49,7 +49,9 @@ SOURCE_RETENTION: Final[Mapping[str, AdapterRetention]] = MappingProxyType(
         "serverpartdeals": _MERCHANT_FACT,
         "wd-recertified": _MERCHANT_FACT,
         # Actor-only synthetic proof site (MS2-D-42); indefinite because MS2-D-33
-        # denies bounded classes an Actor path.
+        # denies bounded classes an Actor path. The key must equal
+        # acquisition.apify.synthetic.SITE_KEY, or every synthetic start is
+        # refused `unknown_retention`.
         "synthetic": _MERCHANT_FACT,
     }
 )

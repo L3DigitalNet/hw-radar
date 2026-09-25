@@ -79,8 +79,11 @@ Instructions for AI agents:
      `…_TRANSFER_USD_PER_GB`) plus `…_MARGIN`, `…_MAX_TIMEOUT_S`, `…_MAX_KV_WRITES`,
      `…_MAX_KV_BYTES` (≤ `…_MAX_API_RESPONSE_BYTES`), `…_STORAGE_MAX_LIFETIME` (≥ 31-day
      retention), `…_LEDGER_ID`, `…_ACTOR_ID`; confirm `…_ACTOR_BUILD`/`…_ACTOR_NAME`.
-  3. Code: register the synthetic site's `ActorRunSpec` in `jobs.RUN_SPECS` and its
-     SourceSite/SourceConfig (`collection_provider=apify`); deploy `0021`/`0022`.
+  3. Deploy `0021`/`0022`, then in the non-production proof environment only run
+     `apify_synthetic_setup` (disabled `apify` SourceConfig, never scheduled). The code is in:
+     the synthetic `RUN_SPECS` entry stays inert (`no_run_spec`) until
+     `HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT` is set, and `apify_smoke --fixture-commit <sha>`
+     (default build `candidate`) starts, imports, and reports one run through the ledger.
   4. Operator: `apify_operator_reserve --kind build` before `apify push`/build; settle it.
   5. Owner runs `apify_ledger_claim` (it materializes the configured cycle); set
      `HW_RADAR_APIFY_ENABLED=true`; then the capability probe (R25).

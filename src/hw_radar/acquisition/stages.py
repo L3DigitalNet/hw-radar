@@ -134,8 +134,9 @@ def full_lane_state(site: SourceSite) -> SourceLaneState | None:
     """Return the site's FULL lane row, creating it if absent; None without a SourceConfig.
 
     Sites without a SourceConfig (isolation tests, the Actor-only synthetic
-    site) have no NULL-scope watermarks; every NULL-scope guard then reads "no
-    bound" and continuity for the NULL scope is never proven.
+    site before apify_synthetic_setup creates its row) have no NULL-scope
+    watermarks; every NULL-scope guard then reads "no bound" and continuity
+    for the NULL scope is never proven.
     """
     config = SourceConfig.objects.filter(source_site=site).first()
     if config is None:
