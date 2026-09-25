@@ -43,11 +43,21 @@ Environment contract (see .env.example for dev values):
                             optional; only the literal "true" lets a 404 on a
                             storage delete count as deleted (default false,
                             MS2-D-25 *404 rule*; set only after the R25 probe)
+  HW_RADAR_APIFY_* budget keys (Slice E, MS2-D-26/-32/-40/-41/-46)
+                            optional; unit prices, the reservation margin, caps,
+                            allocations, and ledger timings read by
+                            acquisition.apify.budget. Parsed without raising: an
+                            invalid value becomes None (or, for the account margin,
+                            NaN) so budget admission denies instead of the process
+                            failing to start. See the block at the end of the Apify
+                            section for each key's absent/empty/invalid semantics
 Production values arrive via the bao-agent tmpfs render (systemd
 EnvironmentFile=/run/bao-agent/hw-radar.env) - never a plaintext file at rest.
 """
 
 import os
+from datetime import date
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -242,6 +252,212 @@ HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS = int(os.environ.get("HW_RADAR_APIFY_MAX_DELE
 HW_RADAR_APIFY_DELETE_404_IS_ABSENT = (
     os.environ.get("HW_RADAR_APIFY_DELETE_404_IS_ABSENT", "").strip().lower() == "true"
 )
+
+
+# ── Slice E budget keys (read by acquisition.apify.budget.load_budget_settings) ──
+#
+# Every key below is parsed without raising. An absent key takes the default the
+# plan states (or None where it states none); a present key that is empty or not
+# a valid value becomes None, and budget admission denies on None with the reason
+# the plan names (`pricing_unverified`, `unbounded_component`,
+# `external_liability_unbounded`, `call_billing_residual_unaccepted`, or
+# `budget_setting_invalid`). Rejected alternative: raising at import, as the
+# older int() keys above do. That would also stop the apify-poll job, which must
+# keep draining already-admitted runs while paid admission is off (ED-07), and a
+# default substituted for a mis-rendered value would silently widen spend.
+# Cross-file contract: acquisition.apify.budget reads each name through
+# load_budget_settings and treats None exactly as described here.
+
+
+def _env_decimal(name: str, default: str | None = None) -> Decimal | None:
+    """Return a finite, non-negative Decimal; the default only when `name` is absent."""
+    raw = os.environ.get(name)
+    if raw is None:
+        if default is None:
+            return None
+        raw = default
+    try:
+        value = Decimal(raw.strip())
+    except InvalidOperation:
+        return None
+    if not value.is_finite() or value < 0:
+        return None
+    return value
+
+
+def _env_int(name: str, default: int | None = None) -> int | None:
+    """Return a non-negative int; the default only when `name` is absent."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(raw.strip())
+    except ValueError:
+        return None
+    return value if value >= 0 else None
+
+
+def _env_choice(name: str, default: str, choices: tuple[str, ...]) -> str | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    value = raw.strip()
+    return value if value in choices else None
+
+
+def _env_date(name: str, default: date) -> date | None:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    try:
+        return date.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+
+
+# Unit prices (MS2-D-26). No live default: an absent, empty, or invalid price
+# denies paid admission with `pricing_unverified`. The operator sets each from
+# the official pricing page after re-verifying it for the account's plan. Source
+# for every price: https://apify.com/pricing (retrieved 2026-09-24 for the plan;
+# the same rates at https://docs.apify.com/platform/actors/publishing/monetize/pricing-and-costs,
+# retrieved 2026-09-25). Figures the plan recorded for Free/Starter are noted per
+# key; a key without one had no figure recorded and must be read off the page.
+# Per-operation prices are per 1,000 operations, as the page lists them; storage
+# is per GB-hour and transfer per GB, both priced by the estimator per decimal
+# GB (10^9 bytes), which prices a byte higher than a GiB would.
+# https://apify.com/pricing, 2026-09-24: compute unit, $0.20/CU on Free/Starter.
+HW_RADAR_APIFY_USD_PER_CU = _env_decimal("HW_RADAR_APIFY_USD_PER_CU")
+# https://apify.com/pricing, 2026-09-24: dataset reads per 1,000.
+HW_RADAR_APIFY_DATASET_READS_USD_PER_1000 = _env_decimal(
+    "HW_RADAR_APIFY_DATASET_READS_USD_PER_1000"
+)
+# https://apify.com/pricing, 2026-09-24: dataset writes per 1,000.
+HW_RADAR_APIFY_DATASET_WRITES_USD_PER_1000 = _env_decimal(
+    "HW_RADAR_APIFY_DATASET_WRITES_USD_PER_1000"
+)
+# https://apify.com/pricing, 2026-09-24: dataset timed storage per GB-hour.
+HW_RADAR_APIFY_DATASET_STORAGE_USD_PER_GB_HOUR = _env_decimal(
+    "HW_RADAR_APIFY_DATASET_STORAGE_USD_PER_GB_HOUR"
+)
+# https://apify.com/pricing, 2026-09-24: key-value store reads per 1,000.
+HW_RADAR_APIFY_KV_READS_USD_PER_1000 = _env_decimal("HW_RADAR_APIFY_KV_READS_USD_PER_1000")
+# https://apify.com/pricing, 2026-09-24: key-value store writes per 1,000
+# ($0.05 on Starter, the plan's MS2-D-32 worked figure).
+HW_RADAR_APIFY_KV_WRITES_USD_PER_1000 = _env_decimal("HW_RADAR_APIFY_KV_WRITES_USD_PER_1000")
+# https://apify.com/pricing, 2026-09-24: key-value store timed storage per GB-hour.
+HW_RADAR_APIFY_KV_STORAGE_USD_PER_GB_HOUR = _env_decimal(
+    "HW_RADAR_APIFY_KV_STORAGE_USD_PER_GB_HOUR"
+)
+# https://apify.com/pricing, 2026-09-24: data transfer per GB. Holds the HIGHER
+# of the external and internal prices (ED-01): every byte is priced
+# direction-agnostically, because the docs do not say which transfers are which
+# ($0.20/GB on Starter, the plan's MS2-D-32 worked figure).
+HW_RADAR_APIFY_TRANSFER_USD_PER_GB = _env_decimal("HW_RADAR_APIFY_TRANSFER_USD_PER_GB")
+
+# Reservation = (sum of component bounds) x (1 + MARGIN). The plan states no
+# default, so an unset margin denies (`unbounded_component`) until the operator
+# sets one. ESTIMATOR_VERSION is recorded on every reservation and latch event;
+# bumping it clears the overrun latch (MS2-D-26). MAX_TIMEOUT_S caps a run's
+# requested timeout_s (no default: unset denies every run start).
+HW_RADAR_APIFY_MARGIN = _env_decimal("HW_RADAR_APIFY_MARGIN")
+HW_RADAR_APIFY_ESTIMATOR_VERSION = os.environ.get("HW_RADAR_APIFY_ESTIMATOR_VERSION", "1").strip()
+HW_RADAR_APIFY_MAX_TIMEOUT_S = _env_int("HW_RADAR_APIFY_MAX_TIMEOUT_S")
+
+# MS2-D-40 allocation. The target must be <= 12.00 (the owner's operating
+# target; budget denies a larger value). OPERATOR_ALLOWANCE 1.00 is the owner's
+# setting (OQ29, 2026-09-25), so A = 12.00 - 1.00 = 11.00 at the defaults.
+HW_RADAR_APIFY_CYCLE_TARGET_USD = _env_decimal("HW_RADAR_APIFY_CYCLE_TARGET_USD", "12.00")
+HW_RADAR_APIFY_OPERATOR_ALLOWANCE_USD = _env_decimal(
+    "HW_RADAR_APIFY_OPERATOR_ALLOWANCE_USD", "1.00"
+)
+HW_RADAR_APIFY_WATCH_REFRESH_RESERVE_USD = _env_decimal(
+    "HW_RADAR_APIFY_WATCH_REFRESH_RESERVE_USD", "3.00"
+)
+HW_RADAR_APIFY_CASH_CEILING_USD = _env_decimal("HW_RADAR_APIFY_CASH_CEILING_USD", "20.00")
+
+
+# Absent means "10% of the observed prepaid credit" (MS2-D-40), which is only
+# known per snapshot, so absent parses to None. A present value that is empty or
+# invalid must NOT fall back to that default, so it parses to Decimal("NaN"),
+# which budget.account_margin_usd refuses (`budget_setting_invalid`).
+def _env_account_margin() -> Decimal | None:
+    name = "HW_RADAR_APIFY_ACCOUNT_MARGIN_USD"
+    if name not in os.environ:
+        return None
+    value = _env_decimal(name)
+    return Decimal("NaN") if value is None else value
+
+
+HW_RADAR_APIFY_ACCOUNT_MARGIN_USD = _env_account_margin()
+# OQ26 (owner, 2026-09-25): 5.00 per billing cycle, applied ONLY when the
+# variable is absent. Empty, non-numeric, negative, or non-finite parses to None,
+# and budget denies every class with `external_liability_unbounded`: a
+# mis-rendered environment must fail closed, never fall back to 5.00.
+HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD = _env_decimal(
+    "HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD", "5.00"
+)
+# R38 (MS2-D-26 *Reservation*): the date of the owner's acceptance of the
+# call-billing residual. The owner accepted it on 2026-09-25, applied only when
+# absent; empty or not an ISO date parses to None and denies every class with
+# `call_billing_residual_unaccepted`.
+HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED = _env_date(
+    "HW_RADAR_APIFY_CALL_BILLING_RESIDUAL_ACCEPTED", date(2026, 9, 25)
+)
+# Operator class (MS2-D-46). The build bound is 4,096 MB x 1,800 s x $0.20/CU.
+HW_RADAR_APIFY_OPERATOR_BUILD_BOUND_USD = _env_decimal(
+    "HW_RADAR_APIFY_OPERATOR_BUILD_BOUND_USD", "0.41"
+)
+HW_RADAR_APIFY_OPERATOR_INSPECT_MAX_ITEMS = _env_int(
+    "HW_RADAR_APIFY_OPERATOR_INSPECT_MAX_ITEMS", 1000
+)
+HW_RADAR_APIFY_OPERATOR_INSPECT_MAX_RECORD_READS = _env_int(
+    "HW_RADAR_APIFY_OPERATOR_INSPECT_MAX_RECORD_READS", 20
+)
+# 10 MB, decimal (the plan's figure).
+HW_RADAR_APIFY_OPERATOR_INSPECT_MAX_BYTES = _env_int(
+    "HW_RADAR_APIFY_OPERATOR_INSPECT_MAX_BYTES", 10_000_000
+)
+HW_RADAR_APIFY_OPERATOR_PROBE_MAX_CALLS = _env_int("HW_RADAR_APIFY_OPERATOR_PROBE_MAX_CALLS", 10)
+
+# Caps and wire ceilings (MS2-D-32). The defaults are assumptions; an invalid
+# value parses to None and denies with `unbounded_component`. MAX_KV_WRITES,
+# MAX_KV_BYTES, and STORAGE_MAX_LIFETIME (seconds) have no default: live
+# admission stays denied until the operator sets them (the lifetime from the
+# account's dataRetentionDays, 31 days as verified 2026-09-24).
+HW_RADAR_APIFY_MAX_KV_WRITES = _env_int("HW_RADAR_APIFY_MAX_KV_WRITES")
+HW_RADAR_APIFY_MAX_KV_BYTES = _env_int("HW_RADAR_APIFY_MAX_KV_BYTES")
+HW_RADAR_APIFY_STORAGE_MAX_LIFETIME = _env_int("HW_RADAR_APIFY_STORAGE_MAX_LIFETIME")
+HW_RADAR_APIFY_API_CALL_OVERHEAD_BYTES = _env_int("HW_RADAR_APIFY_API_CALL_OVERHEAD_BYTES", 262144)
+HW_RADAR_APIFY_MAX_CORRECTION_READS = _env_int("HW_RADAR_APIFY_MAX_CORRECTION_READS", 12)
+HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE = _env_int(
+    "HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE", 3000
+)
+HW_RADAR_APIFY_MAX_DISCOVERY_READS = _env_int("HW_RADAR_APIFY_MAX_DISCOVERY_READS", 24)
+HW_RADAR_APIFY_DISCOVERY_READ_INTERVAL_S = _env_int("HW_RADAR_APIFY_DISCOVERY_READ_INTERVAL_S", 300)
+
+# Ledger timings and settlement modes (MS2-D-40, -41, -45), in seconds.
+# USAGE_INCLUSION_LAG_S has no default: unset (or invalid) means no inclusion
+# watermark, so all reconciled cycle spend stays debited on top of the snapshot.
+HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S = _env_int(
+    "HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S", 900
+)
+HW_RADAR_APIFY_CYCLE_BOUNDARY_GUARD_S = _env_int("HW_RADAR_APIFY_CYCLE_BOUNDARY_GUARD_S", 3600)
+HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S = _env_int("HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S", 10)
+HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S = _env_int("HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S")
+HW_RADAR_APIFY_USAGE_STABLE_READS = _env_int("HW_RADAR_APIFY_USAGE_STABLE_READS", 2)
+HW_RADAR_APIFY_USAGE_STABLE_INTERVAL_S = _env_int("HW_RADAR_APIFY_USAGE_STABLE_INTERVAL_S", 60)
+HW_RADAR_APIFY_USAGE_FINALIZE_DEADLINE_S = _env_int(
+    "HW_RADAR_APIFY_USAGE_FINALIZE_DEADLINE_S", 86400
+)
+HW_RADAR_APIFY_CORRECTION_WINDOW_S = _env_int("HW_RADAR_APIFY_CORRECTION_WINDOW_S", 604800)
+HW_RADAR_APIFY_POST_RUN_COST_MODE = _env_choice(
+    "HW_RADAR_APIFY_POST_RUN_COST_MODE", "bound", ("bound", "counted")
+)
+HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT = _env_choice(
+    "HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT", "bound", ("bound", "stable_reads")
+)
+# Per-environment ledger identity (MS2-D-45); no default, never a secret.
+HW_RADAR_APIFY_LEDGER_ID = os.environ.get("HW_RADAR_APIFY_LEDGER_ID", "").strip()
 
 LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "dashboard"

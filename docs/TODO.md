@@ -82,9 +82,15 @@ Instructions for AI agents:
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential
   proxy / paid third-party Actor escalation. Design is in the MS-2 plan; implementation is Slice E.
   **E1 done** (migration `0022_apify_spend_ledger`: reservation, usage-read, latch, cycle,
-  cycle-discovery, and ledger-authority tables with their single-row CHECKs). Remaining: E2–E8.
-  E3/E4 own the write-once rules the schema cannot express (`usage_finalized_usd`,
-  `provider_build_id`, `provider_run.final_charge_op_at`) and `ApifyUsageRead` append-only.
+  cycle-discovery, and ledger-authority tables with their single-row CHECKs). **E2 done**
+  (`acquisition.apify.budget`: DB-free `estimate_run_cost`, operator envelopes, per-call bounds,
+  `decide_admission`; Slice E settings keys that deny rather than raise). **Next:** E3 ledger
+  (sums `CycleDebits` under the lock), E4 reconcile/latch, E5 binding (`BudgetRequest` must add
+  `maxRequests`/`maxBytes`), E6, E8, E7. E3/E4 own the write-once rules the schema cannot
+  express (`usage_finalized_usd`, `provider_build_id`, `provider_run.final_charge_op_at`) and
+  `ApifyUsageRead` append-only. Owner/operator before F5a: set the eight unit prices from
+  `apify.com/pricing`, plus `…_MARGIN`, `…_MAX_TIMEOUT_S`, `…_MAX_KV_WRITES`, `…_MAX_KV_BYTES`,
+  and `…_STORAGE_MAX_LIFETIME` (no plan defaults; unset denies).
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
   categories and both local + self-owned-Apify provider paths. Measure cost, completeness,
   identifier quality, condition/shipping coverage, freshness, and failure recovery before adding

@@ -5369,6 +5369,30 @@ the then-current code. D-prep (D1, D3) is not gated.
     - the kill switch;
     - `test_tripped_latch_denies_everything`;
     - invalid inputs.
+  - Landed 2026-09-25 (E2). `acquisition/apify/budget.py` is DB-free, with
+    its own `BudgetClass`/`OperatorKind`/`DenialReason` enums: `estimate_run_cost`,
+    `estimate_operator_cost`, the per-call bounds, `standing_account_read_debit`,
+    `project_allocation`, `settle_envelope`, and `decide_admission` over a
+    caller-built `LedgerState` (E3 sums `CycleDebits` from rows; decide adds the
+    standing debit itself). The Slice E settings keys are in `settings.py` and
+    never raise: invalid → `None` (the account margin → NaN), so admission denies.
+    No unit price was re-verified, because none has a default. Each key cites
+    `apify.com/pricing` with the plan's retrieval date, and the operator
+    re-verifies before setting it. Choices this plan leaves open (E3/E5 review):
+    `budget_setting_invalid` for a bad allocation, ceiling, or snapshot-age
+    setting, including a target above 12.00; `…_MARGIN`, `…_MAX_TIMEOUT_S`,
+    `…_MAX_KV_WRITES`, and `…_MAX_KV_BYTES` have no default, so unset denies with
+    `unbounded_component`. `…_ESTIMATOR_VERSION` defaults to `1`, and
+    `…_STORAGE_MAX_LIFETIME` is in seconds. Prices are eight keys (`…_USD_PER_CU`;
+    dataset and KV reads and writes per 1,000; dataset and KV storage per GB-hour;
+    `…_TRANSFER_USD_PER_GB`). The build reservation carries no margin, following
+    its formula, and the monitoring allowance is held outside the margin. Carried
+    handoff consumption and discovery allowances count against the runtime class
+    caps. Both D1 follow-up tests landed:
+    `test_apify_contract.py::test_actor_transfer_constants_match_estimator` and
+    `test_apify_budget.py::test_transfer_bound_covers_actor_overshoot_of_one_read_and_in_flight_window`.
+    E5 hand-off: `jobs.BudgetRequest` must also carry `maxRequests` and
+    `maxBytes`, which `RunShape` prices.
 - **E3 — Ledger service.** Implement the cycle snapshot (MS2-D-40) and
   `reserve()` under the budget advisory lock, with the revision-5 MS2-D-34
   predicate: a row counts in every billing cycle its charge interval touches,
