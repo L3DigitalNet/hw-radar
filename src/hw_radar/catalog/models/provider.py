@@ -490,6 +490,12 @@ class ApifySpendReservation(models.Model):
     # the policy function that emits them is E2's, and a reason it adds must
     # still be recordable rather than failing the denial row it explains.
     denial_reason = models.CharField(max_length=60, blank=True, default="")
+    # The operator's `--reason` for an operator row (MS2-D-46), kept with the
+    # row so the report and the handoff record can say why the spend happened.
+    reason = models.TextField(blank=True, default="")
+    # A capability probe's throwaway dataset id, recorded by `--settle` with
+    # its verified deletion; a probe cannot settle without it (MS2-D-46).
+    probe_dataset_id = models.CharField(max_length=100, null=True, blank=True)
 
     # ── admission-time bounds (MS2-D-26, -32) ──
     # NULL only on a denial, which may be refused before an estimate exists
@@ -655,9 +661,14 @@ class ApifySpendReservation(models.Model):
                 | models.Q(monitoring_bound_usd=0),
                 name="apify_resv_envelope_rows_no_monitoring",
             ),
+            # Denied rows are exempt: a denial caused by an unset envelope limit
+            # must still be recorded (MS2-D-17 *Denials are recorded*), and it
+            # carries whatever limits were set. Only an admitted envelope row is
+            # priced from, and counted at, its limits.
             models.CheckConstraint(
                 condition=(
-                    models.Q(
+                    models.Q(status=ReservationStatus.DENIED.value)
+                    | models.Q(
                         operator_kind=OperatorKind.INSPECT.value,
                         envelope_max_items__isnull=False,
                         envelope_max_record_reads__isnull=False,
@@ -687,6 +698,11 @@ class ApifySpendReservation(models.Model):
                     )
                 ),
                 name="apify_resv_envelope_limits_by_kind",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(probe_dataset_id__isnull=True)
+                | models.Q(operator_kind=OperatorKind.PROBE.value),
+                name="apify_resv_probe_dataset_only_on_probe",
             ),
             # A build id belongs only to a build row, and a build row cannot
             # reconcile unbound: without the id nothing can re-read or monitor
@@ -746,6 +762,21 @@ class ApifySpendReservation(models.Model):
         return f"reservation {self.pk} {self.admission_class}{kind} [{self.status}]"
 
 
+class UsageReadImmutableError(Exception):
+    """An update or delete of an `ApifyUsageRead`, which is append-only evidence."""
+
+
+class _AppendOnlyQuerySet(models.QuerySet["ApifyUsageRead"]):
+    # Queryset-level update()/delete() bypass Model.save/delete, so the
+    # append-only rule has to refuse them here as well; otherwise one bulk
+    # UPDATE could rewrite the evidence a settlement or handoff cites.
+    def update(self, **kwargs: object) -> int:
+        raise UsageReadImmutableError("ApifyUsageRead rows are append-only")
+
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise UsageReadImmutableError("ApifyUsageRead rows are append-only")
+
+
 class ApifyUsageRead(models.Model):
     """One usage read of a run or build, kept as immutable evidence (MS2-D-41).
 
@@ -753,7 +784,14 @@ class ApifyUsageRead(models.Model):
     the handoff drain check compares post-reconciliation reads against the
     settled usage (MS2-D-45). A build read has a null `provider_run` and
     identifies its build through `reservation.provider_build_id`.
+
+    Service rules the schema cannot express (E4): `save()` inserts only and
+    refuses a read whose `provider_run` is not its reservation's, and the
+    manager's queryset refuses `update()` and `delete()`. Raw SQL and a
+    TRUNCATE (test teardown) are outside this guard by design.
     """
+
+    objects = _AppendOnlyQuerySet.as_manager()
 
     provider_run = models.ForeignKey(
         ProviderRun,
@@ -780,6 +818,25 @@ class ApifyUsageRead(models.Model):
         constraints: ClassVar[list[models.BaseConstraint]] = [
             *_non_negative("apify_usage_read", "usage_total_usd"),
         ]
+
+    def save(self, *args: object, **kwargs: object) -> None:  # type: ignore[override]
+        if not self._state.adding:
+            raise UsageReadImmutableError("ApifyUsageRead rows are append-only")
+        # A read must describe the run its reservation settles: a read filed
+        # under another run's reservation would settle or correct the wrong
+        # spend (both are null for a build read).
+        expected = ApifySpendReservation.objects.values_list("provider_run_id", flat=True).get(
+            pk=self.reservation_id  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType] - django-types has no <fk>_id stubs
+        )
+        if expected != self.provider_run_id:  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+            raise ValueError(
+                f"usage read for provider_run {self.provider_run_id} filed under a "  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+                f"reservation of provider_run {expected}"
+            )
+        super().save(*args, **kwargs)  # pyright: ignore[reportArgumentType]
+
+    def delete(self, *args: object, **kwargs: object) -> tuple[int, dict[str, int]]:  # type: ignore[override]
+        raise UsageReadImmutableError("ApifyUsageRead rows are append-only")
 
     def __str__(self) -> str:
         return f"usage read {self.pk} @ {self.read_at:%Y-%m-%dT%H:%M:%SZ}"
@@ -900,6 +957,9 @@ class ApifyCycleDiscovery(models.Model):
     close_reason = models.CharField(
         max_length=20, choices=CycleDiscoveryCloseReason.choices, blank=True, default=""
     )
+    # The owner's `apify_budget_reset --discovery --reason` text for an
+    # `owner_reset` close: a reset is a spend decision, so its why is kept.
+    reason = models.TextField(blank=True, default="")
 
     class Meta:
         db_table = "apify_cycle_discovery"
@@ -929,6 +989,11 @@ class ApifyCycleDiscovery(models.Model):
                 condition=~models.Q(close_reason=CycleDiscoveryCloseReason.DISCOVERED.value)
                 | models.Q(cycle_start__isnull=False),
                 name="apify_discovery_discovered_has_cycle",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(close_reason=CycleDiscoveryCloseReason.OWNER_RESET.value)
+                | ~models.Q(reason=""),
+                name="apify_discovery_owner_reset_has_reason",
             ),
         ]
 

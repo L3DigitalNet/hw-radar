@@ -63,6 +63,7 @@ from hw_radar.acquisition.providers import LocalCollectionProvider
 from hw_radar.acquisition.retention_policy import UnknownSourceRetention, source_retention
 from hw_radar.acquisition.scheduling.apply import apply_run_outcome
 from hw_radar.catalog.models import (
+    ApifyBudgetLatch,
     Category,
     Listing,
     OfferSnapshot,
@@ -1171,6 +1172,9 @@ def test_max_size_valid_batch_imports_without_tripping_response_cap(
     # The rows really are near the worst case, not a trivially small batch.
     assert max(page_bytes) > settings.HW_RADAR_APIFY_MAX_DATASET_PAGE_BYTES // 2
     assert row.dataset_read_count == 1
+    # E4 counterpart (test_apify_ledger.py::test_over_cap_control_response_trips_latch):
+    # a contract-valid maximum-size batch trips nothing.
+    assert not ApifyBudgetLatch.objects.exists()
 
 
 # ── D6: idempotency (AC-6; MS2-D-13 *Idempotent import*) ──────────────────────

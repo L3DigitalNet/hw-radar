@@ -34,10 +34,16 @@ time: an unreconciled row counts in every cycle from its admission onward.
 Transactions never span an await: the async snapshot refresh commits its
 counters through `sync_to_async` steps and makes its HTTP calls between them.
 
-SCOPE: reconciliation, usage reads, selector 4, and latch trips other than
-`external_liability_exceeded` are E4; binding this ledger into the start job
-is E5 (`jobs.BUDGET_ADMISSION` stays `DenyAllAdmission`); the spend report is
-E6. This module never calls Apify except through `refresh_account_snapshot`.
+- The overrun latch (MS2-D-26): `trip_latch` records a trip in its own
+  budget-locked transaction, `clear_latch` is the owner's
+  `apify_budget_reset --reason`, and `reserve` clears trips recorded under an
+  older `HW_RADAR_APIFY_ESTIMATOR_VERSION` (an estimator correction).
+
+SCOPE: settlement, usage reads, and selector 4 live in
+`acquisition.apify.reconcile` (E4), which builds on the lock, the cycle
+predicate, and the latch here; binding this ledger into the start job is E5
+(`jobs.BUDGET_ADMISSION` stays `DenyAllAdmission`); the spend report is E6.
+This module never calls Apify except through `refresh_account_snapshot`.
 
 Requirements: PostgreSQL (`pg_advisory_xact_lock`), a Django context with the
 catalog app, and the HW_RADAR_APIFY_* settings read by `load_ledger_config`.
@@ -101,16 +107,19 @@ __all__ = [
     "HANDOFF_RECORD_VERSION",
     "AccountReader",
     "HandoffExport",
+    "LatchReason",
     "LedgerConfig",
     "LedgerRefused",
     "RefreshOutcome",
     "ReservationOutcome",
     "claim_origin",
+    "clear_latch",
     "current_cycle",
     "cycle_debits",
     "discovery_status",
     "export_handoff",
     "import_handoff",
+    "latch_tripped",
     "load_ledger_config",
     "record_digest",
     "refresh_account_snapshot",
@@ -118,6 +127,8 @@ __all__ = [
     "reserve_operator",
     "reset_discovery",
     "take_budget_lock",
+    "trip_latch",
+    "trip_latch_locked",
 ]
 
 # The one budget advisory lock (MS2-D-41 *Reserve*, MS2-D-45 *Serialization*).
@@ -178,13 +189,24 @@ def take_budget_lock() -> None:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class LedgerConfig:
-    """Everything the ledger reads from settings; None is unset or invalid."""
+    """Everything the ledger reads from settings; None is unset or invalid.
+
+    The settlement fields (E4, MS2-D-41) default to the settings defaults, so
+    a config built for admission alone still settles by the plan's rules.
+    """
 
     budget: BudgetSettings
     ledger_id: str
     usage_inclusion_lag_s: int | None
     max_discovery_reads: int | None
     discovery_read_interval_s: int | None
+    usage_settle_delay_s: int | None = 10
+    usage_stable_reads: int | None = 2
+    usage_stable_interval_s: int | None = 60
+    usage_finalize_deadline_s: int | None = 86400
+    correction_window_s: int | None = 604800
+    post_run_cost_mode: str = "bound"
+    run_usage_settlement: str = "bound"
 
 
 def load_ledger_config() -> LedgerConfig:
@@ -195,6 +217,13 @@ def load_ledger_config() -> LedgerConfig:
         usage_inclusion_lag_s=s.HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S,
         max_discovery_reads=s.HW_RADAR_APIFY_MAX_DISCOVERY_READS,
         discovery_read_interval_s=s.HW_RADAR_APIFY_DISCOVERY_READ_INTERVAL_S,
+        usage_settle_delay_s=s.HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S,
+        usage_stable_reads=s.HW_RADAR_APIFY_USAGE_STABLE_READS,
+        usage_stable_interval_s=s.HW_RADAR_APIFY_USAGE_STABLE_INTERVAL_S,
+        usage_finalize_deadline_s=s.HW_RADAR_APIFY_USAGE_FINALIZE_DEADLINE_S,
+        correction_window_s=s.HW_RADAR_APIFY_CORRECTION_WINDOW_S,
+        post_run_cost_mode=s.HW_RADAR_APIFY_POST_RUN_COST_MODE,
+        run_usage_settlement=s.HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT,
     )
 
 
@@ -435,6 +464,112 @@ def _authority_held(cycle: ApifyBudgetCycle, config: LedgerConfig, now: datetime
     ).exists()
 
 
+# ── Overrun latch (MS2-D-26) ────────────────────────────────────────────────
+
+
+class LatchReason(StrEnum):
+    """Why the overrun latch tripped (`ApifyBudgetLatch.reason`, MS2-D-26, -33, -47)."""
+
+    OVERRUN = "overrun"  # a settled amount above its own reservation
+    POST_ADMISSION_INVARIANT_BREACH = "post_admission_invariant_breach"
+    UNEXPECTED_USAGE_COMPONENT = "unexpected_usage_component"
+    DATASET_OVER_CAP = "dataset_over_cap"
+    START_OPTION_MISMATCH = "start_option_mismatch"
+    DELETE_ATTEMPTS_EXHAUSTED = "delete_attempts_exhausted"
+    ORPHANED_START = "orphaned_start"
+    API_RESPONSE_OVER_CAP = "api_response_over_cap"
+
+
+def latch_tripped() -> bool:
+    return ApifyBudgetLatch.objects.filter(cleared_at__isnull=True).exists()
+
+
+def trip_latch_locked(
+    reason: str, provider_run_id: int | None, estimator_version: str, now: datetime
+) -> bool:
+    """Record a trip; the caller holds the budget lock. False if already open.
+
+    Idempotent per (reason, provider_run) while the trip is open, because the
+    D-side hooks re-detect the same terminal condition (a delete_failed row,
+    an orphaned start) on every tick; one open trip already pauses admission.
+    """
+    if ApifyBudgetLatch.objects.filter(
+        cleared_at__isnull=True, reason=reason, provider_run_id=provider_run_id
+    ).exists():
+        return False
+    ApifyBudgetLatch.objects.create(
+        tripped_at=now,
+        provider_run_id=provider_run_id,
+        reason=reason,
+        estimator_version=estimator_version,
+    )
+    logger.error("apify overrun latch tripped: %s (provider_run %s)", reason, provider_run_id)
+    return True
+
+
+def trip_latch(
+    reason: str,
+    *,
+    provider_run_id: int | None = None,
+    config: LedgerConfig | None = None,
+    now: datetime | None = None,
+) -> bool:
+    """Trip the overrun latch in its own budget-locked transaction.
+
+    Lock order (MS2-D-26 *Serialization*, ED-05): the budget lock is taken
+    first, so a caller must NOT hold a provider_run (or any later) row lock:
+    commit the row's own transaction, then call this. Returns False when the
+    same (reason, run) trip is already open.
+    """
+    version = (config or load_ledger_config()).budget.estimator_version
+    with transaction.atomic():
+        take_budget_lock()
+        return trip_latch_locked(reason, provider_run_id, version, now or timezone.now())
+
+
+def _clear_on_estimator_bump(estimator_version: str, now: datetime) -> int:
+    """Clear open trips recorded under another estimator version; caller holds the lock.
+
+    An estimator correction is the plan's second way to clear the latch
+    (MS2-D-26): a bump of HW_RADAR_APIFY_ESTIMATOR_VERSION says the bound that
+    was overrun has been replaced, and the clear is recorded like an owner's.
+    """
+    return (
+        ApifyBudgetLatch.objects.filter(cleared_at__isnull=True)
+        .exclude(estimator_version=estimator_version)
+        .update(
+            cleared_at=now,
+            cleared_reason=f"estimator_version bumped to {estimator_version}",
+        )
+    )
+
+
+def clear_latch(reason: str, *, now: datetime | None = None) -> int:
+    """The owner's `apify_budget_reset --reason`: clear every open trip. Returns the count.
+
+    Refused (LedgerRefused `latch_not_tripped`) when nothing is open, so a
+    mistyped reset leaves an audit trail of nothing rather than a no-op row.
+    """
+    text = reason.strip()
+    if not text:
+        raise LedgerRefused("reason_missing", "a latch reset needs a reason")
+    with transaction.atomic():
+        take_budget_lock()
+        at = now or timezone.now()
+        open_trips = ApifyBudgetLatch.objects.filter(cleared_at__isnull=True)
+        if not open_trips.exists():
+            raise LedgerRefused("latch_not_tripped", "the overrun latch is not tripped")
+        # cleared_at >= tripped_at is a CHECK; a trip stamped by a skewed
+        # clock after `at` is cleared at its own trip time instead.
+        cleared = 0
+        for trip in open_trips:
+            trip.cleared_at = max(at, trip.tripped_at)
+            trip.cleared_reason = f"owner reset: {text}"
+            trip.save(update_fields=["cleared_at", "cleared_reason"])
+            cleared += 1
+        return cleared
+
+
 # ── Reserve (MS2-D-17, -40, -41, -46) ───────────────────────────────────────
 
 
@@ -442,19 +577,20 @@ def _authority_held(cycle: ApifyBudgetCycle, config: LedgerConfig, now: datetime
 class ReservationOutcome:
     """A reserve result. reservation_id is the admitted row or the denial row.
 
-    reservation_id is None only for an operator envelope denial whose limit
-    settings are unset: the E1 envelope CHECK needs every limit, so that
-    denial is reported to the operator but not persisted.
+    Every outcome is persisted, denials included: a denied envelope row may
+    carry unset (null) limits, which the envelope CHECK allows on denials.
     """
 
     admitted: bool
     reason: str
     detail: str
-    reservation_id: int | None
+    reservation_id: int
     estimate: CostEstimate | None
 
 
-def _envelope_limits(kind: OperatorKind | None, cfg: BudgetSettings) -> dict[str, int] | None:
+def _envelope_limits(
+    kind: OperatorKind | None, cfg: BudgetSettings
+) -> dict[str, int | None] | None:
     """The E1 envelope columns for an operator row, or None if a limit is unset."""
     if kind is OperatorKind.INSPECT:
         limits = {
@@ -468,7 +604,22 @@ def _envelope_limits(kind: OperatorKind | None, cfg: BudgetSettings) -> dict[str
         return {}
     if any(v is None or v < 0 for v in limits.values()):
         return None
-    return {k: v for k, v in limits.items() if v is not None}
+    return dict(limits)
+
+
+def _recordable_limits(kind: OperatorKind | None, cfg: BudgetSettings) -> dict[str, int | None]:
+    """The envelope columns a DENIED row records: each valid limit, null otherwise."""
+    if kind is OperatorKind.INSPECT:
+        limits = {
+            "envelope_max_items": cfg.operator_inspect_max_items,
+            "envelope_max_record_reads": cfg.operator_inspect_max_record_reads,
+            "envelope_max_bytes": cfg.operator_inspect_max_bytes,
+        }
+    elif kind is OperatorKind.PROBE:
+        limits = {"envelope_max_calls": cfg.operator_probe_max_calls}
+    else:
+        return {}
+    return {k: v if v is not None and v >= 0 else None for k, v in limits.items()}
 
 
 def reserve(
@@ -477,6 +628,7 @@ def reserve(
     source_site_id: int | None = None,
     config: LedgerConfig | None = None,
     now: datetime | None = None,
+    reason: str = "",
 ) -> ReservationOutcome:
     """Admit or deny one paid operation and persist the outcome atomically.
 
@@ -496,7 +648,8 @@ def reserve(
         # Sampled after the lock: a caller that waited on it must not decide
         # with the time it started waiting.
         now = now or timezone.now()
-        latch = ApifyBudgetLatch.objects.filter(cleared_at__isnull=True).exists()
+        _clear_on_estimator_bump(cfg.estimator_version, now)
+        latch = latch_tripped()
         cycle = current_cycle(now)
         debit_error: BudgetDenied | None = None
         current = CycleDebits()
@@ -535,7 +688,7 @@ def reserve(
                 reason=str(decision.reason),
                 estimator_version=cfg.estimator_version,
             )
-        return _persist(request, decision, source_site_id, cfg, now)
+        return _persist(request, decision, source_site_id, cfg, now, reason)
 
 
 def _persist(
@@ -544,14 +697,17 @@ def _persist(
     source_site_id: int | None,
     cfg: BudgetSettings,
     now: datetime,
+    operator_reason: str,
 ) -> ReservationOutcome:
     kind = request.operator_kind
     envelope = _envelope_limits(kind, cfg)
     reason = "" if decision.admitted else str(decision.reason)
     if envelope is None:
-        # Only reachable on a denial: an unset limit makes the envelope
-        # unpriceable, so the estimate itself was refused.
-        return ReservationOutcome(False, reason, decision.detail, None, decision.estimate)
+        # Only reachable on a denial (an unset limit makes the envelope
+        # unpriceable, so the estimate itself was refused): the row records
+        # the limits that were set, which the envelope CHECK allows on denials.
+        assert not decision.admitted
+        envelope = _recordable_limits(kind, cfg)
     estimate = decision.estimate
     bounds: dict[str, object] = {}
     if estimate is not None:
@@ -569,6 +725,7 @@ def _persist(
         operator_kind=kind.value if kind is not None else "",
         status=ReservationStatus.RESERVED if decision.admitted else ReservationStatus.DENIED,
         denial_reason=reason,
+        reason=operator_reason.strip(),
         reserved_at=now,
         **envelope,
         **bounds,
@@ -577,13 +734,21 @@ def _persist(
 
 
 def reserve_operator(
-    kind: OperatorKind, *, config: LedgerConfig | None = None, now: datetime | None = None
+    kind: OperatorKind,
+    *,
+    config: LedgerConfig | None = None,
+    now: datetime | None = None,
+    reason: str = "",
 ) -> ReservationOutcome:
-    """Reserve one operator operation's bound before it is performed (MS2-D-46)."""
+    """Reserve one operator operation's bound before it is performed (MS2-D-46).
+
+    `reason` is the operator's `--reason`, stored on the row (admitted or denied).
+    """
     return reserve(
         AdmissionRequest(budget_class=BudgetClass.OPERATOR, operator_kind=kind),
         config=config,
         now=now,
+        reason=reason,
     )
 
 
@@ -780,14 +945,19 @@ def discovery_status(config: LedgerConfig | None = None) -> str | None:
     return DISCOVERY_EXHAUSTED if cap is None or open_row.read_count >= cap else None
 
 
-def reset_discovery(*, config: LedgerConfig | None = None, now: datetime | None = None) -> int:
+def reset_discovery(
+    *, reason: str, config: LedgerConfig | None = None, now: datetime | None = None
+) -> int:
     """Close the exhausted discovery row and open a fresh one (owner command).
 
     Refused unless the open row is exhausted: every row adds its full read
     allowance to the cycles its interval touches, so a reset is a spend
-    decision, not housekeeping. Returns the new row's id.
+    decision, not housekeeping. The owner's reason is stored on the closed
+    row. Returns the new row's id.
     """
     config = config or load_ledger_config()
+    if not reason.strip():
+        raise LedgerRefused("reason_missing", "a discovery reset needs a reason")
     with transaction.atomic():
         take_budget_lock()
         at = now or timezone.now()
@@ -796,7 +966,8 @@ def reset_discovery(*, config: LedgerConfig | None = None, now: datetime | None 
             raise LedgerRefused("discovery_not_exhausted", "no exhausted discovery row is open")
         open_row.closed_at = at
         open_row.close_reason = CycleDiscoveryCloseReason.OWNER_RESET
-        open_row.save(update_fields=["closed_at", "close_reason"])
+        open_row.reason = reason.strip()
+        open_row.save(update_fields=["closed_at", "close_reason", "reason"])
         return ApifyCycleDiscovery.objects.create(opened_at=at).pk
 
 

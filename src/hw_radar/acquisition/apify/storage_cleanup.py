@@ -18,7 +18,9 @@ counted in `storage_cleanup_attempts` and committed BEFORE its first call, so a
 crash mid-attempt still spends it; the start-option-mismatch abort (jobs.py) is
 attempt 1 of the same sequence. At `HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS` retries
 stop and the row is left `delete_failed`, logged at error level; the selectors
-stop handing it out, and Slice E's latch trips on it.
+stop handing it out, and the overrun latch trips (`delete_attempts_exhausted`,
+MS2-D-32): a row that is never verified deleted is never reconciled, so it
+counts at its full estimate in every cycle until an operator resolves it.
 
 Terminal evidence decides (MS2-D-33, R10-09, Binding). A delete is sent only
 after the run is observed terminal, so cleanup never closes storage under a run
@@ -44,7 +46,8 @@ repeat delete answers 404, which the 404 rule would refuse to trust.
 
 A row whose start response was never recorded has no run id and no storage
 ids, so at its deadline it is marked `orphaned_start_at` and logged at error
-level, and nothing is sent (MS2-D-33; R21 leaves it to an operator). Its
+level, the latch trips (`orphaned_start`: admitted spend is now untracked),
+and nothing is sent (MS2-D-33; R21 leaves it to an operator). Its
 pending import is rejected like any other overdue one; for a PROBE that is
 load-bearing, because D12's one-outstanding-probe rule counts a PROBE row as
 outstanding until its import is finalized or rejected.
@@ -54,8 +57,15 @@ counted state, not a unit crash. It backs off by setting `next_attempt_at` from
 the attempt count, which grows with every attempt even when a successful
 observation in between clears the tick's own `unit_failures` counter.
 
+Slice E hooks (E4). The commit that records verified deletion is one of the
+two barrier transactions of the work-completion anchor: it calls
+reconcile.stamp_work_completion, so `final_charge_op_at` is set once, by
+whichever of it and the import-terminal commit comes second. Both latch trips
+run through ledger.trip_latch AFTER the row's own transaction commits: the
+budget lock is never requested while a provider_run lock is held (ED-05).
+
 SCOPE: this module never reads the dataset or the OUTPUT record and never
-starts a run. `final_charge_op_at` and the overrun latch are Slice E's.
+starts a run. Settlement is acquisition.apify.reconcile's.
 
 Requirements: a Django context with the catalog app, PostgreSQL (row locks via
 select_for_update), and the settings HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS and
@@ -80,6 +90,8 @@ from hw_radar.acquisition.apify import importer, jobs
 from hw_radar.acquisition.apify.client import ApifyApiError, ApifyClient, ApifyError, ApifyRun
 from hw_radar.acquisition.apify.contract import TERMINAL_RUN_STATUSES
 from hw_radar.acquisition.apify.importer import RejectReason
+from hw_radar.acquisition.apify.ledger import LatchReason, trip_latch
+from hw_radar.acquisition.apify.reconcile import stamp_work_completion
 from hw_radar.catalog.models import ProviderRun
 from hw_radar.catalog.models.provider import ImportState, StorageState
 
@@ -110,12 +122,14 @@ def _verified(row: ProviderRun) -> dict[str, str]:
     return {str(k): str(v) for k, v in cast(dict[object, object], raw).items()}
 
 
-def _begin(provider_run_id: int, *, overdue: bool) -> _Attempt | None:
+def _begin(provider_run_id: int, *, overdue: bool) -> _Attempt | LatchReason | None:
     """Count one attempt and commit it before any call; None when there is nothing to send.
 
     Nothing is sent for a row already deleted or orphaned, for a selector-2 row
     that is not remote-terminal (it has no terminal evidence and no abort
     path), or for a row at the attempt cap, which is marked `delete_failed`.
+    A LatchReason is returned when this commit just marked the row orphaned or
+    delete_failed: the caller trips the latch after this transaction ends.
     """
     now = timezone.now()
     cap: int = settings.HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS
@@ -133,13 +147,14 @@ def _begin(provider_run_id: int, *, overdue: bool) -> _Attempt | None:
                     provider_run_id,
                     row.storage_cleanup_due_at.isoformat(),
                 )
+                return LatchReason.ORPHANED_START
             return None
         observed_terminal = row.remote_status in TERMINAL_RUN_STATUSES
         if not overdue and not observed_terminal:
             return None
         if row.storage_cleanup_attempts >= cap:
             _mark_delete_failed(row, cap)
-            return None
+            return LatchReason.DELETE_ATTEMPTS_EXHAUSTED
         row.storage_cleanup_attempts += 1
         row.save(update_fields=["storage_cleanup_attempts"])
         verified = _verified(row)
@@ -233,6 +248,8 @@ def _finish(provider_run_id: int, deleted: list[Storage], errors: list[str]) -> 
             row.storage_state = StorageState.DELETED
             row.storage_deleted_at = now
             fields += ["storage_state", "storage_deleted_at"]
+            if stamp_work_completion(row, now):
+                fields.append("final_charge_op_at")
         else:
             detail[ERROR_KEY] = errors
             row.next_attempt_at = now + _retry_delay(row.storage_cleanup_attempts)
@@ -262,6 +279,9 @@ def _retry_delay(attempts: int) -> timedelta:
 
 async def _attempt(provider_run_id: int, client: ApifyClient, *, overdue: bool) -> None:
     attempt = await sync_to_async(_begin)(provider_run_id, overdue=overdue)
+    if isinstance(attempt, LatchReason):
+        await sync_to_async(trip_latch)(attempt, provider_run_id=provider_run_id)
+        return
     if attempt is None:
         return
     if not attempt.observed_terminal:
@@ -269,7 +289,7 @@ async def _attempt(provider_run_id: int, client: ApifyClient, *, overdue: bool) 
         if errors:
             # No terminal evidence: the run may still be charging compute, so
             # this attempt deletes nothing.
-            await sync_to_async(_finish)(provider_run_id, [], errors)
+            await _finish_and_trip(provider_run_id, [], errors)
             return
     # Re-read after the observations: an abort or GET answer may have filled a
     # storage id the start response lacked (never replaced one it recorded).
@@ -283,7 +303,16 @@ async def _attempt(provider_run_id: int, client: ApifyClient, *, overdue: bool) 
             deleted.append(storage)
         else:
             errors.append(failure)
-    await sync_to_async(_finish)(provider_run_id, deleted, errors)
+    await _finish_and_trip(provider_run_id, deleted, errors)
+
+
+async def _finish_and_trip(provider_run_id: int, deleted: list[Storage], errors: list[str]) -> None:
+    state = await sync_to_async(_finish)(provider_run_id, deleted, errors)
+    if state is StorageState.DELETE_FAILED:
+        # After _finish committed: never request the budget lock under a row lock.
+        await sync_to_async(trip_latch)(
+            LatchReason.DELETE_ATTEMPTS_EXHAUSTED, provider_run_id=provider_run_id
+        )
 
 
 async def cleanup_storage_unit(provider_run_id: int, client: ApifyClient) -> None:

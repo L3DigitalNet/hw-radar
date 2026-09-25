@@ -119,6 +119,7 @@ class Migration(migrations.Migration):
                         max_length=20,
                     ),
                 ),
+                ("reason", models.TextField(blank=True, default="")),
             ],
             options={
                 "db_table": "apify_cycle_discovery",
@@ -150,6 +151,14 @@ class Migration(migrations.Migration):
                             _connector="OR",
                         ),
                         name="apify_discovery_discovered_has_cycle",
+                    ),
+                    models.CheckConstraint(
+                        condition=models.Q(
+                            models.Q(("close_reason", "owner_reset"), _negated=True),
+                            models.Q(("reason", ""), _negated=True),
+                            _connector="OR",
+                        ),
+                        name="apify_discovery_owner_reset_has_reason",
                     ),
                 ],
             },
@@ -308,6 +317,8 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 ("denial_reason", models.CharField(blank=True, default="", max_length=60)),
+                ("reason", models.TextField(blank=True, default="")),
+                ("probe_dataset_id", models.CharField(blank=True, max_length=100, null=True)),
                 (
                     "estimate_usd",
                     models.DecimalField(blank=True, decimal_places=4, max_digits=10, null=True),
@@ -701,6 +712,7 @@ class Migration(migrations.Migration):
             model_name="apifyspendreservation",
             constraint=models.CheckConstraint(
                 condition=models.Q(
+                    ("status", "denied"),
                     models.Q(
                         ("envelope_max_bytes__isnull", False),
                         ("envelope_max_calls__isnull", True),
@@ -725,6 +737,17 @@ class Migration(migrations.Migration):
                     _connector="OR",
                 ),
                 name="apify_resv_envelope_limits_by_kind",
+            ),
+        ),
+        migrations.AddConstraint(
+            model_name="apifyspendreservation",
+            constraint=models.CheckConstraint(
+                condition=models.Q(
+                    ("probe_dataset_id__isnull", True),
+                    ("operator_kind", "probe"),
+                    _connector="OR",
+                ),
+                name="apify_resv_probe_dataset_only_on_probe",
             ),
         ),
         migrations.AddConstraint(

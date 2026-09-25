@@ -326,6 +326,30 @@ def test_envelope_limits_follow_operator_kind() -> None:
     _rejects("apify_resv_envelope_limits_by_kind", _resv, envelope_max_items=10)
 
 
+def test_denied_envelope_row_may_lack_unset_limits() -> None:
+    # E4 residual (c): a denial caused by an unset envelope limit is recorded,
+    # so a denied row is exempt; an admitted one still needs every limit.
+    denied = _operator(
+        OperatorKind.INSPECT,
+        envelope_max_bytes=None,
+        status=ReservationStatus.DENIED,
+        denial_reason="unbounded_component",
+        estimate_usd=None,
+        monitoring_bound_usd=None,
+    )
+    assert denied.envelope_max_bytes is None
+
+
+def test_probe_dataset_id_only_on_probe_rows() -> None:
+    _rejects(
+        "apify_resv_probe_dataset_only_on_probe",
+        _operator,
+        OperatorKind.INSPECT,
+        probe_dataset_id="ds-1",
+    )
+    assert _operator(OperatorKind.PROBE, probe_dataset_id="ds-1").probe_dataset_id == "ds-1"
+
+
 @pytest.mark.parametrize("kind", [OperatorKind.INSPECT, OperatorKind.PROBE])
 def test_envelope_rows_carry_no_monitoring_allowance(kind: OperatorKind) -> None:
     _rejects(
@@ -550,7 +574,12 @@ def test_only_one_discovery_row_may_be_open() -> None:
         close_reason=CycleDiscoveryCloseReason.DISCOVERED,
     )
     # Closed rows never collide, whatever their reason.
-    _discovery(closed_at=T0, close_reason=CycleDiscoveryCloseReason.OWNER_RESET, cycle_start=None)
+    _discovery(
+        closed_at=T0,
+        close_reason=CycleDiscoveryCloseReason.OWNER_RESET,
+        cycle_start=None,
+        reason="owner reset",
+    )
     _discovery(closed_at=T0, close_reason=CycleDiscoveryCloseReason.DISCOVERED, cycle_start=T0)
     assert _discovery().closed_at is None
 
@@ -563,6 +592,20 @@ def test_discovery_close_needs_a_valid_reason() -> None:
         close_reason=CycleDiscoveryCloseReason.OWNER_RESET,
     )
     _rejects("apify_discovery_close_reason_valid", _discovery, closed_at=T0, close_reason="gave_up")
+
+
+def test_owner_reset_close_records_the_owners_reason() -> None:
+    # E4 residual (d): the reset is a spend decision, so its reason is kept.
+    _rejects(
+        "apify_discovery_owner_reset_has_reason",
+        _discovery,
+        closed_at=T0,
+        close_reason=CycleDiscoveryCloseReason.OWNER_RESET,
+    )
+    row = _discovery(
+        closed_at=T0, close_reason=CycleDiscoveryCloseReason.OWNER_RESET, reason="outage over"
+    )
+    assert row.reason == "outage over"
 
 
 def test_discovered_close_records_the_cycle_found() -> None:

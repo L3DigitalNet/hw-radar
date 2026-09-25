@@ -27,11 +27,21 @@ state. Only stage 1 needs the dataset.
 - Stage 5 and Reject: outcome transactions that set the ScraperRun terminal
   and apply apply_run_outcome exactly once, guarded by the compare-and-set.
 
+Slice E hooks (E4). Stage 5 and Reject are one of the two barrier
+transactions of the work-completion anchor: each calls
+reconcile.stamp_work_completion before committing, so `final_charge_op_at` is
+set once, by whichever of the import-terminal and storage-deleted commits
+comes second (MS2-D-32 *Settlement*). While the overrun latch is tripped a
+stage-1 RE-read (dataset_read_count already >= 1) is not attempted: the row
+backs off visibly (`stage_detail.blocked_by_overrun_latch`) until the latch
+clears (MS2-D-22 *Overrun blocks repair reads*); the first read of a run is
+already reserved and still proceeds. A dataset longer than the run's
+`max_items` trips the latch (`dataset_over_cap`) in its own budget-locked
+transaction, before the stage-1 transaction starts (MS2-D-26 *Serialization*).
+
 SCOPE: selection, backoff scheduling and storage cleanup belong to the jobs
 (D5) and cleanup (D11, acquisition.apify.storage_cleanup). This module neither polls the run nor deletes storage;
-it honours next_attempt_at only by writing it on retry exhaustion. The overrun
-latch (MS2-D-22 *Overrun blocks repair reads*) is Slice E's and is not
-consulted here yet.
+it honours next_attempt_at only by writing it on retry exhaustion or a latch block.
 
 Requirements: PostgreSQL (acquisition.stages), a Django context, and the
 read caps settings.HW_RADAR_APIFY_MAX_DATASET_READS and
@@ -54,7 +64,9 @@ from django.utils import timezone
 
 from hw_radar.acquisition.apify.client import ApifyClient
 from hw_radar.acquisition.apify.contract import ContractViolation
+from hw_radar.acquisition.apify.ledger import LatchReason, latch_tripped, trip_latch
 from hw_radar.acquisition.apify.provider import IMPORT_PROVIDER_KEY, ApifyImportProvider
+from hw_radar.acquisition.apify.reconcile import stamp_work_completion
 from hw_radar.acquisition.contracts import (
     DelistScope,
     ListingResolver,
@@ -152,6 +164,14 @@ class _StateMoved(Exception):
     """Internal: the compare-and-set found another executor already advanced the row."""
 
 
+class _LatchBlocked(Exception):
+    """Internal: a stage-1 re-read was refused because the overrun latch is tripped."""
+
+
+# How long a latch-blocked row waits before the importer looks again.
+LATCH_BLOCKED_BACKOFF: Final = timedelta(minutes=15)
+
+
 async def import_provider_run(
     provider_run_id: int,
     *,
@@ -201,6 +221,8 @@ async def import_provider_run(
         await sync_to_async(_reject)(row.pk, rejected.reason, rejected.detail, rand)
     except RetryExhausted:
         await sync_to_async(_record_exhaustion)(row.pk)
+    except _LatchBlocked:
+        await sync_to_async(_record_latch_block)(row.pk)
     except _StateMoved:
         pass
     return ImportState(
@@ -260,6 +282,11 @@ def _count_reads(provider_run_id: int) -> None:
                 f"dataset reads {row.dataset_read_count}/{max_dataset}, "
                 f"kv reads {row.kv_read_count}/{max_kv}",
             )
+        # A plain read of the latch table, not the budget lock: this
+        # transaction holds the provider_run lock, and the budget lock is
+        # never requested after it (MS2-D-35 lock order).
+        if row.dataset_read_count >= 1 and latch_tripped():
+            raise _LatchBlocked
         row.dataset_read_count += 1
         row.kv_read_count += 1
         row.save(update_fields=["dataset_read_count", "kv_read_count"])
@@ -285,6 +312,9 @@ async def _stage1(row: ProviderRun, *, client: ApifyClient, actor_name: str) -> 
             raise _Rejected(RejectReason.CONTENT_PAST_TTL, f"expired at {deadline.isoformat()}")
     await sync_to_async(_count_reads)(row.pk)
     batch = await provider.fetch()
+    if row.dataset_item_count is not None and row.dataset_item_count > row.max_items:
+        # Its own budget-locked transaction, before the stage transaction.
+        await sync_to_async(trip_latch)(LatchReason.DATASET_OVER_CAP, provider_run_id=row.pk)
     # fetch() wrote the classification onto `row` (the same instance).
     if row.completeness == RunCompleteness.FAILED.value:
         raise _Rejected(RejectReason.FAILED_RUN, row.completeness_reason)
@@ -468,7 +498,10 @@ def _stage5(provider_run_id: int, rand: Callable[[], float]) -> None:
         # holds no scope or listing lock here (MS2-D-35 *Conditions*).
         _apply_outcome(locked, RunOutcome(event), rand)
         locked.import_state = ImportState.FINALIZED
-        locked.save(update_fields=["import_state"])
+        fields = ["import_state"]
+        if stamp_work_completion(locked, timezone.now()):
+            fields.append("final_charge_op_at")
+        locked.save(update_fields=fields)
 
 
 def _int(value: object) -> int:
@@ -546,8 +579,21 @@ def _reject(
             _apply_outcome(locked, RunOutcome(LifecycleEvent.PROBE_FAILURE), rand)
         locked.stage_detail = {**locked.stage_detail, "reject_reason": str(reason)}
         locked.import_state = ImportState.REJECTED
-        locked.save(update_fields=["stage_detail", "import_state"])
+        fields = ["stage_detail", "import_state"]
+        if stamp_work_completion(locked, timezone.now()):
+            fields.append("final_charge_op_at")
+        locked.save(update_fields=fields)
     logger.warning("provider_run %s rejected: %s", provider_run_id, message)
+
+
+def _record_latch_block(provider_run_id: int) -> None:
+    """Back a latch-blocked stage-1 re-read off, visibly, in its own transaction."""
+    with transaction.atomic():
+        row = ProviderRun.objects.select_for_update().get(pk=provider_run_id)
+        row.stage_detail = {**row.stage_detail, "blocked_by_overrun_latch": True}
+        row.next_attempt_at = timezone.now() + LATCH_BLOCKED_BACKOFF
+        row.save(update_fields=["stage_detail", "next_attempt_at"])
+    logger.warning("provider_run %s: stage-1 re-read blocked by the overrun latch", provider_run_id)
 
 
 def _record_exhaustion(provider_run_id: int) -> None:

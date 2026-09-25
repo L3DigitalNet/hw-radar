@@ -8,8 +8,9 @@ P is $17.10 and the runtime allocation A is $11.00. Tests size filler rows
 from these figures through the helpers, never from literals, so a price
 change moves every boundary together.
 
-Rows the reconcile unit (E4) will write are seeded here directly: E3 must
-count them correctly before E4 exists to produce them.
+The E3 tests seed reconciled rows directly (`reconcile`, `close_monitoring`)
+to test the cycle predicate in isolation; the E4 tests below settle rows
+through acquisition.apify.reconcile instead, from the `settled_run` fixture.
 """
 
 from __future__ import annotations
@@ -27,17 +28,19 @@ from hw_radar.acquisition.apify.budget import (
     AdmissionRequest,
     BudgetClass,
     BudgetSettings,
+    CostEstimate,
     RunShape,
     UnitPrices,
     estimate_run_cost,
     project_allocation,
     standing_account_read_debit,
 )
-from hw_radar.acquisition.apify.client import ApifyClient
+from hw_radar.acquisition.apify.client import ApifyClient, ApifyRun, RunOptions
 from hw_radar.acquisition.apify.ledger import LedgerConfig
 from hw_radar.catalog.models import (
     AdmissionClass,
     ApifyBudgetCycle,
+    ApifyBudgetLatch,
     ApifyLedgerAuthority,
     ApifySpendReservation,
     ApifyUsageRead,
@@ -325,3 +328,198 @@ def account_client(
 
 def _z(value: datetime) -> str:
     return value.astimezone(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+# ── E4: settlement fixtures (reconcile.py) ──
+#
+# A run whose import is finalized and whose storage is verified deleted, with
+# the work-completion anchor at ANCHOR. Eligible settlement reads start at
+# ELIGIBLE (anchor + the 10 s settle delay + the 1 h cycle-boundary guard).
+
+ANCHOR: Final = NOW
+FINISHED: Final = NOW - timedelta(minutes=10)
+ELIGIBLE: Final = ANCHOR + timedelta(seconds=10) + GUARD
+STABLE: Final = dataclasses.replace(CONFIG, run_usage_settlement="stable_reads")
+_run_ids = iter(range(1, 1_000_000))
+
+
+def settled_run(
+    *,
+    reserved_at: datetime = NOW - HOUR,
+    anchored: bool = True,
+    estimate: CostEstimate = RUN_ESTIMATE,
+    admission_class: AdmissionClass = AdmissionClass.WATCH_REFRESH,
+    **run_fields: Any,
+) -> tuple[ProviderRun, ApifySpendReservation]:
+    """A terminal run attached to a `reserved` reservation of `estimate`.
+
+    anchored=True: import finalized, storage deleted, anchor stamped (the
+    state both barrier transactions leave). Otherwise the run is terminal
+    with its import and storage still open.
+    """
+    n = next(_run_ids)
+    fields: dict[str, Any] = {
+        "external_run_id": f"e4-run-{n}",
+        "import_idempotency_key": f"apify:e4-run-{n}",
+        "remote_status": "SUCCEEDED",
+        "started_at": reserved_at + timedelta(minutes=5),
+        "finished_at": FINISHED,
+        "dataset_id": f"ds-e4-{n}",
+        "kv_store_id": f"kv-e4-{n}",
+    }
+    if anchored:
+        fields |= {
+            "import_state": "finalized",
+            "storage_state": "deleted",
+            "storage_deleted_at": ANCHOR,
+            "final_charge_op_at": ANCHOR,
+        }
+    fields.update(run_fields)
+    run = provider_run(site(), reserved_at, **fields)
+    resv = ApifySpendReservation.objects.create(
+        admission_class=admission_class,
+        source_site=site(),
+        provider_run=run,
+        estimate_usd=estimate.estimate_usd,
+        execution_bound_usd=estimate.execution_bound_usd,
+        post_run_liability_usd=estimate.post_run_liability_usd,
+        monitoring_bound_usd=estimate.monitoring_bound_usd,
+        component_bounds={k: str(v) for k, v in estimate.components.items()},
+        estimator_version=estimate.estimator_version,
+        reserved_at=reserved_at,
+    )
+    return run, resv
+
+
+def custom_estimate(
+    estimate: str, *, execution: str | None = None, post: str = "0", monitoring: str = "0.0022"
+) -> CostEstimate:
+    """A round-figure estimate for the MS2-D-47 scenarios ($2 reserved, and so on)."""
+    return CostEstimate(
+        components={"compute": D(execution or estimate)},
+        execution_bound_usd=D(execution or estimate),
+        post_run_liability_usd=D(post),
+        monitoring_bound_usd=D(monitoring),
+        estimate_usd=D(estimate),
+        estimator_version="1",
+    )
+
+
+def api_run(
+    run_id: str,
+    total: str | None,
+    *,
+    status: str = "SUCCEEDED",
+    usage_usd: dict[str, str] | None = None,
+    usage: dict[str, str] | None = None,
+    unparseable: tuple[str, ...] = (),
+    restart_count: int | None = 0,
+    finished_at: datetime | None = FINISHED,
+) -> ApifyRun:
+    """A parsed `GET` run answer, as the client would return it."""
+    return ApifyRun(
+        id=run_id,
+        act_id="act-e4",
+        status=status,
+        status_message=None,
+        started_at=FINISHED - HOUR,
+        finished_at=finished_at,
+        build_id="build-e4",
+        build_number="1.0.1",
+        default_dataset_id=None,
+        default_key_value_store_id=None,
+        options=RunOptions(
+            memory_mbytes=SHAPE.memory_mb,
+            timeout_secs=SHAPE.timeout_s,
+            build="latest",
+            max_items=None,
+            restart_on_error=None,
+        ),
+        usage_total_usd=None if total is None else D(total),
+        usage_usd={k: D(v) for k, v in (usage_usd or {}).items()}
+        if usage_usd is not None
+        else None,
+        usage={k: D(v) for k, v in (usage or {}).items()} if usage is not None else None,
+        unparseable_usage=unparseable,
+        restart_count=restart_count,
+    )
+
+
+def open_latches() -> list[str]:
+    return sorted(
+        ApifyBudgetLatch.objects.filter(cleared_at__isnull=True).values_list("reason", flat=True)
+    )
+
+
+class Clock:
+    """A settable clock for apify_poll_tick(clock=...)."""
+
+    def __init__(self, at: datetime) -> None:
+        self.at = at
+
+    def __call__(self) -> datetime:
+        return self.at
+
+
+class FakeRuns:
+    """MockTransport for selector 1/2/4 run and build reads (never the network).
+
+    `totals[id]` is the usageTotalUsd a `GET` answers (None: a null total);
+    ids in `failing` answer 500, ids in `missing` 404, ids in `huge` a body
+    over the control-response cap. `builds[id]` answers `GET` build the same way.
+    """
+
+    def __init__(self) -> None:
+        self.totals: dict[str, str | None] = {}
+        self.builds: dict[str, str | None] = {}
+        self.build_finished: dict[str, str] = {}
+        self.failing: set[str] = set()
+        self.missing: set[str] = set()
+        self.huge: set[str] = set()
+        self.status: dict[str, str] = {}
+        self.requests: list[str] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        parts = request.url.path.split("/")
+        self.requests.append(f"{request.method} {request.url.path}")
+        remote = parts[3] if len(parts) > 3 else ""
+        if remote in self.failing:
+            return httpx.Response(500, json={"error": {"type": "internal", "message": "x"}})
+        if remote in self.missing:
+            return httpx.Response(404, json={"error": {"type": "record-not-found", "message": "x"}})
+        if remote in self.huge:
+            return httpx.Response(200, content=b"{" + b" " * 300_000 + b"}")
+        if request.method == "GET" and parts[:3] == ["", "v2", "actor-runs"]:
+            total = self.totals.get(remote)
+            body = {
+                "id": remote,
+                "status": self.status.get(remote, "SUCCEEDED"),
+                "startedAt": _z(FINISHED - HOUR),
+                "finishedAt": _z(FINISHED),
+                "options": {"memoryMbytes": SHAPE.memory_mb, "timeoutSecs": SHAPE.timeout_s},
+                "stats": {"restartCount": 0},
+                "usageTotalUsd": "@T@",
+                "usageUsd": {"ACTOR_COMPUTE_UNITS": "@T@"},
+            }
+            text = json.dumps({"data": body}).replace(
+                '"@T@"', total if total is not None else "null"
+            )
+            return httpx.Response(200, text=text)
+        if request.method == "GET" and parts[:3] == ["", "v2", "actor-builds"]:
+            total = self.builds.get(remote)
+            body = {
+                "id": remote,
+                "status": "SUCCEEDED",
+                "startedAt": _z(FINISHED - HOUR),
+                "finishedAt": self.build_finished.get(remote, _z(FINISHED)),
+                "usageTotalUsd": "@T@",
+                "usageUsd": {"ACTOR_COMPUTE_UNITS": "@T@"},
+            }
+            text = json.dumps({"data": body}).replace(
+                '"@T@"', total if total is not None else "null"
+            )
+            return httpx.Response(200, text=text)
+        return httpx.Response(500, json={"error": {"type": "unexpected", "message": "path"}})
+
+    def client(self) -> ApifyClient:
+        return ApifyClient("test-token", transport=httpx.MockTransport(self))

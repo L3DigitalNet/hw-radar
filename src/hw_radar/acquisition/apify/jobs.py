@@ -12,13 +12,18 @@ Apify schedules or webhooks):
   deadline BEFORE the start request, sends exactly one start request, records
   the response, and verifies it (MS2-D-26 options check, MS2-D-38 version line).
 - apify_poll_tick is one tick of the `apify-poll` interval job. It runs the
-  three MS2-D-23 selectors over persisted state only, so a poller restart
+  four MS2-D-23 selectors over persisted state only, so a poller restart
   resumes every row: selector 1 polls active remote runs, selector 2 drives
   terminal rows with outstanding local work (the D10 importer, then storage
-  cleanup), and selector 3 hands rows past their storage deadline to the
-  overdue unit whatever their remote status. Each unit of work is claimed and
-  committed on its own, with per-row backoff through `next_attempt_at`, so one
-  failing row never stalls the others.
+  cleanup, then (E4) the reconcile unit's settlement reads) and bound operator
+  builds, selector 3 hands rows past their storage deadline to the overdue
+  unit whatever their remote status, and selector 4 re-reads reconciled rows
+  for upward corrections until a closing read commits. Each unit of work is
+  claimed and committed on its own, with per-row backoff through
+  `next_attempt_at` (`next_usage_read_at` for ledger rows), so one failing row
+  never stalls the others. Every run poll also feeds the ledger
+  (reconcile.record_run_usage). The kill switch does not stop the tick: it
+  settles liability already reserved (MS2-D-17, ED-07).
 
 Production safety. The budget admission binding is DenyAllAdmission until
 Slice E wires the ledger (E5), so no start request can be sent: DenyAll is the
@@ -37,8 +42,12 @@ abort sent here is the start-option-mismatch abort, which MS2-D-32 makes
 attempt 1 of the overdue sequence: it is counted in storage_cleanup_attempts
 and committed before it is sent, and it deletes nothing (deletion needs
 terminal evidence, which the storage unit establishes). The ledger, the overrun latch (a mismatch, an observed
-restart, and an orphaned start all trip it), reconciliation, and selector 4 are
-Slice E. Recovery-probe dispatch by provider is D12.
+restart, and an orphaned start all trip it) and settlement live in
+acquisition.apify.ledger and acquisition.apify.reconcile; this module trips
+the latch only through ledger.trip_latch after the provider_run transaction
+that found the condition has committed (ED-05). An API response over its byte
+cap (ApifyResponseTooLargeError) trips `api_response_over_cap` for the row
+whose call it was. Recovery-probe dispatch by provider is D12.
 
 Requirements: a Django context with the catalog app, PostgreSQL (row locks via
 select_for_update), and the HW_RADAR_APIFY_* settings named above; a real start
@@ -63,8 +72,14 @@ from django.db.models import Q
 from django.utils import timezone
 from pydantic import ValidationError
 
-from hw_radar.acquisition.apify import importer
-from hw_radar.acquisition.apify.client import ApifyApiError, ApifyClient, ApifyError, ApifyRun
+from hw_radar.acquisition.apify import importer, reconcile
+from hw_radar.acquisition.apify.client import (
+    ApifyApiError,
+    ApifyClient,
+    ApifyError,
+    ApifyResponseTooLargeError,
+    ApifyRun,
+)
 from hw_radar.acquisition.apify.contract import (
     INPUT_SCHEMA_VERSION,
     RUN_SCHEMA_VERSION,
@@ -73,15 +88,32 @@ from hw_radar.acquisition.apify.contract import (
     QueryScope,
 )
 from hw_radar.acquisition.apify.importer import RejectReason, import_provider_run
+from hw_radar.acquisition.apify.ledger import (
+    LatchReason,
+    LedgerConfig,
+    load_ledger_config,
+    trip_latch,
+)
 from hw_radar.acquisition.contracts import AdapterRetention, ListingResolver
 from hw_radar.acquisition.retention_policy import UnknownSourceRetention, source_retention
-from hw_radar.catalog.models import ProviderKind, ProviderRun, RunKind, SourceConfig
+from hw_radar.catalog.models import (
+    ProviderKind,
+    ProviderRun,
+    ReservationStatus,
+    RunKind,
+    SourceConfig,
+)
 from hw_radar.catalog.models.provider import AdmissionClass, ImportState, StorageState
 from hw_radar.eligibility import ListingEvaluator
 
 logger = logging.getLogger(__name__)
 
 APIFY_POLL_SECONDS: Final = 60
+
+# When this poller process started. A selector-4 pending marker older than
+# this was left by a process that is gone and can never send its read, so
+# every tick resolves such markers to this instant (MS2-D-34, R10-03).
+PROCESS_STARTED_AT: datetime = timezone.now()
 
 # Per-row backoff after a failed unit of work: 1 min doubling to 1 h. The
 # failure count lives in stage_detail["unit_failures"] and is cleared by the
@@ -378,6 +410,9 @@ async def start_provider_run(
         if not mismatches:
             return StartResult(StartStatus.STARTED, "", row.pk)
         logger.error("apify start %s mismatched its request: %s", row.pk, "; ".join(mismatches))
+        # After _record_start committed: the budget lock is never requested
+        # under the provider_run lock (ED-05).
+        await sync_to_async(trip_latch)(LatchReason.START_OPTION_MISMATCH, provider_run_id=row.pk)
         await sync_to_async(_reject_mismatch)(row.pk)
         try:
             aborted = await client.abort_run(run.id)
@@ -505,6 +540,10 @@ def _record_observation(
                 "stage_detail",
             ]
         )
+    if run.restart_count:
+        # An observed restart is a start-option mismatch (MS2-D-26, ED-20),
+        # tripped after the row's transaction committed (ED-05).
+        trip_latch(LatchReason.START_OPTION_MISMATCH, provider_run_id=provider_run_id)
 
 
 # ── The apify-poll job: three selectors over persisted state (MS2-D-23) ─────
@@ -557,18 +596,32 @@ def _storage_work_left() -> Q:
     )
 
 
-def select_outstanding(now: datetime) -> list[int]:
-    """Selector 2: terminal rows whose import is unfinished, or finished with storage left.
+_UNRECONCILED: Final = [
+    ReservationStatus.RESERVED.value,
+    ReservationStatus.USAGE_PROVISIONAL.value,
+    ReservationStatus.USAGE_FINALIZED.value,
+]
 
-    Rows backing off (`next_attempt_at` in the future) wait; the D10 importer
-    and the storage unit write that backoff themselves and rely on this
-    filter. (E adds the unreconciled-reservation clause.)
+
+def select_outstanding(now: datetime) -> list[int]:
+    """Selector 2: terminal rows whose import is unfinished, or finished with work left.
+
+    Work left is storage not yet deleted or (E4, MS2-D-32) a reservation not
+    yet reconciled once the import is terminal and storage verified deleted:
+    the reconcile unit's settlement reads. Rows backing off (`next_attempt_at`
+    in the future) wait; the D10 importer, the storage unit, and the reconcile
+    unit write that backoff themselves and rely on this filter.
     """
     return list(
         ProviderRun.objects.filter(_due(now), remote_status__in=_TERMINAL_STATUSES)
         .filter(
             ~Q(import_state__in=_TERMINAL_IMPORT)
             | (Q(import_state__in=_TERMINAL_IMPORT) & _storage_work_left())
+            | (
+                Q(import_state__in=_TERMINAL_IMPORT)
+                & Q(storage_state=StorageState.DELETED)
+                & Q(spend_reservation__status__in=_UNRECONCILED)
+            )
         )
         .order_by("pk")
         .values_list("pk", flat=True)
@@ -589,6 +642,7 @@ def select_overdue(now: datetime) -> list[int]:
 
 
 type StorageUnit = Callable[[int, ApifyClient], Awaitable[None]]
+type Clock = Callable[[], datetime]
 
 
 @dataclass(slots=True)
@@ -601,6 +655,11 @@ class TickReport:
     # backed off by the unit itself, so it lands here, not in `failed`.
     cleanup: list[int] = field(default_factory=list)
     overdue: list[int] = field(default_factory=list)
+    # E4: provider_run ids given a reconcile unit; reservation ids of bound
+    # operator builds given a build read; reservation ids given a selector-4 read.
+    reconciled: list[int] = field(default_factory=list)
+    builds: list[int] = field(default_factory=list)
+    monitored: list[int] = field(default_factory=list)
     failed: list[int] = field(default_factory=list)
     error: str = ""
 
@@ -645,12 +704,90 @@ def _clear_failures(provider_run_id: int) -> None:
             row.save(update_fields=["stage_detail"])
 
 
-async def _poll_unit(provider_run_id: int, client: ApifyClient) -> None:
+async def _poll_unit(
+    provider_run_id: int,
+    client: ApifyClient,
+    ledger: LedgerConfig | None = None,
+    clock: Clock | None = None,
+) -> None:
     run_id = await sync_to_async(_count_poll)(provider_run_id)
     if run_id is None:
         return
     run = await client.get_run(run_id)
-    await sync_to_async(_record_observation)(provider_run_id, run, timezone.now())
+    at = clock() if clock is not None else timezone.now()
+    ledger = ledger or await sync_to_async(load_ledger_config)()
+    await sync_to_async(_record_observation)(provider_run_id, run, at)
+    # A separate, budget-locked transaction: the observation's own row lock is
+    # released before the ledger takes the budget lock (MS2-D-35 order).
+    await sync_to_async(reconcile.record_run_usage)(provider_run_id, run, read_at=at, config=ledger)
+
+
+async def _settlement_unit(
+    provider_run_id: int, client: ApifyClient, ledger: LedgerConfig, clock: Clock
+) -> None:
+    """Selector 2's reconcile unit (E4): settle, or make one counted settlement read."""
+    run_id = await sync_to_async(reconcile.plan_settlement_read)(provider_run_id, clock(), ledger)
+    if run_id is None:
+        return
+    run = await client.get_run(run_id)
+    at = clock()
+    await sync_to_async(_record_observation)(provider_run_id, run, at)
+    await sync_to_async(reconcile.record_run_usage)(provider_run_id, run, read_at=at, config=ledger)
+
+
+async def _build_unit(
+    reservation_id: int, client: ApifyClient, ledger: LedgerConfig, clock: Clock
+) -> None:
+    """Selector 2 for an operator build (MS2-D-46): settle, or one counted `GET` build."""
+    build_id = await sync_to_async(reconcile.plan_build_read)(reservation_id, clock(), ledger)
+    if build_id is None:
+        return
+    build = await client.get_build(build_id)
+    await sync_to_async(reconcile.record_build_usage)(
+        reservation_id, build, read_at=clock(), config=ledger
+    )
+
+
+async def _monitoring_unit(
+    reservation_id: int, client: ApifyClient, ledger: LedgerConfig, clock: Clock
+) -> bool:
+    """Selector 4 (MS2-D-23): one counted read, completed in its own locked commit.
+
+    Every outcome completes the read (clears the pending marker); a failure
+    closes nothing. A BaseException (process loss) leaves the marker for the
+    next process to resolve at its start. Returns whether monitoring closed.
+    """
+    call = await sync_to_async(reconcile.begin_monitoring_read)(reservation_id, clock(), ledger)
+    if call is None:
+        return False
+    result: reconcile.MonitorResult | None
+    try:
+        if call.kind == "run":
+            record = await client.get_run(call.remote_id)
+            result = reconcile.MonitorResult(
+                total=record.usage_total_usd,
+                usage_usd=record.usage_usd,
+                usage=record.usage,
+                unparseable=record.unparseable_usage,
+                finished_at=record.finished_at,
+            )
+        else:
+            build = await client.get_build(call.remote_id)
+            result = reconcile.MonitorResult(
+                total=build.usage_total_usd,
+                usage_usd=build.usage_usd,
+                usage=build.usage,
+                unparseable=build.unparseable_usage,
+                finished_at=build.finished_at,
+            )
+    except ApifyResponseTooLargeError:
+        result = reconcile.MonitorResult(total=None, over_cap=True)
+    except ApifyError as exc:
+        logger.warning("selector-4 read for reservation %s failed: %s", reservation_id, exc)
+        result = None
+    return await sync_to_async(reconcile.complete_monitoring_read)(
+        reservation_id, result, clock(), ledger
+    )
 
 
 async def _outstanding_unit(
@@ -660,14 +797,23 @@ async def _outstanding_unit(
     resolver: ListingResolver,
     evaluator: ListingEvaluator | None,
     cleanup: StorageUnit,
+    ledger: LedgerConfig,
+    clock: Clock,
 ) -> str:
     row = await sync_to_async(ProviderRun.objects.get)(pk=provider_run_id)
     if row.import_state in _TERMINAL_IMPORT:
+        if row.storage_state == StorageState.DELETED.value:
+            await _settlement_unit(provider_run_id, client, ledger, clock)
+            return "reconcile"
         await cleanup(provider_run_id, client)
         return "cleanup"
     if row.stage_detail.get("start_mismatch"):
         # The start job normally rejected already; this resumes a crash between
         # recording the mismatch and the rejection. Never import such a run.
+        # The trip is idempotent, so a crash before the start job's trip is covered.
+        await sync_to_async(trip_latch)(
+            LatchReason.START_OPTION_MISMATCH, provider_run_id=provider_run_id
+        )
         await sync_to_async(_reject_mismatch)(provider_run_id)
         return "import"
     await import_provider_run(
@@ -688,8 +834,10 @@ async def apify_poll_tick(
     client_factory: ClientFactory | None = None,
     cleanup: StorageUnit | None = None,
     overdue: StorageUnit | None = None,
+    ledger_config: LedgerConfig | None = None,
+    clock: Clock | None = None,
 ) -> TickReport:
-    """Run the three selectors once; each row's unit commits and fails on its own.
+    """Run the four selectors once; each row's unit commits and fails on its own.
 
     Selector 1 runs first and selector 2 is queried after it, so a run whose
     termination this tick observed is imported in the same tick. A unit that
@@ -698,7 +846,12 @@ async def apify_poll_tick(
     The client is built only when a selector returns a row, so an idle tick
     needs no token; a failed construction is recorded in `error` and ends the
     tick without backing any row off. `cleanup` and `overdue` default to the
-    D11 storage units; tests substitute their own.
+    D11 storage units; tests substitute their own. `ledger_config` defaults to
+    the settings, and `clock` (the ledger's time source for selectors 2 and 4
+    and every usage read) to timezone.now; tests pass both. A unit whose call
+    answers over its byte cap trips `api_response_over_cap` and backs off.
+    Before any selector, pending selector-4 markers left by an earlier process
+    are resolved to PROCESS_STARTED_AT.
     """
     # Imported here, not at module top: storage_cleanup builds on this module's
     # observation writer, so a top-level import would be circular.
@@ -706,26 +859,39 @@ async def apify_poll_tick(
 
     cleanup_unit = cleanup or storage_cleanup.cleanup_storage_unit
     overdue_unit_fn = overdue or storage_cleanup.overdue_storage_unit
+    ledger = ledger_config or await sync_to_async(load_ledger_config)()
+    now = clock or timezone.now
     report = TickReport()
     client: ApifyClient | None = None
 
-    async def run_unit(pk: int, unit: Callable[[ApifyClient], Awaitable[str]]) -> str | None:
+    async def run_unit(
+        pk: int, unit: Callable[[ApifyClient], Awaitable[str]], *, ledger_row: bool = False
+    ) -> str | None:
+        """Run one unit; `ledger_row` means `pk` is a reservation, not a provider_run."""
         nonlocal client
         if client is None:
             client = (client_factory or ApifyClient)()
         try:
             return await unit(client)
+        except ApifyResponseTooLargeError as exc:
+            # Valid content never exceeds a cap, so this is a latch trip, not a
+            # retry (MS2-D-32 *Response caps*). Outside every transaction here.
+            logger.error("apify-poll unit for %s: %s", pk, exc)
+            await sync_to_async(trip_latch)(
+                LatchReason.API_RESPONSE_OVER_CAP, provider_run_id=None if ledger_row else pk
+            )
         except ApifyError as exc:  # the client already scrubs the token from these
-            logger.warning("apify-poll unit for provider_run %s failed: %s", pk, exc)
+            logger.warning("apify-poll unit for %s failed: %s", pk, exc)
         except Exception:
-            logger.exception("apify-poll unit for provider_run %s failed", pk)
+            logger.exception("apify-poll unit for %s failed", pk)
         report.failed.append(pk)
-        await sync_to_async(_back_off)(pk)
+        if not ledger_row:
+            await sync_to_async(_back_off)(pk)
         return None
 
     def poll(pk: int) -> Callable[[ApifyClient], Awaitable[str]]:
         async def unit(c: ApifyClient) -> str:
-            await _poll_unit(pk, c)
+            await _poll_unit(pk, c, ledger, now)
             return "poll"
 
         return unit
@@ -733,8 +899,28 @@ async def apify_poll_tick(
     def outstanding(pk: int) -> Callable[[ApifyClient], Awaitable[str]]:
         async def unit(c: ApifyClient) -> str:
             return await _outstanding_unit(
-                pk, c, resolver=resolver, evaluator=evaluator, cleanup=cleanup_unit
+                pk,
+                c,
+                resolver=resolver,
+                evaluator=evaluator,
+                cleanup=cleanup_unit,
+                ledger=ledger,
+                clock=now,
             )
+
+        return unit
+
+    def build(pk: int) -> Callable[[ApifyClient], Awaitable[str]]:
+        async def unit(c: ApifyClient) -> str:
+            await _build_unit(pk, c, ledger, now)
+            return "build"
+
+        return unit
+
+    def monitor(pk: int) -> Callable[[ApifyClient], Awaitable[str]]:
+        async def unit(c: ApifyClient) -> str:
+            await _monitoring_unit(pk, c, ledger, now)
+            return "monitor"
 
         return unit
 
@@ -746,18 +932,27 @@ async def apify_poll_tick(
         return unit
 
     try:
-        for pk in await sync_to_async(select_active)(timezone.now()):
+        await sync_to_async(reconcile.resolve_stale_monitoring_markers)(PROCESS_STARTED_AT)
+        for pk in await sync_to_async(select_active)(now()):
             if await run_unit(pk, poll(pk)) is not None:
                 report.polled.append(pk)
-        for pk in await sync_to_async(select_outstanding)(timezone.now()):
+        for pk in await sync_to_async(select_outstanding)(now()):
             kind = await run_unit(pk, outstanding(pk))
             if kind == "cleanup":
                 report.cleanup.append(pk)
+            elif kind == "reconcile":
+                report.reconciled.append(pk)
             elif kind is not None:
                 report.imported.append(pk)
-        for pk in await sync_to_async(select_overdue)(timezone.now()):
+        for pk in await sync_to_async(select_overdue)(now()):
             if await run_unit(pk, overdue_unit(pk)) is not None:
                 report.overdue.append(pk)
+        for pk in await sync_to_async(reconcile.select_build_settlement)(now()):
+            if await run_unit(pk, build(pk), ledger_row=True) is not None:
+                report.builds.append(pk)
+        for pk in await sync_to_async(reconcile.select_monitoring)(now(), ledger):
+            if await run_unit(pk, monitor(pk), ledger_row=True) is not None:
+                report.monitored.append(pk)
     except ApifyError as exc:
         # Only client construction raises out of run_unit (e.g. no token).
         report.error = str(exc)

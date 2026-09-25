@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import json
 from collections.abc import Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
@@ -24,12 +25,14 @@ from pathlib import Path
 from typing import Any, Final
 
 import httpx
+import ledger_support
 import pytest
 from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
 
 from hw_radar.acquisition.apify import importer, jobs
+from hw_radar.acquisition.apify.budget import OperatorKind
 from hw_radar.acquisition.apify.client import ApifyClient, ApifyRun, RunOptions
 from hw_radar.acquisition.apify.contract import SyntheticCollectorInput
 from hw_radar.acquisition.apify.jobs import (
@@ -45,6 +48,7 @@ from hw_radar.acquisition.apify.jobs import (
     start_mismatches,
     start_provider_run,
 )
+from hw_radar.acquisition.apify.ledger import reserve_operator
 from hw_radar.acquisition.contracts import NullResolver
 from hw_radar.acquisition.scheduling.buckets import BucketRegistry
 from hw_radar.acquisition.sources import ADAPTERS
@@ -62,7 +66,14 @@ from hw_radar.catalog.models import (
     SourceSite,
     SourceTier,
 )
-from hw_radar.catalog.models.provider import AdmissionClass, ImportState, StorageState
+from hw_radar.catalog.models.provider import (
+    AdmissionClass,
+    ApifyBudgetLatch,
+    ApifySpendReservation,
+    ImportState,
+    ReservationStatus,
+    StorageState,
+)
 from hw_radar.poller import service
 
 # transaction=True: the jobs write from sync_to_async threads, and the
@@ -931,3 +942,105 @@ def test_start_mismatches_fail_closed(overrides: dict[str, Any], expected: list[
     assert start_mismatches(run, memory_mb=MEMORY_MB, timeout_s=TIMEOUT_S, build_tag="prod") == (
         expected
     )
+
+
+# ── Slice E4: latch wiring and the kill switch (MS2-D-17, -26, ED-07) ────────
+
+
+@LIVE
+def test_start_option_mismatch_aborts_and_trips_latch(config: SourceConfig) -> None:
+    fake = FakeApify()
+    fake.start_response = lambda _r: httpx.Response(
+        201,
+        json=_run_body(
+            "run-mx", "RUNNING", options={"memoryMbytes": 4096, "timeoutSecs": TIMEOUT_S}
+        ),
+    )
+    result = _start(config, fake)
+    assert result.status is StartStatus.MISMATCH_ABORTED
+    assert fake.paths("POST", "/v2/actor-runs/run-mx/abort") == ["/v2/actor-runs/run-mx/abort"]
+    trip = ApifyBudgetLatch.objects.get(cleared_at__isnull=True)
+    assert (trip.reason, trip.provider_run_id) == (  # pyright: ignore[reportAttributeAccessIssue]
+        "start_option_mismatch",
+        result.provider_run_id,
+    )
+
+
+class _DrainingApify(FakeApify):
+    """FakeApify whose runs report a usage figure and whose deletes succeed."""
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        parts = request.url.path.split("/")
+        if request.method == "DELETE":
+            self.requests.append(request)
+            return httpx.Response(204)
+        if request.method == "GET" and parts[:3] == ["", "v2", "actor-runs"]:
+            self.requests.append(request)
+            run_id = parts[3]
+            return httpx.Response(
+                200,
+                json=_run_body(
+                    run_id,
+                    self.statuses[run_id],
+                    finishedAt="2026-09-24T12:05:00Z",
+                    usageTotalUsd=0.01,
+                    usageUsd={"ACTOR_COMPUTE_UNITS": 0.01},
+                ),
+            )
+        return super().__call__(request)
+
+
+def test_kill_switch_off_still_drains_imports_cleanup_and_closing_reads(
+    site: SourceSite, config: SourceConfig
+) -> None:
+    # HW_RADAR_APIFY_ENABLED is false (the default): starts, probes, and
+    # operator reservations are denied, while selectors 1-4 still import,
+    # delete, settle, and close liability already reserved.
+    fake = _DrainingApify()
+    row = _row(site, remote_status="SUCCEEDED")
+    fake.statuses[row.external_run_id or ""] = "SUCCEEDED"
+    fake.serve(row.external_run_id or "", _fixture("complete"))
+    estimate = ledger_support.RUN_ESTIMATE
+    reservation = ApifySpendReservation.objects.create(
+        admission_class=AdmissionClass.WATCH_REFRESH,
+        source_site=site,
+        provider_run=row,
+        estimate_usd=estimate.estimate_usd,
+        execution_bound_usd=estimate.execution_bound_usd,
+        post_run_liability_usd=estimate.post_run_liability_usd,
+        monitoring_bound_usd=estimate.monitoring_bound_usd,
+        estimator_version="1",
+        reserved_at=row.admitted_at,
+    )
+    # No settle delay, guard, or correction window, so one tick per stage.
+    budget = dataclasses.replace(ledger_support.BUDGET, enabled=False, cycle_boundary_guard_s=0)
+    cfg = dataclasses.replace(
+        ledger_support.CONFIG, budget=budget, usage_settle_delay_s=0, correction_window_s=0
+    )
+    clock = ledger_support.Clock(timezone.now())
+
+    def tick() -> TickReport:
+        clock.at += timedelta(minutes=2)
+        return _run(
+            apify_poll_tick(
+                resolver=NullResolver(), client_factory=fake.client, ledger_config=cfg, clock=clock
+            )
+        )
+
+    assert tick().imported == [row.pk]
+    assert tick().cleanup == [row.pk]
+    assert tick().reconciled == [row.pk]
+    reservation.refresh_from_db()
+    assert reservation.status == ReservationStatus.RECONCILED
+    assert tick().monitored == [reservation.pk]
+    reservation.refresh_from_db()
+    row.refresh_from_db()
+    assert (row.import_state, row.storage_state) == (ImportState.FINALIZED, StorageState.DELETED)
+    assert reservation.correction_monitor_closed_at is not None
+    assert len(fake.paths("DELETE", "/v2/")) == 2
+
+    # Paid admission stays off.
+    denied = _start(config, fake)
+    assert (denied.status, denied.reason) == (StartStatus.REFUSED, "apify_disabled")
+    outcome = reserve_operator(OperatorKind.BUILD, config=cfg, reason="build while disabled")
+    assert (outcome.admitted, outcome.reason) == (False, "apify_disabled")
