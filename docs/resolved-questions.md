@@ -47,6 +47,8 @@
     - [OQ20 — OSS license-compliance posture](#oq20--oss-license-compliance-posture)
     - [OQ21 — `httpx` dependency for API/FX/heartbeat HTTP paths](#oq21--httpx-dependency-for-apifxheartbeat-http-paths)
     - [OQ22 — Retention class and `expires_at` policy for resolver-learned (`listing_derived`) `ProductAlias` rows](#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows)
+    - [OQ23 — Apify paid-plan base fee vs the $20/month Hardware Radar ceiling](#oq23--apify-paid-plan-base-fee-vs-the-20month-hardware-radar-ceiling)
+    - [OQ24 (part a) — First Actor proof uses a controlled synthetic source](#oq24-part-a--first-actor-proof-uses-a-controlled-synthetic-source)
 
 ---
 
@@ -542,3 +544,29 @@ _Recommendation ratified as presented (2026-07-04): `dependency-review-action` g
 - **Consequence:** the DR-001 CHECK pair now covers **every** `RetentionGoverned` table (migration `0017_identity_retention_checks`, with an idempotent provenance-derived backfill for pre-existing empty-class rows); `tests/unit/test_purge_registry.py` pins that as a registry-derived property.
 
 **My Comments:** "I agree and ratify all, use sane defaults." (2026-09-06, ratifying option (a) with the provenance and DR-008 semantics above.)
+
+### OQ23 — Apify paid-plan base fee vs the $20/month Hardware Radar ceiling
+
+**✅ Resolved (owner, 2026-09-24, session 2) — recorded here; [ADR 0021's 2026-09-24 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-24-actor-ownership-billing-cycle-budget-and-actor-proof-owner-clarification) carries the architectural rule; the MS-2 plan implements it as MS2-D-40.** Raised by the MS-2 plan (MS2-D-26), which asked whether an Apify Starter base fee ($19/month) counts against the hard $20/month ceiling, and kept live admission disabled until answered.
+
+- **Decision: the ceiling is the account's total Apify cash outlay, about $20/month.** The subscription fee counts, because it is actual money. The included prepaid platform usage is not charged a second time.
+- **Hardware Radar's attributable platform usage targets at most $12 per billing cycle**, and Hardware Radar may use only the lesser of that target and the prepaid allowance actually remaining after the account's other workloads. It must not assume the whole prepaid allowance is available, because the account is shared.
+- **No pay-as-you-go overage is relied on for normal operation.**
+- **Two quantities, kept distinct:** (1) the account invoice, or cash outlay; (2) Hardware Radar's attributable platform consumption. The architectural rule is "cash ceiling + attributable consumption", not a plan name. There is no "$12 + $19" reading and no "$20 of run charges on top of the subscription".
+- **Account backstop:** the account-level usage limit is a secondary defense only. It currently equals the prepaid credit ($19); keep it at or below the prepaid credit and never raise it for Hardware Radar. Agents change no billing or account setting without explicit owner authority. Project-level controls are mandatory regardless.
+- **Budget period (same decision set):** the actual Apify billing cycle read from the API, never a hard-coded calendar month; a rolling window is a secondary trend metric only.
+- **Alternatives rejected:** option (2), the fee excluded from the ceiling (a per-run budget on top of the fee), is the "$20 of run charges on top of the subscription" reading the owner ruled out; option (3), a separate allocation for the fee, is unnecessary once the fee's prepaid usage is counted once. Revision 4's `HW_RADAR_APIFY_CAP_DEDUCTION_USD` is withdrawn.
+- **Consequence:** live admission no longer waits on a deduction setting. It waits on the remaining E preconditions (verified prices, a Hardware Radar token, the storage lifetime) and on a readable billing cycle and account state.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-24 session-2 direction.)_
+
+### OQ24 (part a) — First Actor proof uses a controlled synthetic source
+
+**✅ Resolved (owner, 2026-09-24, session 2) — no ADR of its own; [ADR 0021's 2026-09-24 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-24-actor-ownership-billing-cycle-budget-and-actor-proof-owner-clarification) records the split, and the MS-2 plan implements it as MS2-D-42 (task F5a).** Split from OQ24 ("Actor-proof source selection") under rule 3; the production-merchant fork stays open as [OQ24 in `open-questions.md`](open-questions.md#oq24--production-actor-backed-merchant-source-admission).
+
+- **Decision:** the first Actor proof runs a controlled synthetic source through a **real** private Apify Actor built in this repository, so it exercises real compute, run lifecycle, dataset retrieval, delayed completion, cost accounting, and API behavior with no merchant legal decision.
+- **Path proven:** `APScheduler/provider admission → budget reservation → Actor start → remote execution → bounded output → completion polling → completeness report → dataset/output import → idempotency → event-time handling → listing identity handling → finalized usage reconciliation`.
+- **Source chosen (plan MS2-D-42, reviewable):** static fixture files in this public repository at a pinned commit, fetched over HTTPS from raw GitHub content, plus a fault-injection input only the synthetic Actor accepts. Short-retention sources are avoided for the proof.
+- **Consequence:** Newegg's exclusion and every merchant question move to the narrowed OQ24.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-24 session-2 direction.)_

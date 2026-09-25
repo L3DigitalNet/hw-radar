@@ -6,7 +6,7 @@ description: 'Adopt a four-tier acquisition stack — Scrapy orchestrator with a
 doc_type: 'adr'
 status: 'active'
 created: '2026-07-04'
-updated: '2026-07-04'
+updated: '2026-09-24'
 reviewed: null
 owner: ''
 consumer: 'mix'
@@ -80,6 +80,21 @@ Option 1 was rejected (premature complexity — most sources never need a browse
 ### Confirmation
 
 Implementation confirmation: MS-1's five sources yield normalized listings on plain HTTP + structured-data parsing; MS-5 adds `curl_cffi`/Playwright only where the tier ladder measurably requires it.
+
+
+## 2026-09-24 Amendment — technique ladder is independent of execution venue
+
+[ADR 0021](adr-0021-hybrid-acquisition-apify.md) adds a hybrid local/Apify execution model. This ADR's **HTTP-first, structured-data-first, browser-last** rule remains accepted as the technique ladder for each source.
+
+The ladder may now execute:
+
+- locally in hw-radar for cheap official API / structured-data / HTTP paths; or
+- inside a self-owned private Apify Actor when managed execution materially improves reliability or maintenance.
+
+Moving a collector to Apify is **not** permission to skip directly to browser automation, residential proxies, CAPTCHA solving, or anti-bot bypass. Browser and proxy use remain explicit, source-specific escalation decisions.
+
+Hardware Radar has a hard **$20/month Apify ceiling** ([ADR 0021](adr-0021-hybrid-acquisition-apify.md)); the initial operating target is $12/month. No collector may automatically escalate to paid residential proxies or a paid third-party Actor after failure. If a source cannot meet its required value/freshness inside the legal/operational guardrails and budget, reduce cadence/scope or skip it. See ADR 0021's 2026-09-24 owner amendment for the current billing-cycle-authoritative accounting of this ceiling.
+
 
 ## More Information
 

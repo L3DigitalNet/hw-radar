@@ -1,0 +1,126 @@
+{
+  "fixture": "unknown-schema",
+  "description": "OUTPUT and rows carry a contract major hw-radar does not know.",
+  "generatedBy": "actors/hw-radar-synthetic-collector/tests/support.py",
+  "actorInput": {
+    "schemaVersion": "hw-radar-input/v1",
+    "siteKey": "synthetic",
+    "collectionScope": "synthetic:hdd:catalog",
+    "categoryHint": "hdd",
+    "maxItems": 50,
+    "maxPages": 5,
+    "maxRequests": 10,
+    "maxBytes": 1000000,
+    "timeBudgetSecs": 60,
+    "fixtureCommit": "1111111111111111111111111111111111111111",
+    "fixturePaths": [
+      "catalog/page-1.json",
+      "catalog/page-2.json"
+    ],
+    "faultMode": "unknown_schema"
+  },
+  "startedAt": "2026-09-24T12:00:00Z",
+  "platformEffects": [],
+  "remoteStatus": "SUCCEEDED",
+  "admitted": {
+    "actorName": "hw-radar-synthetic-collector",
+    "queryScope": {
+      "siteKey": "synthetic",
+      "collectionScope": "synthetic:hdd:catalog",
+      "categoryHint": "hdd",
+      "maxItems": 50,
+      "maxPages": 5,
+      "maxRequests": 10,
+      "maxBytes": 1000000,
+      "timeBudgetSecs": 60
+    }
+  },
+  "datasetItems": [
+    {
+      "schemaVersion": "hw-radar-listing/v99",
+      "siteKey": "synthetic",
+      "sourceListingKey": "syn-hdd-0001",
+      "url": "https://raw.githubusercontent.com/L3DigitalNet/hw-radar/1111111111111111111111111111111111111111/actors/hw-radar-synthetic-collector/fixtures/source/catalog/page-1.json#syn-hdd-0001",
+      "title": "Synthetic Enterprise HDD 16TB SATA 7200rpm (fixture)",
+      "price": "189.99",
+      "currency": "USD",
+      "stockStatus": "in_stock",
+      "categoryHint": "hdd",
+      "collectionScope": "synthetic:hdd:catalog",
+      "observedAt": "2026-09-24T12:00:00Z",
+      "shippingPrice": "0.00",
+      "quantityAvailable": 7,
+      "sellerName": "Synthetic Seller A",
+      "conditionLabel": "Recertified",
+      "shipsFromCountry": "US",
+      "mpn": "SYN-HDD-16T-A"
+    },
+    {
+      "schemaVersion": "hw-radar-listing/v99",
+      "siteKey": "synthetic",
+      "sourceListingKey": "syn-hdd-0002",
+      "url": "https://raw.githubusercontent.com/L3DigitalNet/hw-radar/1111111111111111111111111111111111111111/actors/hw-radar-synthetic-collector/fixtures/source/catalog/page-1.json#syn-hdd-0002",
+      "title": "Synthetic NAS HDD 8TB SATA 5400rpm (fixture)",
+      "price": "99.50",
+      "currency": "USD",
+      "stockStatus": "out_of_stock",
+      "categoryHint": "hdd",
+      "collectionScope": "synthetic:hdd:catalog",
+      "observedAt": "2026-09-24T12:00:00Z",
+      "sellerName": "Synthetic Seller B",
+      "conditionLabel": "New"
+    },
+    {
+      "schemaVersion": "hw-radar-listing/v99",
+      "siteKey": "synthetic",
+      "sourceListingKey": "syn-hdd-0003",
+      "url": "https://raw.githubusercontent.com/L3DigitalNet/hw-radar/1111111111111111111111111111111111111111/actors/hw-radar-synthetic-collector/fixtures/source/catalog/page-2.json#syn-hdd-0003",
+      "title": "Synthetic Enterprise HDD 20TB SAS 7200rpm (fixture)",
+      "price": "279.00",
+      "currency": "USD",
+      "stockStatus": "in_stock",
+      "categoryHint": "hdd",
+      "collectionScope": "synthetic:hdd:catalog",
+      "observedAt": "2026-09-24T12:00:00Z",
+      "shippingPrice": "12.5",
+      "quantityAvailable": 2,
+      "shipsFromCountry": "US",
+      "mpn": "SYN-HDD-20T-S"
+    }
+  ],
+  "output": {
+    "schemaVersion": "hw-radar-run/v99",
+    "status": "succeeded",
+    "completeness": {
+      "complete": true,
+      "truncated": false,
+      "limitsHit": {
+        "pages": false,
+        "requests": false,
+        "items": false,
+        "time": false,
+        "bytes": false
+      },
+      "pagesDeclared": 2,
+      "pagesFetched": 2,
+      "itemsDeclared": 3,
+      "itemsEmitted": 3
+    },
+    "queryScope": {
+      "siteKey": "synthetic",
+      "collectionScope": "synthetic:hdd:catalog",
+      "categoryHint": "hdd",
+      "maxItems": 50,
+      "maxPages": 5,
+      "maxRequests": 10,
+      "maxBytes": 1000000,
+      "timeBudgetSecs": 60
+    },
+    "provider": {
+      "actorName": "hw-radar-synthetic-collector",
+      "actorVersion": "1.0",
+      "sourceKind": "synthetic"
+    },
+    "errors": []
+  }
+}

@@ -63,6 +63,47 @@ class RecordingTech(models.TextChoices):
     UNKNOWN = "unknown", "Unknown"
 
 
+class GpuChipVendor(models.TextChoices):
+    NVIDIA = "nvidia", "NVIDIA"
+    AMD = "amd", "AMD"
+    INTEL = "intel", "Intel"
+    OTHER = "other", "Other"
+    UNKNOWN = "unknown", "Unknown"
+
+
+class GpuInterface(models.TextChoices):
+    PCIE = "pcie", "PCIe"
+    SXM = "sxm", "SXM"
+    OAM = "oam", "OAM"
+    MXM = "mxm", "MXM"
+    OTHER = "other", "Other"
+    UNKNOWN = "unknown", "Unknown"
+
+
+class GpuCooling(models.TextChoices):
+    ACTIVE = "active", "Active"
+    PASSIVE = "passive", "Passive"
+    LIQUID = "liquid", "Liquid"
+    UNKNOWN = "unknown", "Unknown"
+
+
+class RamGeneration(models.TextChoices):
+    DDR3 = "ddr3", "DDR3"
+    DDR4 = "ddr4", "DDR4"
+    DDR5 = "ddr5", "DDR5"
+    OTHER = "other", "Other"
+    UNKNOWN = "unknown", "Unknown"
+
+
+class RamModuleType(models.TextChoices):
+    UDIMM = "udimm", "UDIMM"
+    RDIMM = "rdimm", "RDIMM"
+    LRDIMM = "lrdimm", "LRDIMM"
+    SODIMM = "sodimm", "SO-DIMM"
+    OTHER = "other", "Other"
+    UNKNOWN = "unknown", "Unknown"
+
+
 class AliasType(models.TextChoices):
     GTIN = "gtin", "GTIN"
     UPC = "upc", "UPC"
@@ -94,7 +135,8 @@ class Manufacturer(TimeStamped):
 
 
 class Category(TimeStamped):
-    """The extensibility axis: drive in v1; later ram, gpu."""
+    """The extensibility axis. Rows are seeded by migrations (drive in 0001, the
+    MS-2 categories in 0019); matching.categories registers the rules per slug."""
 
     slug = models.SlugField(max_length=50, unique=True)
     name = models.CharField(max_length=100)
@@ -234,6 +276,90 @@ class DriveSpec(TimeStamped, RetentionGoverned):
             *retention_constraints("drive_spec"),
         ]
         indexes: ClassVar[list[models.Index]] = [*retention_indexes("drive_spec_expires")]
+
+
+# First-class category satellites (MS2-D-04). Each mirrors DriveSpec's shape: 1:1
+# on ProductModel (the condition-free identity anchor, so every variant of a model
+# shares one spec), RetentionGoverned with the DR-001 CHECK pair and sweep index.
+# Columns are only the typed fields a v1 watch filter needs; there is deliberately
+# no spec_json bag, because watch-critical values must be queryable typed columns
+# (ADR 0022, D10). A NULL or "unknown" value means the reference source did not
+# state it, and the eligibility evaluator treats it as `unknown`, never a match.
+# Field names are a cross-file contract: refdata.contracts.Seed{Gpu,Ram,Cpu}Spec
+# mirror them verbatim so refdata.persist can dump a seed spec straight into
+# update_or_create defaults.
+
+
+class GpuSpec(TimeStamped, RetentionGoverned):
+    product_model = models.OneToOneField(
+        ProductModel, on_delete=models.CASCADE, primary_key=True, related_name="gpu_spec"
+    )
+    # Distinct from the model's manufacturer: a GPU board is usually sold under
+    # the board partner's brand, while CUDA/ROCm filters key on the chip vendor.
+    chip_vendor = models.CharField(
+        max_length=10, choices=GpuChipVendor.choices, default=GpuChipVendor.UNKNOWN
+    )
+    vram_gb = models.PositiveSmallIntegerField(null=True, blank=True)
+    interface = models.CharField(
+        max_length=10, choices=GpuInterface.choices, default=GpuInterface.UNKNOWN
+    )
+    cooling = models.CharField(
+        max_length=10, choices=GpuCooling.choices, default=GpuCooling.UNKNOWN
+    )
+    tdp_w = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    class Meta:
+        db_table = "gpu_spec"
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *retention_constraints("gpu_spec"),
+        ]
+        indexes: ClassVar[list[models.Index]] = [*retention_indexes("gpu_spec_expires")]
+
+
+class RamSpec(TimeStamped, RetentionGoverned):
+    product_model = models.OneToOneField(
+        ProductModel, on_delete=models.CASCADE, primary_key=True, related_name="ram_spec"
+    )
+    generation = models.CharField(
+        max_length=10, choices=RamGeneration.choices, default=RamGeneration.UNKNOWN
+    )
+    module_type = models.CharField(
+        max_length=10, choices=RamModuleType.choices, default=RamModuleType.UNKNOWN
+    )
+    # Stored, not derived from module_type: ECC UDIMMs exist.
+    ecc = models.BooleanField(null=True, blank=True)
+    module_capacity_gb = models.PositiveSmallIntegerField(null=True, blank=True)
+    # A kit part number identifies N modules; total capacity is
+    # modules_per_kit x module_capacity_gb, so a single module is 1, not NULL.
+    modules_per_kit = models.PositiveSmallIntegerField(default=1)
+    speed_mts = models.PositiveIntegerField(null=True, blank=True)
+    ranks = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    class Meta:
+        db_table = "ram_spec"
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *retention_constraints("ram_spec"),
+        ]
+        indexes: ClassVar[list[models.Index]] = [*retention_indexes("ram_spec_expires")]
+
+
+class CpuSpec(TimeStamped, RetentionGoverned):
+    product_model = models.OneToOneField(
+        ProductModel, on_delete=models.CASCADE, primary_key=True, related_name="cpu_spec"
+    )
+    # Open vocabulary (new sockets ship every generation), so a typed column
+    # rather than a DB enum; the category rules module owns normalization to a
+    # lowercase token. Empty string = not stated by the source.
+    socket = models.CharField(max_length=32, blank=True, default="")
+    cores = models.PositiveSmallIntegerField(null=True, blank=True)
+    tdp_w = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    class Meta:
+        db_table = "cpu_spec"
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            *retention_constraints("cpu_spec"),
+        ]
+        indexes: ClassVar[list[models.Index]] = [*retention_indexes("cpu_spec_expires")]
 
 
 class ProductAlias(RetentionGoverned):

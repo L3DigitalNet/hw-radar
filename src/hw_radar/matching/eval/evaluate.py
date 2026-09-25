@@ -115,6 +115,10 @@ def _ingest(entry: CorpusEntry, observed_at: datetime) -> Listing:
         currency=entry.listing.currency,
         condition_label=entry.listing.condition_label,
         attrs=dict(entry.listing.attrs),
+        # persist.append_snapshot stores a non-null hint in attrs_json, where the
+        # resolver's category dispatch reads it; dropping it here would replay a
+        # non-drive entry through the drive rules.
+        category_hint=entry.listing.category_hint,
     )
     # Corpus v1 is USD-only (schema-enforced), so this stamp is the identity stamp
     # and never reads the FX cache — evaluation stays independent of rate data.

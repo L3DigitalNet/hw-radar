@@ -1,0 +1,109 @@
+{
+  "fixture": "truncated-by-bytes",
+  "description": "The byte cap stopped the run.",
+  "generatedBy": "actors/hw-radar-synthetic-collector/tests/support.py",
+  "actorInput": {
+    "schemaVersion": "hw-radar-input/v1",
+    "siteKey": "synthetic",
+    "collectionScope": "synthetic:hdd:catalog",
+    "categoryHint": "hdd",
+    "maxItems": 50,
+    "maxPages": 5,
+    "maxRequests": 10,
+    "maxBytes": 1000000,
+    "timeBudgetSecs": 60,
+    "fixtureCommit": "1111111111111111111111111111111111111111",
+    "fixturePaths": [
+      "catalog/page-1.json",
+      "catalog/page-2.json"
+    ],
+    "faultMode": "truncate_bytes"
+  },
+  "startedAt": "2026-09-24T12:00:00Z",
+  "platformEffects": [],
+  "remoteStatus": "SUCCEEDED",
+  "admitted": {
+    "actorName": "hw-radar-synthetic-collector",
+    "queryScope": {
+      "siteKey": "synthetic",
+      "collectionScope": "synthetic:hdd:catalog",
+      "categoryHint": "hdd",
+      "maxItems": 50,
+      "maxPages": 5,
+      "maxRequests": 10,
+      "maxBytes": 1000000,
+      "timeBudgetSecs": 60
+    }
+  },
+  "datasetItems": [
+    {
+      "schemaVersion": "hw-radar-listing/v1",
+      "siteKey": "synthetic",
+      "sourceListingKey": "syn-hdd-0001",
+      "url": "https://raw.githubusercontent.com/L3DigitalNet/hw-radar/1111111111111111111111111111111111111111/actors/hw-radar-synthetic-collector/fixtures/source/catalog/page-1.json#syn-hdd-0001",
+      "title": "Synthetic Enterprise HDD 16TB SATA 7200rpm (fixture)",
+      "price": "189.99",
+      "currency": "USD",
+      "stockStatus": "in_stock",
+      "categoryHint": "hdd",
+      "collectionScope": "synthetic:hdd:catalog",
+      "observedAt": "2026-09-24T12:00:00Z",
+      "shippingPrice": "0.00",
+      "quantityAvailable": 7,
+      "sellerName": "Synthetic Seller A",
+      "conditionLabel": "Recertified",
+      "shipsFromCountry": "US",
+      "mpn": "SYN-HDD-16T-A"
+    },
+    {
+      "schemaVersion": "hw-radar-listing/v1",
+      "siteKey": "synthetic",
+      "sourceListingKey": "syn-hdd-0002",
+      "url": "https://raw.githubusercontent.com/L3DigitalNet/hw-radar/1111111111111111111111111111111111111111/actors/hw-radar-synthetic-collector/fixtures/source/catalog/page-1.json#syn-hdd-0002",
+      "title": "Synthetic NAS HDD 8TB SATA 5400rpm (fixture)",
+      "price": "99.50",
+      "currency": "USD",
+      "stockStatus": "out_of_stock",
+      "categoryHint": "hdd",
+      "collectionScope": "synthetic:hdd:catalog",
+      "observedAt": "2026-09-24T12:00:00Z",
+      "sellerName": "Synthetic Seller B",
+      "conditionLabel": "New"
+    }
+  ],
+  "output": {
+    "schemaVersion": "hw-radar-run/v1",
+    "status": "succeeded",
+    "completeness": {
+      "complete": false,
+      "truncated": true,
+      "limitsHit": {
+        "pages": false,
+        "requests": false,
+        "items": false,
+        "time": false,
+        "bytes": true
+      },
+      "pagesDeclared": 2,
+      "pagesFetched": 1,
+      "itemsDeclared": 3,
+      "itemsEmitted": 2
+    },
+    "queryScope": {
+      "siteKey": "synthetic",
+      "collectionScope": "synthetic:hdd:catalog",
+      "categoryHint": "hdd",
+      "maxItems": 50,
+      "maxPages": 5,
+      "maxRequests": 10,
+      "maxBytes": 1000000,
+      "timeBudgetSecs": 60
+    },
+    "provider": {
+      "actorName": "hw-radar-synthetic-collector",
+      "actorVersion": "1.0",
+      "sourceKind": "synthetic"
+    },
+    "errors": []
+  }
+}

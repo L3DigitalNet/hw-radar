@@ -13,5 +13,12 @@
         ]
       }
     ]
-  }
+  },
+  "enabledPlugins": {
+    "figma@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true
+  },
+  "enabledMcpjsonServers": [
+    "apify"
+  ]
 }

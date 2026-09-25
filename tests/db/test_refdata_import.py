@@ -26,8 +26,8 @@ pytestmark = pytest.mark.django_db
 
 
 @pytest.fixture
-def docs() -> list[SeedDocument]:  # the real repo corpus — the fixtures ARE the seed
-    return load_seed_documents()
+def docs() -> list[SeedDocument]:  # the drive seed corpus — the fixtures ARE the seed
+    return [d for d in load_seed_documents() if d.category == "drive"]
 
 
 def test_import_writes_the_full_corpus_with_dr009_stamps(docs: list[SeedDocument]) -> None:

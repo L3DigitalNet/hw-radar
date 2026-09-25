@@ -1,0 +1,399 @@
+# serializer version: 1
+# name: test_ladder_golden_baseline
+  dict({
+    'no_signals': tuple(
+      <Outcome.NONE: 'none'>,
+      <Grain.NONE: 'none'>,
+      None,
+      '',
+      None,
+      None,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          'st16000nm001g',
+        ),
+      ]),
+    ),
+    'rung0_clean_reobservation': tuple(
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.MODEL: 'model'>,
+      0,
+      'source_alias',
+      tuple(
+        <Grain.MODEL: 'model'>,
+        1,
+        10,
+        None,
+        None,
+      ),
+      0.98,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          '',
+        ),
+      ]),
+    ),
+    'rung0_contradiction': tuple(
+      <Outcome.REVIEW: 'review'>,
+      <Grain.NONE: 'none'>,
+      0,
+      '',
+      None,
+      None,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          '',
+        ),
+        tuple(
+          'veto',
+          list([
+            'capacity',
+          ]),
+        ),
+      ]),
+    ),
+    'rung1_brand_mismatch': tuple(
+      <Outcome.NONE: 'none'>,
+      <Grain.NONE: 'none'>,
+      None,
+      '',
+      None,
+      None,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          'st16000nm001g',
+        ),
+      ]),
+    ),
+    'rung1_brandless_unknown_code': tuple(
+      <Outcome.REVIEW: 'review'>,
+      <Grain.NONE: 'none'>,
+      1,
+      '',
+      None,
+      None,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          'abc123xyz99',
+        ),
+        tuple(
+          'no_brand_evidence',
+          True,
+        ),
+      ]),
+    ),
+    'rung1_capacity_contradiction': tuple(
+      <Outcome.REVIEW: 'review'>,
+      <Grain.NONE: 'none'>,
+      1,
+      '',
+      None,
+      None,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          'st16000nm001g',
+        ),
+        tuple(
+          'veto',
+          list([
+            'capacity',
+          ]),
+        ),
+      ]),
+    ),
+    'rung1_capacity_tolerance': tuple(
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.MODEL: 'model'>,
+      1,
+      'exact_alias',
+      tuple(
+        <Grain.MODEL: 'model'>,
+        1,
+        10,
+        None,
+        None,
+      ),
+      0.98,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          'st16000nm001g',
+        ),
+      ]),
+    ),
+    'rung1_conflicting_targets': tuple(
+      <Outcome.REVIEW: 'review'>,
+      <Grain.NONE: 'none'>,
+      1,
+      '',
+      None,
+      None,
+      list([
+        tuple(
+          'conflicting_targets',
+          2,
+        ),
+        tuple(
+          'mpn_hypothesis',
+          'dellpn123',
+        ),
+      ]),
+    ),
+    'rung1_exact_alias': tuple(
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.MODEL: 'model'>,
+      1,
+      'exact_alias',
+      tuple(
+        <Grain.MODEL: 'model'>,
+        1,
+        10,
+        None,
+        None,
+      ),
+      0.98,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          'st16000nm001g',
+        ),
+      ]),
+    ),
+    'rung1_oem_fanout': tuple(
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.FAMILY: 'family'>,
+      1,
+      'exact_alias',
+      tuple(
+        <Grain.FAMILY: 'family'>,
+        1,
+        None,
+        None,
+        None,
+      ),
+      0.8,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          'x477ar6',
+        ),
+        tuple(
+          'oem_fanout',
+          2,
+        ),
+      ]),
+    ),
+    'rung1_vendor_shaped_token': tuple(
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.MODEL: 'model'>,
+      1,
+      'exact_alias',
+      tuple(
+        <Grain.MODEL: 'model'>,
+        1,
+        10,
+        None,
+        None,
+      ),
+      0.98,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          'st16000nm001g',
+        ),
+      ]),
+    ),
+    'rung2_capacity_conflict': tuple(
+      <Outcome.REVIEW: 'review'>,
+      <Grain.NONE: 'none'>,
+      2,
+      '',
+      None,
+      None,
+      list([
+        tuple(
+          'decoder_capacity',
+          16000000000000,
+        ),
+        tuple(
+          'mpn_hypothesis',
+          'st16000nm999x',
+        ),
+        tuple(
+          'vendor_hint',
+          'seagate',
+        ),
+        tuple(
+          'veto',
+          list([
+            'capacity',
+          ]),
+        ),
+      ]),
+    ),
+    'rung2_decode': tuple(
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.FAMILY: 'family'>,
+      2,
+      'mpn_decode',
+      tuple(
+        <Grain.FAMILY: 'family'>,
+        None,
+        None,
+        None,
+        tuple(
+          'seagate',
+          'exos',
+        ),
+      ),
+      0.85,
+      list([
+        tuple(
+          'mpn_hypothesis',
+          'st16000nm999x',
+        ),
+        tuple(
+          'provenance',
+          <Provenance.CORROBORATED_COMMUNITY: 'corroborated_community'>,
+        ),
+        tuple(
+          'provisional',
+          True,
+        ),
+        tuple(
+          'rule',
+          'st:nm',
+        ),
+        tuple(
+          'vendor_hint',
+          'seagate',
+        ),
+      ]),
+    ),
+  })
+# ---
+# name: test_synthetic_corpus_decisions_baseline
+  list([
+    tuple(
+      'spd-0001',
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.VARIANT: 'variant'>,
+      1,
+      'seagate',
+      'exos x16',
+      'st16000nm001g',
+      tuple(
+        'recertified',
+        'unknown',
+        'factory',
+        'unknown',
+      ),
+    ),
+    tuple(
+      'spd-0002',
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.VARIANT: 'variant'>,
+      1,
+      'seagate',
+      'exos x16',
+      'st16000nm001g',
+      tuple(
+        'new',
+        'unknown',
+        'unknown',
+        'unknown',
+      ),
+    ),
+    tuple(
+      'ghd-0001',
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.FAMILY: 'family'>,
+      2,
+      'seagate',
+      'exos',
+      None,
+      None,
+    ),
+    tuple(
+      'ghd-0002',
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.FAMILY: 'family'>,
+      2,
+      'hgst',
+      'ultrastar',
+      None,
+      None,
+    ),
+    tuple(
+      'wd-0001',
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.FAMILY: 'family'>,
+      2,
+      'western_digital',
+      'red',
+      None,
+      None,
+    ),
+    tuple(
+      'wd-0002',
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.VARIANT: 'variant'>,
+      1,
+      'western_digital',
+      'ultrastar dc hc550',
+      'wuh721816ale6l4',
+      tuple(
+        'recertified',
+        'unknown',
+        'unknown',
+        'unknown',
+      ),
+    ),
+    tuple(
+      'sea-0001',
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.MODEL: 'model'>,
+      1,
+      'seagate',
+      'ironwolf pro',
+      'st12000ne0008',
+      None,
+    ),
+    tuple(
+      'sea-0002',
+      <Outcome.REVIEW: 'review'>,
+      <Grain.NONE: 'none'>,
+      1,
+      None,
+      None,
+      None,
+      None,
+    ),
+    tuple(
+      'ebay-0001',
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.MODEL: 'model'>,
+      1,
+      'hgst',
+      None,
+      'hus724040als640',
+      None,
+    ),
+    tuple(
+      'ebay-0002',
+      <Outcome.ACCEPT: 'accept'>,
+      <Grain.FAMILY: 'family'>,
+      2,
+      'toshiba',
+      'mg enterprise capacity',
+      None,
+      None,
+    ),
+  ])
+# ---

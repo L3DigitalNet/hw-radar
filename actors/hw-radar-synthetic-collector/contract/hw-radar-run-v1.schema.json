@@ -1,0 +1,275 @@
+{
+  "$defs": {
+    "CompletenessReport": {
+      "additionalProperties": false,
+      "description": "The Actor's own completeness evidence.\n\nThe declared counts are what the source said exists; they are absent when the\nsource declares nothing. Absent itemsDeclared is exactly what makes an empty\nrun ambiguous rather than proven complete-empty.",
+      "properties": {
+        "complete": {
+          "title": "Complete",
+          "type": "boolean"
+        },
+        "truncated": {
+          "title": "Truncated",
+          "type": "boolean"
+        },
+        "limitsHit": {
+          "$ref": "#/$defs/LimitsHit"
+        },
+        "pagesDeclared": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Pagesdeclared"
+        },
+        "pagesFetched": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Pagesfetched",
+          "type": "integer"
+        },
+        "itemsDeclared": {
+          "anyOf": [
+            {
+              "maximum": 100000,
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Itemsdeclared"
+        },
+        "itemsEmitted": {
+          "maximum": 100000,
+          "minimum": 0,
+          "title": "Itemsemitted",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "complete",
+        "truncated",
+        "limitsHit",
+        "pagesFetched",
+        "itemsEmitted"
+      ],
+      "title": "CompletenessReport",
+      "type": "object"
+    },
+    "LimitsHit": {
+      "additionalProperties": false,
+      "description": "Which caps stopped the run while work remained; any True means truncated.",
+      "properties": {
+        "pages": {
+          "title": "Pages",
+          "type": "boolean"
+        },
+        "requests": {
+          "title": "Requests",
+          "type": "boolean"
+        },
+        "items": {
+          "title": "Items",
+          "type": "boolean"
+        },
+        "time": {
+          "title": "Time",
+          "type": "boolean"
+        },
+        "bytes": {
+          "title": "Bytes",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pages",
+        "requests",
+        "items",
+        "time",
+        "bytes"
+      ],
+      "title": "LimitsHit",
+      "type": "object"
+    },
+    "ProviderInfo": {
+      "additionalProperties": false,
+      "description": "Which Actor produced the run; actor_name is checked against the admitted Actor.",
+      "properties": {
+        "actorName": {
+          "maxLength": 64,
+          "pattern": "^hw-radar-[a-z0-9-]+$",
+          "title": "Actorname",
+          "type": "string"
+        },
+        "actorVersion": {
+          "maxLength": 16,
+          "pattern": "^[0-9]+\\.[0-9]+$",
+          "title": "Actorversion",
+          "type": "string"
+        },
+        "sourceKind": {
+          "maxLength": 32,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "title": "Sourcekind",
+          "type": "string"
+        }
+      },
+      "required": [
+        "actorName",
+        "actorVersion",
+        "sourceKind"
+      ],
+      "title": "ProviderInfo",
+      "type": "object"
+    },
+    "QueryScope": {
+      "additionalProperties": false,
+      "description": "What a run was admitted for; the Actor echoes it verbatim in OUTPUT.queryScope.",
+      "properties": {
+        "siteKey": {
+          "maxLength": 100,
+          "minLength": 1,
+          "pattern": "^[a-z0-9][a-z0-9_-]*$",
+          "title": "Sitekey",
+          "type": "string"
+        },
+        "collectionScope": {
+          "maxLength": 100,
+          "minLength": 5,
+          "pattern": "^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9_-]*$",
+          "title": "Collectionscope",
+          "type": "string"
+        },
+        "categoryHint": {
+          "maxLength": 50,
+          "minLength": 1,
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "title": "Categoryhint",
+          "type": "string"
+        },
+        "maxItems": {
+          "maximum": 500,
+          "minimum": 1,
+          "title": "Maxitems",
+          "type": "integer"
+        },
+        "maxPages": {
+          "maximum": 50,
+          "minimum": 1,
+          "title": "Maxpages",
+          "type": "integer"
+        },
+        "maxRequests": {
+          "maximum": 100,
+          "minimum": 1,
+          "title": "Maxrequests",
+          "type": "integer"
+        },
+        "maxBytes": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Maxbytes",
+          "type": "integer"
+        },
+        "timeBudgetSecs": {
+          "maximum": 900,
+          "minimum": 10,
+          "title": "Timebudgetsecs",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "siteKey",
+        "collectionScope",
+        "categoryHint",
+        "maxItems",
+        "maxPages",
+        "maxRequests",
+        "maxBytes",
+        "timeBudgetSecs"
+      ],
+      "title": "QueryScope",
+      "type": "object"
+    },
+    "RunError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[a-z0-9_]+$",
+          "title": "Code",
+          "type": "string"
+        },
+        "message": {
+          "maxLength": 500,
+          "title": "Message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "title": "RunError",
+      "type": "object"
+    }
+  },
+  "$id": "urn:hw-radar:contract:run:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "hw-radar-run/v1: the default-KV `OUTPUT` record.\n\nIt holds counts, scope, and errors only, never merchant content (MS2-D-25), and\nis stored on provider_run, never as a RawItem (MS2-D-14 raw batch shape).",
+  "properties": {
+    "schemaVersion": {
+      "const": "hw-radar-run/v1",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "succeeded",
+        "failed"
+      ],
+      "title": "Status",
+      "type": "string"
+    },
+    "completeness": {
+      "$ref": "#/$defs/CompletenessReport"
+    },
+    "queryScope": {
+      "$ref": "#/$defs/QueryScope"
+    },
+    "provider": {
+      "$ref": "#/$defs/ProviderInfo"
+    },
+    "errors": {
+      "items": {
+        "$ref": "#/$defs/RunError"
+      },
+      "maxItems": 50,
+      "title": "Errors",
+      "type": "array"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "status",
+    "completeness",
+    "queryScope",
+    "provider",
+    "errors"
+  ],
+  "title": "RunOutput",
+  "type": "object"
+}

@@ -55,5 +55,11 @@ jobs:
           # itself is BSD. Under the OQ20-ratified posture (GPL obligations
           # trigger on distribution; hw-radar distributes nothing) this is
           # acceptable; exemption scoped to the single package, MS-1a PR #8.
+          # typing-extensions declares the PEP 639 expression "PSF-2.0" (already
+          # allowed); the graph's scanned expression adds GPL-1.0-or-later only
+          # because the PSF LICENSE text's history table lists which Python
+          # releases are "GPL-compatible". First surfaced when the Actor
+          # project's uv.lock was added (PR #25).
           allow-dependencies-licenses: >-
-            pkg:pypi/lxml
+            pkg:pypi/lxml,
+            pkg:pypi/typing-extensions

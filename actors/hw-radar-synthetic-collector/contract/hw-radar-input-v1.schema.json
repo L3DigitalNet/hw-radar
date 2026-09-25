@@ -1,0 +1,112 @@
+{
+  "$id": "urn:hw-radar:contract:input:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "hw-radar-synthetic-collector's full input: the common part plus its source fields.\n\nfixture_commit pins the repository commit whose fixture pages the Actor fetches\n(MS2-D-42). fault_mode exists only on this model, never on CollectorInput, so a\nmerchant Actor's input cannot carry it.",
+  "properties": {
+    "siteKey": {
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "title": "Sitekey",
+      "type": "string"
+    },
+    "collectionScope": {
+      "maxLength": 100,
+      "minLength": 5,
+      "pattern": "^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9_-]*$",
+      "title": "Collectionscope",
+      "type": "string"
+    },
+    "categoryHint": {
+      "maxLength": 50,
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "title": "Categoryhint",
+      "type": "string"
+    },
+    "maxItems": {
+      "maximum": 500,
+      "minimum": 1,
+      "title": "Maxitems",
+      "type": "integer"
+    },
+    "maxPages": {
+      "maximum": 50,
+      "minimum": 1,
+      "title": "Maxpages",
+      "type": "integer"
+    },
+    "maxRequests": {
+      "maximum": 100,
+      "minimum": 1,
+      "title": "Maxrequests",
+      "type": "integer"
+    },
+    "maxBytes": {
+      "maximum": 10000000,
+      "minimum": 1,
+      "title": "Maxbytes",
+      "type": "integer"
+    },
+    "timeBudgetSecs": {
+      "maximum": 900,
+      "minimum": 10,
+      "title": "Timebudgetsecs",
+      "type": "integer"
+    },
+    "schemaVersion": {
+      "const": "hw-radar-input/v1",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "fixtureCommit": {
+      "pattern": "^[0-9a-f]{40}$",
+      "title": "Fixturecommit",
+      "type": "string"
+    },
+    "fixturePaths": {
+      "items": {
+        "maxLength": 200,
+        "pattern": "^[a-z0-9][a-z0-9-]*(/[a-z0-9][a-z0-9-]*)*\\.json$",
+        "type": "string"
+      },
+      "maxItems": 20,
+      "minItems": 1,
+      "title": "Fixturepaths",
+      "type": "array"
+    },
+    "faultMode": {
+      "enum": [
+        "none",
+        "truncate_items",
+        "truncate_pages",
+        "truncate_time",
+        "truncate_bytes",
+        "partial_failure",
+        "contradictory_report",
+        "count_mismatch",
+        "unknown_schema",
+        "fail"
+      ],
+      "title": "Faultmode",
+      "type": "string"
+    }
+  },
+  "required": [
+    "siteKey",
+    "collectionScope",
+    "categoryHint",
+    "maxItems",
+    "maxPages",
+    "maxRequests",
+    "maxBytes",
+    "timeBudgetSecs",
+    "schemaVersion",
+    "fixtureCommit",
+    "fixturePaths",
+    "faultMode"
+  ],
+  "title": "SyntheticCollectorInput",
+  "type": "object"
+}

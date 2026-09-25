@@ -1,0 +1,90 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "category": "cpu",
+  "manufacturer_name": "Intel",
+  "manufacturer_key": "intel",
+  "family_name": "Xeon Scalable",
+  "provenance": {
+    "source_kind": "first_party_page",
+    "sources": [
+      {
+        "url": "https://www.intel.com/content/www/us/en/products/sku/232384/intel-xeon-gold-6448y-processor-60m-cache-2-10-ghz/specifications.html",
+        "title": "Intel Xeon Gold 6448Y ARK specifications",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.intel.com/content/www/us/en/products/sku/231746/intel-xeon-platinum-8480-processor-105m-cache-2-00-ghz/ordering.html",
+        "title": "Intel Xeon Platinum 8480+ ARK ordering/spec-code page",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.intel.com/content/www/us/en/products/sku/237564/intel-xeon-gold-6548y-processor-60m-cache-2-50-ghz/specifications.html",
+        "title": "Intel Xeon Gold 6548Y+ ARK specifications",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.intel.com/content/www/us/en/products/sku/212285/intel-xeon-gold-6338-processor-48m-cache-2-00-ghz/specifications.html",
+        "title": "Intel Xeon Gold 6338 ARK specifications",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.intel.com/content/www/us/en/products/sku/212282/intel-xeon-platinum-8358-processor-48m-cache-2-60-ghz/specifications.html",
+        "title": "Intel Xeon Platinum 8358 ARK specifications",
+        "retrieved": "2026-09-24"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "Xeon Gold 6448Y",
+      "spec": {"socket": "fclga4677", "cores": 32, "tdp_w": 225},
+      "aliases": [
+        {"alias_type": "mpn", "text": "Xeon Gold 6448Y", "is_primary": true},
+        {"alias_type": "mpn", "text": "6448Y"}
+      ],
+      "source_url": "https://www.intel.com/content/www/us/en/products/sku/232384/intel-xeon-gold-6448y-processor-60m-cache-2-10-ghz/specifications.html",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "Xeon Platinum 8480+",
+      "spec": {"socket": "fclga4677", "cores": 56, "tdp_w": 350},
+      "aliases": [
+        {"alias_type": "mpn", "text": "Xeon Platinum 8480+", "is_primary": true},
+        {"alias_type": "mpn", "text": "8480+"},
+        {"alias_type": "retail_pn", "text": "PK8071305074801"}
+      ],
+      "source_url": "https://www.intel.com/content/www/us/en/products/sku/231746/intel-xeon-platinum-8480-processor-105m-cache-2-00-ghz/ordering.html",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "Xeon Gold 6548Y+",
+      "spec": {"socket": "fclga4677", "cores": 32, "tdp_w": 250},
+      "aliases": [
+        {"alias_type": "mpn", "text": "Xeon Gold 6548Y+", "is_primary": true},
+        {"alias_type": "mpn", "text": "6548Y+"}
+      ],
+      "source_url": "https://www.intel.com/content/www/us/en/products/sku/237564/intel-xeon-gold-6548y-processor-60m-cache-2-50-ghz/specifications.html",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "Xeon Gold 6338",
+      "spec": {"socket": "fclga4189", "cores": 32, "tdp_w": 205},
+      "aliases": [
+        {"alias_type": "mpn", "text": "Xeon Gold 6338", "is_primary": true},
+        {"alias_type": "mpn", "text": "6338"}
+      ],
+      "source_url": "https://www.intel.com/content/www/us/en/products/sku/212285/intel-xeon-gold-6338-processor-48m-cache-2-00-ghz/specifications.html",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "Xeon Platinum 8358",
+      "spec": {"socket": "fclga4189", "cores": 32, "tdp_w": 250},
+      "aliases": [
+        {"alias_type": "mpn", "text": "Xeon Platinum 8358", "is_primary": true},
+        {"alias_type": "mpn", "text": "8358"}
+      ],
+      "source_url": "https://www.intel.com/content/www/us/en/products/sku/212282/intel-xeon-platinum-8358-processor-48m-cache-2-60-ghz/specifications.html",
+      "retrieved_on": "2026-09-24"
+    }
+  ]
+}

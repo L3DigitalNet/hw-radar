@@ -1,6 +1,6 @@
 # Research
 
-This directory is the project's **research corpus** — 37 deep-research reports that ground the design of Hardware Radar in evidence rather than assumption. Alongside [`../specs/hw-radar-master-spec.md`](../specs/hw-radar-master-spec.md) (the spec) and [`../adr/`](../adr/) (the decisions), these reports are a **design source of truth**: when a decision cites "research says…", this is where it says it.
+This directory is the project's **research corpus** — 38 research reports that ground the design of Hardware Radar in evidence rather than assumption. Alongside [`../specs/hw-radar-master-spec.md`](../specs/hw-radar-master-spec.md) (the spec) and [`../adr/`](../adr/) (the decisions), these reports are a **design source of truth**: when a decision cites "research says…", this is where it says it.
 
 Each report is a **dated, frozen snapshot** of what was found on the day it was run (the original corpus 2026-07-03, plus a 2026-07-04 follow-up batch resolving OQ3 + OQ6–OQ15: scoring-model test, UI inventory, polling cadence, orchestration, search self-governance, the free email path, DB-backup/RPO, and the Amazon post-PA-API acquisition path), with inline citations. They are not living documents — findings get **reconciled forward** into the spec, the ADRs, and [`../resolved-questions.md`](../resolved-questions.md), rather than edited in place here.
 
@@ -84,6 +84,12 @@ Nine reports run 2026-07-04 to close the remaining domain/operational questions 
 | [2026-07-04-ssd-vendor-part-number-decoding-and-spec-catalog-bootstrap-datasets](2026-07-04-ssd-vendor-part-number-decoding-and-spec-catalog-bootstrap-datasets.md) | SSD vendor MPN decoding schemes + prior-art model→spec bootstrap datasets (never vendor `drivedb.h` — GPL) | Matching layer / catalog bootstrap — [ADR 0019](../adr/adr-0019-listing-catalog-matching-layer.md) |
 | [2026-07-05-ms1c-catalog-seed-inputs](2026-07-05-ms1c-catalog-seed-inputs.md) | MS-1c manufacturer catalog seed inputs: live recert inventory, first-party datasheets, seed-row mapping, and MS-1b carry-forward checks | Catalog seed — [ADR 0018](../adr/adr-0018-manufacturer-spec-catalog.md) / MS-1c design |
 | [2026-07-04-oss-license-compliance-tooling-for-a-uv-managed-public-python-project](2026-07-04-oss-license-compliance-tooling-for-a-uv-managed-public-python-project.md) | OSS license-compliance tooling/process for a small public uv-managed project | License gate — [OQ20](../resolved-questions.md#oq20--oss-license-compliance-posture) (dependency-review) |
+
+### 2026-09-24 — MS-2 planning (code-verified map)
+
+| Report | Answers | Landed in |
+| --- | --- | --- |
+| [2026-09-24-ms2-code-dependency-map](2026-09-24-ms2-code-dependency-map.md) | Code-verified seams for the multi-category watch core: unchanged abstractions, drive assumptions, fetch/parse coupling, source-vs-provider conflation, duplicate-observation and delist-completeness flow, category hints, watch attach point | [MS-2 plan](../superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md) |
 
 ## Provenance
 

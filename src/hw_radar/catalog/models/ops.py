@@ -90,6 +90,49 @@ class RunFailureClass(models.TextChoices):
     UNKNOWN = "unknown", "Unknown (escalate)"
 
 
+class ProviderKind(models.TextChoices):
+    """Who collected a run's data (ADR 0021: source identity is independent of it).
+
+    No model field uses this yet, so it needs no migration; the Slice D
+    provider-run table will be its first column.
+    """
+
+    LOCAL = "local", "Local collector"
+    APIFY = "apify", "Self-owned Apify Actor"
+
+
+class RunCompleteness(models.TextChoices):
+    """ADR-0021 completeness taxonomy for one collection run.
+
+    Only COMPLETE is evidence of absence. TRUNCATED (page/item/budget limit hit),
+    PARTIAL_FAILURE and FAILED never are — see acquisition.providers for the gate
+    that enforces this. Unused by any field for now, like ProviderKind.
+    """
+
+    COMPLETE = "complete", "Complete"
+    TRUNCATED = "truncated", "Truncated"
+    PARTIAL_FAILURE = "partial_failure", "Partial failure"
+    FAILED = "failed", "Failed"
+
+
+class TruncationReason(models.TextChoices):
+    """Which cap cut a TRUNCATED remote run short (MS2-D-11, revision 5).
+
+    It qualifies RunCompleteness.TRUNCATED only and never adds a completeness
+    state: every cause has identical delist semantics, so splitting TRUNCATED
+    into per-cause members would break the ADR-0021 taxonomy and every
+    TRUNCATED branch of the gate for no behavioral gain. RESOURCE_LIMIT is a
+    byte or transfer budget set at admission. Unused by any field for now; the
+    Slice D provider-run table adds the nullable column.
+    """
+
+    ITEM_LIMIT = "item_limit", "Item limit"
+    PAGE_LIMIT = "page_limit", "Page limit"
+    REQUEST_LIMIT = "request_limit", "Request limit"
+    TIME_LIMIT = "time_limit", "Time limit"
+    RESOURCE_LIMIT = "resource_limit", "Resource (byte/transfer) limit"
+
+
 class SourceConfig(TimeStamped):
     source_site = models.OneToOneField(SourceSite, on_delete=models.PROTECT, related_name="config")
     enabled = models.BooleanField(default=False)

@@ -1,8 +1,20 @@
-"""Stage runner: fetch → parse → normalize → persist → delist → resolve, in a ScraperRun.
+"""Stage runner: fetch → parse → normalize → persist → delist → resolve → evaluate,
+in a ScraperRun.
 
 Stages are independently re-runnable (§8.1); a resolver failure never blocks
-persistence (C.3 — the listing lands unresolved). ORM work runs through
-sync_to_async because the runner lives on the poller's event loop.
+persistence (C.3 — the listing lands unresolved), and neither does an evaluator
+failure (MS2-D-20). ORM work runs through sync_to_async because the runner lives
+on the poller's event loop.
+
+The evaluate stage (MS-2 Slice C, MS2-D-20) runs the eligibility evaluator for
+every listing whose resolution did not raise in this run. `evaluator=None` binds
+the production WatchEvaluator rather than skipping the stage, so the poll,
+heartbeat-fired FULL and recovery-probe paths — all of which reach this runner
+through run_source with no evaluator argument — evaluate without per-caller
+wiring. A listing the stage did not assess (resolver raised, evaluator raised)
+keeps its old WatchEvaluation rows, which the read model then sees as
+non-current (`pending`) because their snapshot binding no longer matches: the
+failure path fails closed without writing anything.
 
 The delist stage (CR-004) is opt-in per source: an adapter that can describe what
 its sweep proves implements DelistDetector, and listings this site owns that the
@@ -10,6 +22,12 @@ sweep contradicts are soft-deleted (never row-deleted — see Listing.mark_delis
 and the PROTECT on ListingResolution.superseded_by). The adapter owns the absence
 grace; the pipeline owns the proof that the lane was polling across it, because
 only the pipeline can see SourceLaneState and the run history.
+
+Every run enters through a CollectionProvider (ADR 0021, MS2-D-10):
+run_collection is the stage runner, and run_source wraps a plain SourceAdapter in
+a LocalCollectionProvider so poller, heartbeat and probe call sites are unchanged.
+The provider's run evidence gates the delist stage (acquisition.providers), so a
+truncated, partial or failed run is never read as evidence of absence.
 """
 
 from __future__ import annotations
@@ -27,7 +45,7 @@ from pydantic import ValidationError
 from hw_radar.acquisition import fx
 from hw_radar.acquisition.classify import classify_exception, classify_response
 from hw_radar.acquisition.contracts import (
-    DelistDetector,
+    CollectionProvider,
     DelistScope,
     ListingResolver,
     NormalizedListing,
@@ -36,6 +54,11 @@ from hw_radar.acquisition.contracts import (
     SourceAdapter,
 )
 from hw_radar.acquisition.persist import append_snapshot, store_raw, upsert_listing
+from hw_radar.acquisition.providers import (
+    LocalCollectionProvider,
+    counts_toward_sweep_continuity,
+    gate_delist_scope,
+)
 from hw_radar.acquisition.scheduling.apply import RunOutcome
 from hw_radar.acquisition.scheduling.lifecycle import LifecycleEvent
 from hw_radar.catalog.models import (
@@ -52,6 +75,7 @@ from hw_radar.catalog.models import (
     SourceConfig,
     SourceSite,
 )
+from hw_radar.eligibility import ListingEvaluator, WatchEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -100,10 +124,14 @@ def _record_sweep_continuity(site: SourceSite, observed_at: datetime) -> datetim
     restart that never got to write lane state. The current run is still RUNNING
     at this point, so status=SUCCESS excludes it without a pk filter.
 
-    Called for EVERY successful full run, not only delist-capable ones: continuity
-    is a property of the lane's polling, and evaluating it only on sweeps that
-    produced a DelistScope would step over a pause that happened between two
-    scope-less sweeps and read the lane as continuous across it.
+    Called for every successful full run whose provider evidence counts toward
+    continuity (acquisition.providers.counts_toward_sweep_continuity), not only
+    delist-capable ones: continuity is a property of the lane's polling, and
+    evaluating it only on sweeps that produced a DelistScope would step over a
+    pause that happened between two scope-less sweeps and read the lane as
+    continuous across it. Every local run counts; a truncated, partial or failed
+    remote run does not, because it did not sweep the lane, and it breaks the
+    run instead (see _break_sweep_continuity).
     """
     config = SourceConfig.objects.filter(source_site=site).first()
     if config is None:
@@ -124,6 +152,28 @@ def _record_sweep_continuity(site: SourceSite, observed_at: datetime) -> datetim
         lane_state.continuous_since = observed_at
         lane_state.save(update_fields=["continuous_since", "updated_at"])
     return lane_state.continuous_since
+
+
+def _break_sweep_continuity(site: SourceSite) -> None:
+    """End the FULL lane's continuity run at a full sweep that did not sweep the lane.
+
+    Called for every successful FULL run whose evidence fails
+    counts_toward_sweep_continuity (a truncated, partial or failed remote run).
+    Merely skipping _record_sweep_continuity is not enough (plan review F-04):
+    the old continuous_since would survive, and that function's previous-run
+    lookup counts every successful FULL ScraperRun, so a string of ineligible
+    runs would read as unbroken polling. A later truncated local sweep could
+    then use continuity those runs never proved and stale-delist the catalogue
+    (CR-004, ADR 0021). Clearing it makes the next eligible sweep restart the
+    run at itself, so stale absence again waits out a full grace of real sweeps.
+    """
+    config = SourceConfig.objects.filter(source_site=site).first()
+    if config is None:
+        return
+    lane_state = config.lane_state(SchedulingLane.FULL)
+    if lane_state.continuous_since is not None:
+        lane_state.continuous_since = None
+        lane_state.save(update_fields=["continuous_since", "updated_at"])
 
 
 def _apply_delist(site: SourceSite, scope: DelistScope, continuous_since: datetime | None) -> int:
@@ -170,7 +220,7 @@ def _apply_delist(site: SourceSite, scope: DelistScope, continuous_since: dateti
 
 def _median_body_bytes(site: SourceSite) -> int | None:
     # EC-007 invariant: detail_json["body_bytes"] is stored as a RUN-LEVEL SUM
-    # of every item's body size (see run_source below), but classify_response
+    # of every item's body size (see run_collection below), but classify_response
     # consumes median_body_bytes as a PER-ITEM comparison basis (an item is a
     # soft-block if its own body is <20% of the median item size). Divide each
     # run's total by its records_fetched to recover a per-item average before
@@ -345,18 +395,62 @@ async def run_source(
     run_kind: RunKind | None = None,
     fetch_timeout_s: float = FETCH_TIMEOUT_S,
 ) -> tuple[ScraperRun, RunOutcome]:
-    effective_kind = run_kind or adapter.run_kind
-    site = await sync_to_async(SourceSite.objects.get)(normalized_name=adapter.site_key)
+    """Run one in-process SourceAdapter through the pipeline (see run_collection).
+
+    Signature kept stable for the poller, heartbeat and probe call sites; retention
+    must still be forwarded from adapter_retention(adapter) by the caller. It
+    deliberately takes no evaluator: run_collection's default binds the
+    production WatchEvaluator, so every one of those call sites evaluates
+    (MS2-D-20) without being edited.
+    """
+    return await run_collection(
+        LocalCollectionProvider(adapter),
+        resolver,
+        retention_class=retention_class,
+        expires_policy=expires_policy,
+        run_kind=run_kind,
+        fetch_timeout_s=fetch_timeout_s,
+    )
+
+
+async def run_collection(
+    provider: CollectionProvider,
+    resolver: ListingResolver,
+    *,
+    retention_class: RetentionClass = RetentionClass.MERCHANT_FACT,
+    expires_policy: Callable[[datetime], datetime | None] | None = None,
+    run_kind: RunKind | None = None,
+    fetch_timeout_s: float = FETCH_TIMEOUT_S,
+    evaluator: ListingEvaluator | None = None,
+) -> tuple[ScraperRun, RunOutcome]:
+    """Fetch, classify, parse, persist, delist, resolve and evaluate one provider run.
+
+    Always returns a recorded ScraperRun: every failure is classified and
+    finalized rather than raised (NFR-001). A successful run stores the
+    provider's ProviderRunEvidence in detail_json["provider"] and the count of
+    listings whose eligibility evaluation raised in
+    detail_json["evaluator_errors"]; an evaluator failure never fails the run.
+
+    `evaluator=None` means the production WatchEvaluator, not "no evaluation"
+    (MS2-D-20); tests inject a fake through this parameter.
+    """
+    # Rejected: a null-object default that each caller must override. That is
+    # exactly the omission plan review F-03 found on the heartbeat path — any
+    # caller that forgot the argument would silently leave stale verdicts
+    # standing — so the production evaluator is the default instead.
+    listing_evaluator: ListingEvaluator = evaluator if evaluator is not None else WatchEvaluator()
+    effective_kind = run_kind or provider.run_kind
+    site = await sync_to_async(SourceSite.objects.get)(normalized_name=provider.site_key)
     run = await sync_to_async(ScraperRun.objects.create)(
         source_site=site, run_kind=effective_kind, started_at=timezone.now()
     )
     try:
         async with asyncio.timeout(fetch_timeout_s):
-            batch = await adapter.fetch()
+            batch = await provider.fetch()
         median = await sync_to_async(_median_body_bytes)(site)
-        _classify_batch(batch, expects_json=adapter.expects_json, median=median)
+        _classify_batch(batch, expects_json=provider.expects_json, median=median)
         try:
-            parsed = adapter.parse(batch)
+            parsed = provider.parse(batch)
         except ValidationError as exc:
             raise FetchFailure(RunFailureClass.PARSER_ROT, f"validation failed: {exc}") from exc
         if batch.items and not parsed:
@@ -364,7 +458,7 @@ async def run_source(
         normalized = await _normalize(parsed, batch.fetched_at.date())
         # expires_policy is a callable, not a fixed datetime, so bounded TTLs
         # (e.g. eBay's DR-008 <=6h) stay relative to this batch's own fetch
-        # time rather than the moment run_source happened to be called.
+        # time rather than the moment run_collection happened to be called.
         expires_at = expires_policy(batch.fetched_at) if expires_policy else None
         listing_ids, upserted, appended = await sync_to_async(_persist_all)(
             site, batch, normalized, retention_class, expires_at
@@ -374,20 +468,49 @@ async def run_source(
         # sweep. Restricted to FULL runs: a PROBE is a recovery poke and a
         # heartbeat is a cheap partial signal, so neither is entitled to conclude
         # that everything it failed to return has ended.
+        #
+        # The provider's scope is never applied as-is: gate_delist_scope reads it
+        # through the run's completeness evidence, so a remote run that stopped at
+        # a page/item/budget limit cannot delist however its scope is phrased, and
+        # the same evidence AND scope decide whether the run advances lane
+        # continuity or breaks it (_break_sweep_continuity) — a non-local run needs
+        # its own scope to claim complete=True too, or COMPLETE evidence alone
+        # would let a string of under-scoped remote runs fake polling continuity
+        # a later local sweep could stale-delist on (plan review F-04 residual;
+        # see counts_toward_sweep_continuity). For a LocalCollectionProvider
+        # continuity always advances the same way it always has and the scope gate
+        # is the identity, so local delist behavior is unchanged — with one
+        # deliberate difference: continuity is now recorded AFTER delist_scope(),
+        # because it depends on the evidence.
+        # If delist_scope raises, the run fails as before but no longer advances
+        # continuous_since first, which can only shorten the continuity window —
+        # strictly more conservative for the stale-absence path.
         delisted = 0
         if effective_kind is RunKind.FULL:
-            continuous_since = await sync_to_async(_record_sweep_continuity)(site, batch.fetched_at)
-            if isinstance(adapter, DelistDetector):
-                scope = adapter.delist_scope(batch, parsed)
-                if scope is not None:
-                    delisted = await sync_to_async(_apply_delist)(site, scope, continuous_since)
+            scope = provider.delist_scope(batch, parsed)
+            evidence = provider.run_evidence(batch, parsed, scope, run_kind=effective_kind)
+            continuous_since: datetime | None = None
+            if counts_toward_sweep_continuity(evidence, scope):
+                continuous_since = await sync_to_async(_record_sweep_continuity)(
+                    site, batch.fetched_at
+                )
+            else:
+                await sync_to_async(_break_sweep_continuity)(site)
+            gated = gate_delist_scope(scope, evidence)
+            if gated is not None:
+                delisted = await sync_to_async(_apply_delist)(site, gated, continuous_since)
+        else:
+            evidence = provider.run_evidence(batch, parsed, None, run_kind=effective_kind)
         resolver_errors = 0
+        resolver_failed: set[int] = set()
         for listing_id in listing_ids:
             try:
                 await sync_to_async(resolver.resolve_listing)(listing_id)
             except Exception:  # resolver failure never blocks ingestion (C.3)
                 logger.exception("resolver failed for listing %s", listing_id)
                 resolver_errors += 1
+                resolver_failed.add(listing_id)
+        evaluator_errors = await _evaluate_all(listing_evaluator, listing_ids, resolver_failed)
         grain_counts = await sync_to_async(_grain_counts)(listing_ids)
         run.records_fetched = len(batch.items)
         run.records_valid = len(normalized)
@@ -396,8 +519,10 @@ async def run_source(
         run.detail_json = {
             "body_bytes": sum(len(item.payload_text or "") for item in batch.items),
             "resolver_errors": resolver_errors,
+            "evaluator_errors": evaluator_errors,
             "grain_counts": grain_counts,
             "listings_delisted": delisted,
+            "provider": evidence.model_dump(mode="json"),
         }
         if batch.scrapy_stats:
             run.detail_json["scrapy_stats"] = _filter_scrapy_stats(batch.scrapy_stats)
@@ -414,6 +539,37 @@ async def run_source(
         return await _finalize_failure(run, exc.failure_class, str(exc), effective_kind)
     except Exception as exc:  # every crash must classify + record (NFR-001)
         return await _finalize_failure(run, classify_exception(exc), repr(exc), effective_kind)
+
+
+async def _evaluate_all(
+    evaluator: ListingEvaluator, listing_ids: list[int], resolver_failed: set[int]
+) -> int:
+    """Evaluate each distinct listing of the run once; return how many raised.
+
+    Runs AFTER the resolve stage, because product clauses read the listing's
+    current resolution edge. A listing whose resolution raised in this run is
+    skipped (MS2-D-20): its edge may not reflect this run's observation, so a
+    verdict stamped now could bind a current-looking row to an input the
+    resolver never assessed. Skipping it writes nothing, which leaves its old
+    rows bound to the previous snapshot and therefore `pending`.
+
+    Each listing is isolated: one failure is logged and counted, never raised,
+    and the remaining listings are still evaluated (the evaluator writes
+    nothing for a listing it raised on, so that listing fails closed too).
+    """
+    errors = 0
+    # dict.fromkeys: listing_ids may repeat a pk (the case _grain_counts
+    # guards); a repeat would be evaluated twice under the listing's row lock
+    # for an identical result.
+    for listing_id in dict.fromkeys(listing_ids):
+        if listing_id in resolver_failed:
+            continue
+        try:
+            await sync_to_async(evaluator.evaluate_listing)(listing_id)
+        except Exception:  # evaluator failure never blocks ingestion (MS2-D-20)
+            logger.exception("eligibility evaluation failed for listing %s", listing_id)
+            errors += 1
+    return errors
 
 
 async def _finalize_failure(

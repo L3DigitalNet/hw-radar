@@ -44,6 +44,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from hw_radar.catalog.models import Condition, Packaging, RecertChannel, WarrantyChannel
+from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG_RE
 from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.types import Grain
 
@@ -197,6 +198,18 @@ class ListingFields(BaseModel):
     currency: Literal["USD"] = CORPUS_CURRENCY
     condition_label: str = ""
     attrs: dict[str, object] = Field(default_factory=dict)
+    # MS2-D-27: the collector's query-scope category assertion, carried so a
+    # harvested non-drive entry replays through its own category rules. Without
+    # it the rebuilt ParsedListing would be unhinted and the resolver would take
+    # the legacy drive default — scoring a GPU title against drive aliases. Same
+    # slug constraints as ParsedListing.category_hint, so a bad hint fails at
+    # load (CorpusFormatError with a line number) rather than mid-evaluation.
+    # Absent in every pre-MS-2 corpus line; None keeps those loading unchanged.
+    category_hint: str | None = Field(
+        default=None,
+        max_length=CATEGORY_SLUG_MAX_LENGTH,
+        pattern=CATEGORY_SLUG_RE.pattern,
+    )
 
 
 class CorpusEntry(BaseModel):

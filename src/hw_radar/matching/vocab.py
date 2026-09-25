@@ -230,6 +230,25 @@ def _sector(title: str) -> Attribute[str] | None:
     return Attribute(value=m.group(1), confidence=0.95, layer=_LAYER, source_text=m.group(0))
 
 
+def offer_terms(title: str) -> ExtractedAttributes:
+    """Return only the offer-term fields (condition, recert channel, packaging,
+    warranty months and channel) that vocab.extract would produce for `title`.
+
+    The category rules modules build on this so every category reads condition
+    and warranty from the one set of tables above, and the resolver's
+    variant-on-demand path gets the same TextChoices literals for all of them.
+    Every other field stays None. Each field comes from the same helper call
+    extract() makes, so the two can never disagree on a title."""
+    condition, recert_channel = _condition(title)
+    return ExtractedAttributes(
+        condition=condition,
+        recert_channel=recert_channel,
+        packaging=_first_pattern(title, _PACKAGING, 0.85),
+        warranty_months=_int_pattern(title, _WARRANTY_YEARS, scale=12),
+        warranty_channel=_first_pattern(title, _WARRANTY_CHANNELS, 0.9),
+    )
+
+
 def extract(title: str) -> ExtractedAttributes:
     condition, recert_channel = _condition(title)
     return ExtractedAttributes(

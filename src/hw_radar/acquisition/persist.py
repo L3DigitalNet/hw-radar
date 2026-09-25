@@ -10,7 +10,7 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime
 
-from hw_radar.acquisition.contracts import NormalizedListing, RawItem
+from hw_radar.acquisition.contracts import CATEGORY_HINT_ATTR, NormalizedListing, RawItem
 from hw_radar.catalog.models import (
     Listing,
     OfferSnapshot,
@@ -83,6 +83,11 @@ def append_snapshot(
         if normalized.stock_status in StockStatus.values
         else StockStatus.UNKNOWN
     )
+    attrs: dict[str, object] = dict(normalized.attrs)
+    # Written only when set, so every hint-less row stays byte-identical to MS-1
+    # output. Read back by the resolver's category dispatch (MS2-D-03).
+    if normalized.category_hint is not None:
+        attrs[CATEGORY_HINT_ATTR] = normalized.category_hint
     return OfferSnapshot.objects.create(
         listing=listing,
         observed_at=observed_at,
@@ -95,7 +100,7 @@ def append_snapshot(
         fx_pair=normalized.fx_pair,
         fx_rate_date=normalized.fx_rate_date,
         fx_source=normalized.fx_source,
-        attrs_json=dict(normalized.attrs),
+        attrs_json=attrs,
         raw_payload=raw,
         retention_class=listing.retention_class,
         expires_at=listing.expires_at,

@@ -4,38 +4,57 @@
 
 - MS-0 and MS-1a through MS-1d are implemented and merged: Django/TimescaleDB foundation, ingestion substrate, matching, catalog seed, five connectors, and availability heartbeat.
 - All marketplace sources ship disabled; scoring and alerting are not implemented.
-- Bounded-retention expiry enforcement, eBay listing-grain delete-on-delist (CR-004), and the
-  per-lane scheduling-state split (ADR-0020) landed on `dev` (`5a7f5b7`, 2026-08-16).
-- Retention/delist follow-up fixes landed on `dev` (`db62b6f`, 2026-08-30): partial `expires_at`
-  indexes (migration 0014) and a continuity-aware CR-004 absence grace (migration 0015). A third
-  partial-index migration (0016, `6e68585`) covers `ProductModel`/`DriveSpec`/`ProductAlias`.
-- OQ22 (resolver-learned-alias retention class) is resolved (owner option a): migration 0017
-  (`8101504`) adds `RetentionClass.LISTING_DERIVED_ALIAS`, stamps it via the resolver, and lands
-  the DR-001 CHECK pair on `ProductModel`/`DriveSpec`/`ProductAlias` with idempotent backfill.
-  Migrations 0014-0017 are on `dev` and pushed (2026-09-06) but undeployed pending the
-  dev→main PR (in progress).
-- Source go-live now remains gated by the SA-004 operations checklist and the MS-1e owner
-  ratification step, not by missing code.
-- MS-2 scoring design revision 12 on `dev` (`f3bc307`), owner-ratified (§1.2 incl. S2-23
-  re-ratification, 2026-09-06). Fresh cross-agent audit b2eedc33 ran all five rounds against
-  revision 7-12: SA-001..SA-008 resolved by the peer (revisions 8-11); SA-009 partial at the
-  round-5 cap (mechanism accepted, two deliverable/coverage sentences inconsistent) and closed
-  in revision 12 with in-house verification only (no peer review of revision 12 yet).
-  Next step is owner-gated: accept the in-house SA-009 closure, or open a third audit against
-  revision 12; then the planner cuts the MS-2a plan.
-- Master-spec hygiene pass landed (`c3af4d7`, Revision History 0.15): score home = listing_score,
-  $/TB computed in the scoring lib rather than an offer_snapshot generated column, lot-quantity
-  wording, C.4 cap units 0.35/0.60, and ADR-0011 wording (q = price percentile, 1-q cheapness).
-- The scrapy CVE-2026-84366 dependency-audit red is cleared (`8cc3f10`, scrapy 2.16.0->2.18.0).
-- MS-1e's validation-corpus harness and harvest tooling are merged to `main` and DEPLOYED
-  (PR #20, release `1099f766`, healthz-verified 2026-08-16): the Approach-A evaluator, `EvalReport`
-  with `precision_verdict`/`audit_gate`, the pure `ms1_ratification_gate`, the `harvest_corpus`
-  management command with parse-diagnostics, and the rung-0 regression suite.
-- The live harvest, Claude label drafting, owner audit, ratification run, and ADR-0019 flip remain
-  the deferred owner-in-the-loop step (design §6); `tests/db/test_ratification_corpus.py` skips
-  with "corpus not yet harvested" until that step lands.
-- The full Python verification gate passes on `dev`; DB-backed tests require TimescaleDB.
-- Work belongs on `dev`; protected `main` advances through pull requests.
-- Project Standards Catalog 5 is pinned to release 5.29.0 with Agent Handoff 1.17, contract 1.0, and the dual automatic Claude/Codex profile.
-- Upstream project-standards issue #80 (automatic handoff injection under the `uv-strict-python`
-  shim) is resolved and re-verified 2026-09-06 under Catalog 5.29.0/Agent Handoff 1.17.
+- **Strategy re-baselined 2026-09-24:** [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
+  adopts hybrid acquisition (retain cheap direct/local collectors; use self-owned private Apify
+  Actors selectively; third-party Actors by measured exception) with a hard **$20/month**
+  Hardware Radar Apify ceiling and a $12/month initial operating target. [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md)
+  broadens v1 to HDD/SSD + GPU/accelerator + RAM + CPU first-class categories and makes
+  requirement matching / watches / shortlist / alerting the launch-critical workflow.
+- Bounded-retention expiry, eBay delete-on-delist (CR-004), and per-lane scheduling-state split
+  landed `5a7f5b7`/`db62b6f`/`6e68585`. OQ22 resolved via migration 0017 (`8101504`). Migrations
+  0014-0017 DEPLOYED (PR #22, `f3303b1`, 2026-09-06). Source go-live gated by SA-004 + MS-1e.
+- MS-2 scoring design revision 14 (`a3ec96b`) is owner-accepted (2026-09-06). The MS-2a
+  scoring-substrate plan reached revision 4 (`05f130f`) across three Codex `delegate` passes
+  (`a626c2f0`/`8755be2a`/`b92dd220`); design and plan are the accepted advanced drive-scoring
+  artifacts, but **execution is deferred by ADR 0022** and MS-2a is not the next implementation step.
+- MS-1e's validation-corpus harness/harvest tooling is merged and DEPLOYED (PR #20, `1099f766`,
+  2026-08-16): Approach-A evaluator, `EvalReport`, `ms1_ratification_gate`, `harvest_corpus`. The
+  live harvest/label-draft/audit/ratification/ADR-0019 flip remain the deferred owner-in-the-loop
+  step; `tests/db/test_ratification_corpus.py` skips until it lands.
+- Full Python gate passes on `dev` (DB tests need TimescaleDB); spec hygiene `c3af4d7`; audit CVEs cleared `8cc3f10`/`81876da`.
+- **MS-2 multi-category watch-core plan converged at revision 8**
+  (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`). Eight-round Codex
+  delegate review lineage: r1-r4 converged rev 4 (session 1); r5 `0469e098` REVISION NEEDED (5) ->
+  r6 `6af5388b` REVISION NEEDED (3 partial + 2 new) -> r7 `01639c2a` REVISION NEEDED (2 partial +
+  1 new) -> r8 `b73b6633` READY, no new findings. All findings dispositioned in the plan.
+- **Session 2 owner decisions (2026-09-24):** Hardware Radar owns all its Apify Actors in this
+  repo under `actors/<name>/`, managed independently of `apify-actors` (PR #62, doc-only, merged
+  by the operator). OQ23 resolved (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12 attributable,
+  no PAYG). OQ24 split: synthetic proof first via a real private Actor; merchant-source admission
+  separate; Newegg excluded; existing connectors not grandfathered.
+- **Slice B complete on `dev`:** GPU/RAM/CPU typed spec satellites (migration 0018), category rows
+  (0019), refdata contract + importer, first-party seeds (CPU 9 / GPU 8 / RAM 2), category rules +
+  registry + acceptance policy, category-change edge, corpus category-hint round trip (B6).
+- **Slice C code complete on `dev`:** eligibility schema (migration 0020), evaluator (C2/C3),
+  shortlist/review-queue read model (C4), evaluation wired into every ingestion path (C3 wiring).
+  `EVALUATOR_VERSION` is `ms2c.2`; implementation-driven clarifications recorded in the plan.
+- **D-prep code complete on `dev`:** D3 collector client; D1 Actor project
+  `actors/hw-radar-synthetic-collector` + contract schemas + `classify_run` + CI Actor gates. No
+  Apify push/build/run has occurred. Open: `ProviderRunEvidence.truncation_reason` (MS2-D-11) not
+  yet added; private-helper coupling in `eligibility/service.py`/`shortlist.py` (drift-tested).
+  Migrations 0018-0020 unmerged; production unchanged at 0017 (`f3303b1`); gate-runner verified.
+- Battery @62e670b green: 1226 passed/1 expected skip, 96% coverage, pip-audit clean; Actor
+  project 64 passed, 99% coverage. Migrations empty->head and head->0017->head both OK; A0 oracle
+  unchanged. Verifiers: Slice B C1-C9, Slice C/D-prep V1-V10 all CONFIRMED. Post-battery hardening
+  (complete-report count checks, Actor wall-clock deadline) landed after it; targeted gates green.
+- **Owner gates open (session 2):** OQ25 (Apify credential + MCP tool scope), OQ26 (external-
+  liability bound; blocks all live paid admission incl. the synthetic proof), OQ27 (retention
+  class for non-first-party reference data), OQ28 (can MS-2 exit on the synthetic proof alone),
+  OQ29 (operator allowance size, optional). Plus carried-over: MS-1e drive ratification and a
+  category corpus gate before GPU/RAM/CPU auto-accept. See `docs/open-questions.md`.
+- Verified read-only account state (2026-09-24): Apify plan STARTER, `maxMonthlyUsageUsd` 19
+  (prepaid credit), billing cycle 5th 00:00Z -> 4th 23:59:59Z (anniversary). No settings changed.
+  Deviation: this used the apify-actors agent namespace's token once, read-only (no HR token yet).
+- Contributed 5 reference pages to `llm-wiki` (`443b921`): Apify/eBay/Newegg/CPU/GPU/RAM sources.
+- Project Standards Catalog 5 pinned to 5.29.0 (Agent Handoff 1.17); upstream issue #80 resolved
+  and re-verified 2026-09-06 under this pin.

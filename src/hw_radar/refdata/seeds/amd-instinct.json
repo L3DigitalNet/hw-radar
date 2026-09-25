@@ -1,0 +1,44 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "category": "gpu",
+  "manufacturer_name": "AMD",
+  "manufacturer_key": "amd",
+  "family_name": "Instinct",
+  "provenance": {
+    "source_kind": "first_party_page",
+    "sources": [
+      {
+        "url": "https://www.amd.com/en/products/accelerators/instinct/mi100.html",
+        "title": "AMD Instinct MI100 product page",
+        "retrieved": "2026-09-24"
+      },
+      {
+        "url": "https://www.amd.com/en/products/accelerators/instinct/mi200/mi210.html",
+        "title": "AMD Instinct MI210 product page",
+        "retrieved": "2026-09-24"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "Instinct MI100",
+      "spec": {"chip_vendor": "amd", "vram_gb": 32, "interface": "pcie", "cooling": "passive", "tdp_w": 300},
+      "aliases": [
+        {"alias_type": "mpn", "text": "Instinct MI100", "is_primary": true},
+        {"alias_type": "mpn", "text": "AMD Instinct MI100"}
+      ],
+      "source_url": "https://www.amd.com/en/products/accelerators/instinct/mi100.html",
+      "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "Instinct MI210",
+      "spec": {"chip_vendor": "amd", "vram_gb": 64, "interface": "pcie", "cooling": "passive", "tdp_w": null},
+      "aliases": [
+        {"alias_type": "mpn", "text": "Instinct MI210", "is_primary": true},
+        {"alias_type": "mpn", "text": "AMD Instinct MI210"}
+      ],
+      "source_url": "https://www.amd.com/en/products/accelerators/instinct/mi200/mi210.html",
+      "retrieved_on": "2026-09-24"
+    }
+  ]
+}

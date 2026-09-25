@@ -1,0 +1,176 @@
+{
+  "$id": "urn:hw-radar:contract:listing:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "hw-radar-listing/v1: one default-dataset row, and nothing but merchant facts.\n\nEvery string field carries maxLength, so a row's serialized size is bounded\nby the schema alone (MS2-D-26 per-row byte cap); import rejects over-cap rows\nbecause they fail this model.",
+  "properties": {
+    "schemaVersion": {
+      "const": "hw-radar-listing/v1",
+      "title": "Schemaversion",
+      "type": "string"
+    },
+    "siteKey": {
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-z0-9][a-z0-9_-]*$",
+      "title": "Sitekey",
+      "type": "string"
+    },
+    "sourceListingKey": {
+      "maxLength": 255,
+      "minLength": 1,
+      "title": "Sourcelistingkey",
+      "type": "string"
+    },
+    "url": {
+      "maxLength": 1000,
+      "pattern": "^https://",
+      "title": "Url",
+      "type": "string"
+    },
+    "title": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Title",
+      "type": "string"
+    },
+    "price": {
+      "maxLength": 14,
+      "pattern": "^(0|[1-9][0-9]{0,8})(\\.[0-9]{1,4})?$",
+      "title": "Price",
+      "type": "string"
+    },
+    "currency": {
+      "maxLength": 3,
+      "pattern": "^[A-Z]{3}$",
+      "title": "Currency",
+      "type": "string"
+    },
+    "shippingPrice": {
+      "anyOf": [
+        {
+          "maxLength": 14,
+          "pattern": "^(0|[1-9][0-9]{0,8})(\\.[0-9]{1,4})?$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Shippingprice"
+    },
+    "stockStatus": {
+      "enum": [
+        "in_stock",
+        "out_of_stock",
+        "preorder",
+        "unknown"
+      ],
+      "title": "Stockstatus",
+      "type": "string"
+    },
+    "quantityAvailable": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Quantityavailable"
+    },
+    "sellerName": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sellername"
+    },
+    "conditionLabel": {
+      "anyOf": [
+        {
+          "maxLength": 255,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Conditionlabel"
+    },
+    "shipsFromCountry": {
+      "anyOf": [
+        {
+          "maxLength": 2,
+          "pattern": "^[A-Z]{2}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Shipsfromcountry"
+    },
+    "categoryHint": {
+      "maxLength": 50,
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "title": "Categoryhint",
+      "type": "string"
+    },
+    "collectionScope": {
+      "maxLength": 100,
+      "minLength": 5,
+      "pattern": "^[a-z0-9][a-z0-9_-]*:[a-z0-9][a-z0-9-]*:[a-z0-9][a-z0-9_-]*$",
+      "title": "Collectionscope",
+      "type": "string"
+    },
+    "mpn": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Mpn"
+    },
+    "observedAt": {
+      "maxLength": 32,
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
+      "title": "Observedat",
+      "type": "string"
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "siteKey",
+    "sourceListingKey",
+    "url",
+    "title",
+    "price",
+    "currency",
+    "stockStatus",
+    "categoryHint",
+    "collectionScope",
+    "observedAt"
+  ],
+  "title": "ListingRow",
+  "type": "object"
+}

@@ -12,7 +12,7 @@ versions arrive with the rung-3/occurrence thresholds at MS-1c."""
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -47,15 +47,27 @@ _BRAND_EQUIV: tuple[frozenset[str], ...] = (frozenset({"western_digital", "hgst"
 
 
 @dataclass(frozen=True)
+class CategoryHardAttrs:
+    """Base for a non-drive category's typed catalog-side payload (MS2-D-05).
+    Each `matching.rules` module subclasses it; see types.CategoryAttributes for
+    the listing-side twin and the isinstance-narrowing contract."""
+
+
+@dataclass(frozen=True)
 class HardAttrs:
     """Catalog-side veto fields (from drive_spec / family agreement set).
-    None = unknown on the catalog side → that field cannot veto."""
+    None = unknown on the catalog side → that field cannot veto.
+
+    The five drive fields are read only by `contradictions`; a non-drive
+    category leaves them None and carries its satellite payload in `category`,
+    which only that category's veto reads."""
 
     capacity_bytes: int | None = None
     interface: str | None = None
     form_factor: str | None = None
     sector_format: str | None = None
     security: str | None = None
+    category: CategoryHardAttrs | None = None
 
 
 @dataclass(frozen=True)
@@ -63,13 +75,17 @@ class TargetRef:
     """Ladder-side identity reference. family_id is populated even for
     model/variant grains (enables the OEM family collapse); family_key names a
     not-yet-materialized provisional family for rung 2 — the resolver
-    get_or_creates it (vendor, family_name)."""
+    get_or_creates it (vendor, family_name). category_slug is never set by the
+    ladder: the resolver stamps the dispatch category onto every target, so a
+    provisional family is created under the category it was matched in and
+    materialization applies that category's variant_on_demand setting."""
 
     grain: Grain
     family_id: int | None = None
     model_id: int | None = None
     variant_id: int | None = None
     family_key: tuple[str, str] | None = None
+    category_slug: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +125,11 @@ class Verdict:
     target: TargetRef | None = None
     confidence: float | None = None
     evidence: dict[str, object] = field(default_factory=dict)
+    # The rung-1 hit an ACCEPT rests on (the highest-confidence single-target
+    # hit, or the best hit of an OEM family fan-out). Not evidence: the resolver
+    # reads its source_kind for the MS2-D-21 acceptance policy, and keeping it
+    # out of `evidence` leaves every persisted drive edge byte-identical.
+    winning_hit: AliasHit | None = None
 
 
 def contradictions(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[str]:
@@ -131,6 +152,13 @@ def contradictions(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[s
     return vetoed
 
 
+# A category's hard-attribute veto: the extracted-side fields a catalog target
+# must not contradict. Drive's is `contradictions`; the resolver injects the one
+# from the dispatch category's rules (MS2-D-02). The rung-2 decoder-capacity
+# check below is NOT a Veto — it compares against the decode, not the catalog.
+type Veto = Callable[[ExtractedAttributes, HardAttrs], list[str]]
+
+
 def brands_consistent(extracted_brand: str | None, target_brand: str | None) -> bool:
     if not extracted_brand or not target_brand or extracted_brand == target_brand:
         return True
@@ -150,6 +178,8 @@ def decide(
     prior: PriorResolution | None,
     alias_hits: Sequence[AliasHit],
     decoded: DecodeResult | None,
+    *,
+    veto: Veto = contradictions,
 ) -> Verdict:
     evidence: dict[str, object] = {"mpn_hypothesis": _hypothesis(candidates)}
     if decoded is not None:
@@ -158,9 +188,11 @@ def decide(
     # Rung 0 — re-observation: inherit after RE-RUNNING the veto (survives
     # relist/edit abuse — C.3.2 requires the check on every re-observation).
     if prior is not None:
-        veto = contradictions(extracted, prior.hard_attrs)
-        if veto:
-            return Verdict(Outcome.REVIEW, Grain.NONE, rung=0, evidence={**evidence, "veto": veto})
+        vetoed = veto(extracted, prior.hard_attrs)
+        if vetoed:
+            return Verdict(
+                Outcome.REVIEW, Grain.NONE, rung=0, evidence={**evidence, "veto": vetoed}
+            )
         return Verdict(
             Outcome.ACCEPT,
             prior.target.grain,
@@ -193,10 +225,10 @@ def decide(
         }
         if len(targets) == 1:
             best = max(viable, key=lambda h: CONFIDENCE_BY_SOURCE_KIND.get(h.source_kind, 0.5))
-            veto = contradictions(extracted, best.hard_attrs)
-            if veto:
+            vetoed = veto(extracted, best.hard_attrs)
+            if vetoed:
                 return Verdict(
-                    Outcome.REVIEW, Grain.NONE, rung=1, evidence={**evidence, "veto": veto}
+                    Outcome.REVIEW, Grain.NONE, rung=1, evidence={**evidence, "veto": vetoed}
                 )
             if not has_brand_evidence(best):
                 return Verdict(
@@ -213,6 +245,7 @@ def decide(
                 target=best.target,
                 confidence=CONFIDENCE_BY_SOURCE_KIND.get(best.source_kind, 0.5),
                 evidence=evidence,
+                winning_hit=best,
             )
         families = {h.target.family_id for h in viable}
         if (
@@ -222,7 +255,7 @@ def decide(
         ):
             # OEM N:N fan-out inside one family → attach at family grain (the
             # OEM cross-reference verdict: an OEM PN can never assert a model).
-            clean = [h for h in viable if not contradictions(extracted, h.hard_attrs)]
+            clean = [h for h in viable if not veto(extracted, h.hard_attrs)]
             if clean:
                 family_id = next(iter(families))
                 return Verdict(
@@ -233,6 +266,9 @@ def decide(
                     target=TargetRef(grain=Grain.FAMILY, family_id=family_id),
                     confidence=OEM_FAMILY_FANOUT_CONFIDENCE,
                     evidence={**evidence, "oem_fanout": len(viable)},
+                    winning_hit=max(
+                        clean, key=lambda h: CONFIDENCE_BY_SOURCE_KIND.get(h.source_kind, 0.5)
+                    ),
                 )
         return Verdict(
             Outcome.REVIEW,
