@@ -991,3 +991,103 @@ def test_local_persist_retry_exhaustion_rolls_back_like_a_crash(
     assert abort.calls == 4
     assert Listing.objects.filter(source_site=synthetic_site).count() == 0
     assert OfferSnapshot.objects.filter(listing__source_site=synthetic_site).count() == 0
+
+
+# ── Reject preconditions and PROBE (MS2-D-22 *Reject*, MS2-D-33) ──────────────
+
+
+def test_storage_deadline_passed_rejects_before_any_read(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+) -> None:
+    site, row, fixture = crash_setup
+    ProviderRun.objects.filter(pk=row.pk).update(
+        storage_cleanup_due_at=timezone.now() - timedelta(seconds=1)
+    )
+    fake = _fake(fixture)
+
+    assert _importer_run(row, fake) is ImportState.REJECTED
+
+    row.refresh_from_db()
+    assert row.stage_detail["reject_reason"] == "storage_deadline_passed"
+    assert (row.dataset_read_count, fake.dataset_requests) == (0, [])
+    assert _counts(site) == (0, 0, 0)
+
+
+def test_content_past_source_ttl_rejects_before_any_read(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _site, row, fixture = crash_setup
+    # A bounded six-hour class: the fixture's startedAt is a day old, so its
+    # content is already past the source TTL before the import starts.
+    bounded = AdapterRetention(
+        retention_class=RetentionClass.EBAY_LISTING_OBSERVATION,
+        expires_policy=lambda at: at + timedelta(hours=6),
+    )
+
+    def bounded_retention(_key: str) -> AdapterRetention:
+        return bounded
+
+    monkeypatch.setattr("hw_radar.acquisition.apify.provider.source_retention", bounded_retention)
+    fake = _fake(fixture)
+
+    assert _importer_run(row, fake) is ImportState.REJECTED
+
+    row.refresh_from_db()
+    assert row.stage_detail["reject_reason"] == "content_past_ttl"
+    assert fake.dataset_requests == []
+
+
+def test_unregistered_retention_rejects_the_import(synthetic_site: SourceSite) -> None:
+    other = SourceSite.objects.create(name="Unregistered", normalized_name="d10-unregistered")
+    fixture = _fixture("complete")
+    row = _provider_run(synthetic_site, fixture)
+    ProviderRun.objects.filter(pk=row.pk).update(source_site=other)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.REJECTED
+
+    row.refresh_from_db()
+    assert row.stage_detail["reject_reason"] == "unknown_retention"
+
+
+def test_probe_import_finalizes_without_touching_continuity(synthetic_site: SourceSite) -> None:
+    fixture = _fixture("complete")
+    row = _provider_run(synthetic_site, fixture, run_kind=RunKind.PROBE)
+
+    assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+
+    assert not ScopeSweepContinuity.objects.filter(
+        source_site=synthetic_site, continuous_since__isnull=False
+    ).exists()
+    assert not ScopeSweepContinuity.objects.filter(
+        source_site=synthetic_site, continuity_broken_at__isnull=False
+    ).exists()
+    assert ScraperRun.objects.get(source_site=synthetic_site).run_kind == RunKind.PROBE
+
+
+def test_resolver_errors_are_counted_and_skip_evaluation(
+    crash_setup: tuple[SourceSite, ProviderRun, dict[str, Any]],
+) -> None:
+    site, row, fixture = crash_setup
+
+    class FailingResolver:
+        def resolve_listing(self, listing_id: int) -> None:
+            raise RuntimeError("resolver down")
+
+    class RecordingEvaluator:
+        def __init__(self) -> None:
+            self.calls: list[int] = []
+
+        def evaluate_listing(self, listing_id: int) -> object:
+            self.calls.append(listing_id)
+            return None
+
+    evaluator = RecordingEvaluator()
+    assert (
+        _importer_run(row, _fake(fixture), resolver=FailingResolver(), evaluator=evaluator)
+        is ImportState.FINALIZED
+    )
+
+    run = ScraperRun.objects.get(source_site=site)
+    assert run.detail_json["resolver_errors"] == len(fixture["datasetItems"])
+    assert evaluator.calls == []

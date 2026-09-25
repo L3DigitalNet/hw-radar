@@ -65,8 +65,14 @@ MAX_IN_MEMORY_RETRIES: Final = 3
 # Deadlock, serialization failure, and a concurrent insert of the same key.
 RETRYABLE_SQLSTATES: Final = frozenset({"40P01", "40001", "23505"})
 
-# Floor on the CR-004 continuity tolerance; see acquisition.pipeline, which
-# re-exports it under the same name for existing importers.
+# Floor on the CR-004 continuity tolerance (see record_continuity). A gap
+# between consecutive eligible sweeps counts as "still polling" while it stays
+# within max(2 * FULL current_interval_s, this). Two intervals is the cadence
+# part — one missed tick plus jitter is normal operation, two consecutive misses
+# is not — and the fixed floor covers fast lanes whose interval is so short that
+# an ordinary process restart or misfire-grace slip would otherwise read as an
+# outage: the eBay fast lane rides a 60s-order interval, where 2x is under the
+# systemd restart-plus-warmup budget.
 MIN_CONTINUITY_TOLERANCE: Final = timedelta(minutes=15)
 
 

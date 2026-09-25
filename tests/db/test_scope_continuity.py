@@ -175,3 +175,21 @@ def test_only_gated_complete_full_scopes_raise_complete_sweep_watermark(
     row = ScopeSweepContinuity.objects.filter(source_site=site, collection_scope=A).first()
     watermark = None if row is None else row.last_complete_sweep_at
     assert watermark == (at if raises else None)
+
+
+def test_remote_scope_a_runs_then_local_incomplete_scope_b_sweep_cannot_stale_delist() -> None:
+    site = make_site()
+    observe(site, T0, [record("legacy")])
+    Listing.objects.filter(source_site=site).update(last_seen=LONG_AGO)
+    # Complete remote runs of A: eligible for A's continuity, never stale-absence
+    # eligible, and each breaks the NULL scope it did not sweep.
+    for step in range(5):
+        sweep(site, T0 + step * HOUR, scope_key=A, seen=set())
+
+    # Switch to the local provider: its first incomplete NULL-scope sweep.
+    local = T0 + 4 * HOUR + HOUR / 6
+    delisted = sweep(site, local, scope_key=None, seen=set(), complete=False)
+
+    assert delisted == 0
+    assert listing(site, "legacy").delisted_at is None
+    assert _lane(site).continuous_since == local

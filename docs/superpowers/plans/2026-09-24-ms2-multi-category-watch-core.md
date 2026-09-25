@@ -4931,6 +4931,12 @@ the then-current code. D-prep (D1, D3) is not gated.
       `test_only_gated_complete_full_scopes_raise_complete_sweep_watermark`,
       parametrized over complete, complete-empty, truncated, stale-absence,
       PROBE, and rejected runs.
+  - Landed 2026-09-25 (core): `acquisition/stages.py` and
+    `acquisition/apify/importer.py` with the tests above except
+    `test_max_size_valid_batch_imports_without_tripping_response_cap` and the two
+    `test_apify_poll_job.py` restart tests, which land with D5. The
+    `last_absence_at` raise lives in `persist.mark_absent` until
+    `Listing.mark_delisted` takes it over.
 - **D11 — Source retention and storage cleanup (MS2-D-25).**
   - Tests (`tests/db/test_apify_retention.py`):
     - `test_bounded_source_import_retains_listings_snapshots_raw_and_evaluations`:

@@ -52,15 +52,20 @@ Instructions for AI agents:
   `provider_run`, `scope_sweep_continuity`, `SourceConfig.collection_provider`, listing scope and
   ordering watermarks, NULL-scope lane watermarks, scope-filtered `_apply_delist`). **D4 done**
   (`ApifyImportProvider`, `provider_run.run_output` in `0021`, `source_retention` registry,
-  derived dataset `page_limit`, remote runs skip the soft-block classifier). **D3 follow-up
-  done** (`/v2/actors` start with `restartOnError=false`, surfaced unparseable usage,
-  `dataRetentionDays`, response/page/request byte caps, pinned `SO_RCVBUF`). **Next (Slice D
-  core):** D10 → D5 → D6 → D7 → D8 → D11 → D12 → D9; Apify push/build/run (none has occurred
-  yet); truncation_reason on the evidence model (above). D4 hand-offs: D10 counts dataset/KV
-  reads against the MS2-D-32 caps around `ApifyImportProvider.fetch`, rejects `failed` runs
-  before persistence, and passes `provider.retention` as the required stage keyword; D5 must
-  write `provider_run.query_scope` as the camelCase `QueryScope` wire JSON the run was started
-  with, and supply the admitted Actor name the provider checks OUTPUT against.
+  derived dataset `page_limit`, remote runs skip the soft-block classifier). **D3 follow-up done**
+  (`/v2/actors` start with `restartOnError=false`, surfaced unparseable usage,
+  `dataRetentionDays`, response/page/request byte caps, pinned `SO_RCVBUF`). **D10 core done**
+  (`acquisition.stages`: transactional persist/delist with the MS2-D-35 lock order and in-memory
+  retry, `observe_listing` ordering guards, per-observation snapshot retention, per-scope ordered
+  continuity; `acquisition.apify.importer`: MS2-D-22 state machine, read caps, Reject). D10
+  remainder: `test_max_size_valid_batch_imports_without_tripping_response_cap`, the restart tests in
+  `test_apify_poll_job.py` (land with D5's selectors), `HW_RADAR_APIFY_MAX_{DATASET,KV}_READS`
+  in settings (importer defaults to 3), and moving the `last_absence_at` raise from
+  `persist.mark_absent` into `Listing.mark_delisted`. **Next (Slice D core):** D5 → D6 → D7 →
+  D8 → D11 → D12 → D9; Apify push/build/run (none has occurred yet); truncation_reason on the
+  evidence model (above). D5 must write `provider_run.query_scope` as the camelCase
+  `QueryScope` wire JSON the run was started with, supply the admitted Actor name the provider
+  checks OUTPUT against, and drive `import_provider_run` from the outstanding selector.
 - [ ] Add Hardware Radar Apify budget admission/accounting: hard $20/month project ceiling,
   initial $12/month operating target, reserve-before-run + reconcile-after-run, active-watch work
   ahead of broad discovery, explicit stale/`budget_paused` state, and no automatic residential
