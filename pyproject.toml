@@ -18,7 +18,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "apscheduler>=3.11,<4",
-    "django[argon2]>=6.0,<6.1",
+    "django[argon2]>=6.0,<6.2",
     "gunicorn>=26.0",
     "httpx>=0.28.1",
     "psycopg[binary]>=3.3",
