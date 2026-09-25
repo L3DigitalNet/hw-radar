@@ -5683,6 +5683,28 @@ the then-current code. D-prep (D1, D3) is not gated.
   trailing-31-day trend line labeled secondary (MS2-D-17). The calendar-month
   view of revision 4 is withdrawn.
   - Test: output for a seeded ledger spanning two cycles.
+  - Landed 2026-09-25 (E6). `acquisition/apify/report.py` (`build_report`,
+    `render_report`) and the read-only `apify_spend_report [--cycles N]`
+    command; it writes no row, takes no lock, and prints the stored snapshot
+    (flagged `[STALE]` past `…_ACCOUNT_SNAPSHOT_MAX_AGE_S`) without calling
+    Apify. Cycle placement re-implements E3's MS2-D-34 predicate per row
+    for attribution, and
+    `test_apify_spend_report.py::test_cycle_totals_match_ledger_cycle_debits`
+    pins it to `cycle_debits`. Choices this plan left open: remaining project
+    budget is the `watch_refresh` class check's `A − (runtime + carried +
+    discovery + standing)`; remaining prepaid allowance is observed `prepaid −
+    account usage`, with the MS2-D-40 snapshot headroom and the observed
+    non-Hardware-Radar usage (the latch check's left side) printed beside it;
+    denials attribute to the cycle containing `reserved_at`; `per provider`
+    groups ledger debits by `provider_run.provider_kind` (operator rows and
+    unattached runtime rows separately) and adds the runs admitted in the
+    cycle with their observed usage; `correction_close_overdue` means an open
+    obligation past `correction_monitor_until` or at `…_MAX_CORRECTION_READS`;
+    overruns are reconciled rows with `actual_usd > estimate_usd` or basis
+    `bound_unfinalized` (`api_call_cap_exhausted`), plus every latch trip.
+    Owner free text (`attested_by`, `cleared_reason`) and Apify run, dataset,
+    build, and Actor identifiers are never printed. An unpriceable setting
+    prints `unavailable (<reason>)` instead of failing the report.
 - **E8 — Budget-admitted probe (MS2-D-24 with the real ledger).**
   `test_budget_admitted_actor_probe_recovers_source_with_ledger`: a probe is
   admitted under the `discovery` class, reserved, imported, and reconciled, and

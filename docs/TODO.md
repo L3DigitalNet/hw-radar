@@ -89,10 +89,13 @@ Instructions for AI agents:
   predicate, account snapshot + counted cycle discovery, MS2-D-45 claim/export/import, operator
   reservations; commands `apify_ledger_claim`, `apify_ledger_handoff`, `apify_operator_reserve`
   (reserve only), `apify_budget_reset --discovery`; 0022 gained the authority's
-  `imported_record_digest` and `handoff_record`). **Next:** E4 reconcile/latch (take
+  `imported_record_digest` and `handoff_record`). **E6 done** (`acquisition.apify.report` and the
+  read-only `apify_spend_report` command: per-cycle figures, attribution, unsettled/overrun rows,
+  trailing-31-day trend). **Next:** E4 reconcile/latch (take
   `ledger.take_budget_lock` first; add `apify_operator_reserve --settle` and the latch
-  `apify_budget_reset --reason`), E5 binding (`BudgetRequest` must add `maxRequests`/`maxBytes`;
-  refresh the snapshot before `reserve`, attach the provider_run to the reserved row), E6, E8,
+  `apify_budget_reset --reason`; mirror any `ledger._tally` predicate change in `report._place`,
+  pinned by `test_cycle_totals_match_ledger_cycle_debits`), E5 binding (`BudgetRequest` must add `maxRequests`/`maxBytes`;
+  refresh the snapshot before `reserve`, attach the provider_run to the reserved row), E8,
   E7. E4 owns the write-once rules the schema cannot express (`usage_finalized_usd`,
   `provider_build_id`, `provider_run.final_charge_op_at`) and `ApifyUsageRead` append-only; E3
   writes none of those fields. Owner/operator before F5a: set the eight unit prices from
