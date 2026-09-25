@@ -7121,8 +7121,9 @@ follow-up R12-01).**
   final at `finishedAt` (about 40% low at 0 s, stable by 30 s; one failed run
   read 3× low at 8 s), so `…_RUN_USAGE_SETTLEMENT` stays `bound`; dataset reads
   bill per item returned (as the estimator assumes); the platform's `INPUT`
-  write is billed to the run, which uses up `…_MAX_KV_WRITES=2` (finding F-01,
-  owner decision on raising it to 3); API calls bill through external transfer
+  write is billed to the run, which uses up `…_MAX_KV_WRITES=2` (finding F-01;
+  owner-approved 2026-09-25: the value is 3, and admission denies any value
+  below the two-write floor; the Actor contract stays one `OUTPUT` write); API calls bill through external transfer
   (R38 observed, still accepted). Account usage rose $0.00527 for the whole
   proof. The late-older-import scenario is prevented by construction
   (`scope_run_outstanding`) and keeps its fixture proof. Step 5's drain and

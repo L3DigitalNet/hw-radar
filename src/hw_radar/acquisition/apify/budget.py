@@ -121,6 +121,9 @@ _MB_PER_GB_CU: Final = Decimal(1024)
 _CALLS_PER_CLEANUP_ATTEMPT: Final = 4
 _KV_WRITES_PER_DELETE: Final = 3
 _START_CALLS: Final = 1
+# F5a F-01: the platform's INPUT write plus the Actor's OUTPUT write, both
+# billed to the run (measured 2026-09-25).
+_MIN_KV_WRITES: Final = 2
 
 
 class BudgetClass(StrEnum):
@@ -505,7 +508,11 @@ def estimate_run_cost(shape: RunShape, cfg: BudgetSettings) -> CostEstimate:
     delete_attempts = _cap(cfg.max_delete_attempts, "MAX_DELETE_ATTEMPTS")
     run_polls = _cap(cfg.max_run_polls, "MAX_RUN_POLLS")
     correction_reads = _cap(cfg.max_correction_reads, "MAX_CORRECTION_READS")
-    kv_writes = _cap(cfg.max_kv_writes, "MAX_KV_WRITES")
+    # F5a finding F-01: every run is billed the platform's INPUT write plus the
+    # Actor's single OUTPUT write, so a bound below 2 under-reserves every run.
+    # The owner-approved production value is 3 (one spare unit); the spare is
+    # estimator headroom, not permission for another application write.
+    kv_writes = _cap(cfg.max_kv_writes, "MAX_KV_WRITES", minimum=_MIN_KV_WRITES)
     kv_bytes = _cap(cfg.max_kv_bytes, "MAX_KV_BYTES")
     response_cap = _cap(cfg.max_api_response_bytes, "MAX_API_RESPONSE_BYTES")
     if kv_bytes > response_cap:

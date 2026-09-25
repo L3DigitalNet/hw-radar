@@ -1048,3 +1048,11 @@ def test_old_verification_does_not_affect_admission() -> None:
     current = snap(cycle_start=bounds[0], cycle_end=bounds[1])
     assert decide(state=ledger(now=later, snapshot=current)).admitted
     assert budget.account_setting_problem(CFG, later) is None
+
+
+def test_kv_write_bound_below_platform_floor_denies() -> None:
+    # F5a finding F-01: INPUT (platform) + OUTPUT (Actor) are billed to every
+    # run, so a bound of 1 would under-reserve; 2 is the floor, 3 the approved value.
+    assert_denied(decide(settings=cfg(max_kv_writes=1)), R.UNBOUNDED_COMPONENT)
+    assert decide(settings=cfg(max_kv_writes=2)).admitted
+    assert decide(settings=cfg(max_kv_writes=3)).admitted

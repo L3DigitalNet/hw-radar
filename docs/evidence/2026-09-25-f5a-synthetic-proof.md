@@ -132,6 +132,9 @@ Also: Apify rejects a schema-invalid input itself — `POST …/runs` with missi
 - **F-01 (KV writes at the bound):** `…_MAX_KV_WRITES=2` is exactly consumed by the platform `INPUT` write plus
   `OUTPUT`; the intended spare unit for an unexpected write does not exist. Owner decision: raise to 3 before
   production (cost of a third write $0.00005). No proof run exceeded the bound.
+  **Resolved 2026-09-25 (owner-approved):** the value is 3; `budget.estimate_run_cost` now denies any value below
+  the two-write floor. The spare unit is estimator headroom only: the Actor contract stays one `OUTPUT` write
+  (pinned by the Actor's output test), and a run's per-component usage breakdown still shows any extra write.
 - **F-02 (usage not final at finish):** confirms keeping `bound` settlement; any future `stable_reads` enablement
   needs reads ≥ 30 s after finish.
 - **F-03 (API calls billed via transfer):** R38 stays accepted (owner, 2026-09-25); the measured magnitude is

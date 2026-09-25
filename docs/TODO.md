@@ -55,8 +55,6 @@ Instructions for AI agents:
   executed 2026-09-25** in a non-production proof environment (evidence:
   `docs/evidence/2026-09-25-f5a-synthetic-proof.md`): build `1.0.1`, eleven admitted runs over every
   fault mode, zero delistings, live AC-4 switch, $0.00527 total account usage.
-- [ ] **Owner decision (F5a finding F-01):** raise `HW_RADAR_APIFY_MAX_KV_WRITES` from 2 to 3 before
-  production; the platform's `INPUT` write is billed to the run, so 2 leaves no spare unit.
 - [ ] F5a step 5 (MS2-D-45): before any production environment admits paid Apify work in the
   2026-09-05 cycle, keep the proof environment's ticks running until its correction monitoring
   closes (7-day window), confirm it drained, then `apify_ledger_handoff`. Until then the proof
@@ -64,7 +62,8 @@ Instructions for AI agents:
 - [ ] Production Apify runtime rendering: production secrets come from the Hetzner-side OpenBao
   peer through the CT's bao-agent template, not the workstation path; add the scoped runtime token
   there and render `HW_RADAR_APIFY_TOKEN` only when production paid admission is intentionally
-  configured (with the account settings, prices, ledger authority, and `MAX_KV_WRITES` decision).
+  configured (with the account settings, prices, ledger authority, and `MAX_KV_WRITES=3`, the
+  owner-approved F-01 value).
 - [ ] Promote the synthetic Actor build to the `prod` tag (MS2-D-43 *Deploy*) only if a production
   smoke is ever wanted; the synthetic Actor is not a production collection source.
 - [x] Keep provider identity separate from marketplace/source identity: proven by D7

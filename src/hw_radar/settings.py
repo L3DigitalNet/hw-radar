@@ -494,7 +494,10 @@ HW_RADAR_APIFY_OPERATOR_PROBE_MAX_CALLS = _env_int("HW_RADAR_APIFY_OPERATOR_PROB
 # value parses to None and denies with `unbounded_component`. MAX_KV_WRITES,
 # MAX_KV_BYTES, and STORAGE_MAX_LIFETIME (seconds) have no default: live
 # admission stays denied until the operator sets them (the lifetime from the
-# account's dataRetentionDays, 31 days as verified 2026-09-24).
+# account's dataRetentionDays, 31 days as verified 2026-09-24). MAX_KV_WRITES
+# is 3 by owner decision (F5a finding F-01, 2026-09-25): the platform INPUT
+# write and the Actor's OUTPUT write are both billed to the run, so admission
+# denies any value below 2 and the third unit is estimator headroom only.
 HW_RADAR_APIFY_MAX_KV_WRITES = _env_int("HW_RADAR_APIFY_MAX_KV_WRITES")
 HW_RADAR_APIFY_MAX_KV_BYTES = _env_int("HW_RADAR_APIFY_MAX_KV_BYTES")
 HW_RADAR_APIFY_STORAGE_MAX_LIFETIME = _env_int("HW_RADAR_APIFY_STORAGE_MAX_LIFETIME")
