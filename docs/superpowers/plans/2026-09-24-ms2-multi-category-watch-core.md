@@ -5471,6 +5471,30 @@ the then-current code. D-prep (D1, D3) is not gated.
       (MS2-D-39);
     - `test_unreconciled_reservation_never_ages_out`;
     - `test_stuck_reservation_still_counted`.
+  - Landed 2026-09-25 (E3). `acquisition/apify/ledger.py`: `reserve` and
+    `reserve_operator` take `pg_advisory_xact_lock(BUDGET_LOCK_KEY)` and
+    persist the admitted or denied row in the same transaction;
+    `refresh_account_snapshot` counts every account and discovery read before
+    it is sent; `claim_origin`, `export_handoff`, `import_handoff`,
+    `reset_discovery`. Choices this plan left open: `next_cycle` is always
+    evaluated (an unreconciled row reaches every later cycle), with the next
+    cycle modeled as `(cycle_end, +∞)`; with no cycle row, admission reports
+    `cycle_unknown` rather than `ledger_authority_missing`; `continued`
+    authority passes only between adjacent observed cycles (gap ≤ guard);
+    the snapshot's `account_observed_at` moves only after both the limits and
+    plan reads succeed; the handoff record is canonical JSON with a sha256
+    digest and money as strings. E1 open question answered: one digest
+    column was not enough, because an imported `handoff` row can be exported
+    onward and the export would overwrite the import key, so 0022 adds
+    `imported_record_digest` (the import key) and `handoff_record` (the stored
+    export, for idempotent retry). `denial_reason` stays free text. An
+    inspect or probe denial caused by an unset envelope limit is returned
+    but not persisted, because the E1 envelope CHECK needs every limit.
+    Commands: `apify_ledger_claim`, `apify_ledger_handoff`,
+    `apify_operator_reserve` (reserve only), and `apify_budget_reset
+    --discovery`; E4 adds `--settle` and the latch reset. The plan's
+    shortened-cycle case is
+    `test_cycle_shortened_by_plan_change_moves_the_boundary`.
 - **E4 — Reconcile and the overrun latch.** Settle under the same lock per
   MS2-D-32 and MS2-D-41 (revision 7 wording). The first non-null
   `usage_total_usd` makes the row `usage_provisional`. It becomes

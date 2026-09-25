@@ -609,14 +609,28 @@ def test_authority_vocabulary_and_required_fields() -> None:
 
 def test_handoff_row_is_keyed_by_a_unique_record_digest() -> None:
     _rejects("apify_authority_handoff_has_digest", _authority, kind=LedgerAuthorityKind.HANDOFF)
-    _authority(kind=LedgerAuthorityKind.HANDOFF, handoff_record_digest="d" * 64)
+    # Only an imported row has an import key.
+    _rejects("apify_authority_handoff_has_digest", _authority, imported_record_digest="c" * 64)
+    _authority(kind=LedgerAuthorityKind.HANDOFF, imported_record_digest="d" * 64)
     _rejects(
-        "handoff_record_digest",
+        "imported_record_digest",
         _authority,
         cycle_start=CYCLE_END,
         kind=LedgerAuthorityKind.HANDOFF,
-        handoff_record_digest="d" * 64,
+        imported_record_digest="d" * 64,
     )
+
+
+def test_imported_handoff_row_can_be_exported_onward_keeping_its_import_key() -> None:
+    row = _authority(kind=LedgerAuthorityKind.HANDOFF, imported_record_digest="d" * 64)
+    ApifyLedgerAuthority.objects.filter(pk=row.pk).update(
+        handed_off_at=T0 + timedelta(days=1),
+        handed_off_to="production",
+        handoff_record_digest="e" * 64,
+        handoff_record={"destination_ledger_id": "production"},
+    )
+    row.refresh_from_db()
+    assert (row.imported_record_digest, row.handoff_record_digest) == ("d" * 64, "e" * 64)
 
 
 def test_hand_off_binds_destination_and_record_together() -> None:
@@ -628,10 +642,20 @@ def test_hand_off_binds_destination_and_record_together() -> None:
         queryset.update(handed_off_at=T0 + timedelta(days=1), handed_off_to="production")
     with transaction.atomic(), pytest.raises(IntegrityError, match="binds_destination"):
         queryset.update(handed_off_to="production", handoff_record_digest="e" * 64)
+    with transaction.atomic(), pytest.raises(IntegrityError, match="binds_destination"):
+        queryset.update(
+            handed_off_at=T0 + timedelta(days=1),
+            handed_off_to="production",
+            handoff_record_digest="e" * 64,
+        )
+    # An export record without the hand-off would be evidence of nothing.
+    with transaction.atomic(), pytest.raises(IntegrityError, match="binds_destination"):
+        queryset.update(handoff_record={"destination_ledger_id": "production"})
     queryset.update(
         handed_off_at=T0 + timedelta(days=1),
         handed_off_to="production",
         handoff_record_digest="e" * 64,
+        handoff_record={"destination_ledger_id": "production"},
     )
     row.refresh_from_db()
     assert row.handed_off_to == "production"

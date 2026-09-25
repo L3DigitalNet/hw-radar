@@ -188,6 +188,11 @@ class Migration(migrations.Migration):
                     "handoff_record_digest",
                     models.CharField(blank=True, max_length=128, null=True, unique=True),
                 ),
+                ("handoff_record", models.JSONField(blank=True, null=True)),
+                (
+                    "imported_record_digest",
+                    models.CharField(blank=True, max_length=128, null=True, unique=True),
+                ),
             ],
             options={
                 "db_table": "apify_ledger_authority",
@@ -210,8 +215,13 @@ class Migration(migrations.Migration):
                     ),
                     models.CheckConstraint(
                         condition=models.Q(
-                            models.Q(("kind", "handoff"), _negated=True),
-                            ("handoff_record_digest__isnull", False),
+                            models.Q(
+                                ("kind", "handoff"), ("imported_record_digest__isnull", False)
+                            ),
+                            models.Q(
+                                models.Q(("kind", "handoff"), _negated=True),
+                                ("imported_record_digest__isnull", True),
+                            ),
                             _connector="OR",
                         ),
                         name="apify_authority_handoff_has_digest",
@@ -219,11 +229,15 @@ class Migration(migrations.Migration):
                     models.CheckConstraint(
                         condition=models.Q(
                             models.Q(
-                                ("handed_off_at__isnull", True), ("handed_off_to__isnull", True)
+                                ("handed_off_at__isnull", True),
+                                ("handed_off_to__isnull", True),
+                                ("handoff_record__isnull", True),
+                                ("handoff_record_digest__isnull", True),
                             ),
                             models.Q(
                                 ("handed_off_at__isnull", False),
                                 ("handed_off_to__isnull", False),
+                                ("handoff_record__isnull", False),
                                 ("handoff_record_digest__isnull", False),
                             ),
                             _connector="OR",

@@ -941,8 +941,9 @@ class ApifyLedgerAuthority(models.Model):
 
     Paid admission of every class needs the current cycle's row with
     `handed_off_at` NULL. An export marks the row handed off to exactly one
-    destination, irrevocably; an import creates a `handoff` row keyed by the
-    record's digest, so re-importing the same record is a no-op.
+    destination, irrevocably, storing the record and its digest; an import
+    creates a `handoff` row keyed by `imported_record_digest`, so re-importing
+    the same record is a no-op even after this row is exported onward.
     """
 
     cycle_start = models.DateTimeField(unique=True)
@@ -955,7 +956,20 @@ class ApifyLedgerAuthority(models.Model):
     created_at = models.DateTimeField()
     handed_off_at = models.DateTimeField(null=True, blank=True)
     handed_off_to = models.CharField(max_length=100, null=True, blank=True)
+    # The EXPORT side: the digest and the full record this row was handed off
+    # with. The record is stored, not rebuilt, so a retried export to the same
+    # destination returns byte-identical evidence (MS2-D-45 idempotent retry).
     handoff_record_digest = models.CharField(max_length=128, unique=True, null=True, blank=True)
+    handoff_record: models.JSONField[dict[str, object] | None] = models.JSONField(
+        null=True, blank=True
+    )
+    # The IMPORT side: the digest of the record that created a `handoff` row,
+    # its idempotency key. Kept apart from handoff_record_digest because a
+    # handoff row can itself be exported onward (B imports from A, then hands
+    # off to C); one shared column would overwrite the import key at that
+    # export, and a re-import of A's record would then be refused instead of
+    # being the no-op MS2-D-45 requires.
+    imported_record_digest = models.CharField(max_length=128, unique=True, null=True, blank=True)
 
     class Meta:
         db_table = "apify_ledger_authority"
@@ -975,21 +989,33 @@ class ApifyLedgerAuthority(models.Model):
                 name="apify_authority_origin_attested",
             ),
             # A handoff row exists only because a record was imported; the
-            # digest is its idempotency key.
+            # imported digest is its idempotency key, and no other kind has one.
             models.CheckConstraint(
-                condition=~models.Q(kind=LedgerAuthorityKind.HANDOFF.value)
-                | models.Q(handoff_record_digest__isnull=False),
+                condition=(
+                    models.Q(kind=LedgerAuthorityKind.HANDOFF.value)
+                    & models.Q(imported_record_digest__isnull=False)
+                )
+                | (
+                    ~models.Q(kind=LedgerAuthorityKind.HANDOFF.value)
+                    & models.Q(imported_record_digest__isnull=True)
+                ),
                 name="apify_authority_handoff_has_digest",
             ),
             # The export binds destination and record together with the
             # hand-off itself; a handed-off row without them could be exported
             # again to a second destination (MS2-D-45 *Exclusive destination*).
             models.CheckConstraint(
-                condition=models.Q(handed_off_at__isnull=True, handed_off_to__isnull=True)
+                condition=models.Q(
+                    handed_off_at__isnull=True,
+                    handed_off_to__isnull=True,
+                    handoff_record_digest__isnull=True,
+                    handoff_record__isnull=True,
+                )
                 | models.Q(
                     handed_off_at__isnull=False,
                     handed_off_to__isnull=False,
                     handoff_record_digest__isnull=False,
+                    handoff_record__isnull=False,
                 ),
                 name="apify_authority_handoff_binds_destination",
             ),

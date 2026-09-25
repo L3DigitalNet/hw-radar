@@ -84,11 +84,18 @@ Instructions for AI agents:
   **E1 done** (migration `0022_apify_spend_ledger`: reservation, usage-read, latch, cycle,
   cycle-discovery, and ledger-authority tables with their single-row CHECKs). **E2 done**
   (`acquisition.apify.budget`: DB-free `estimate_run_cost`, operator envelopes, per-call bounds,
-  `decide_admission`; Slice E settings keys that deny rather than raise). **Next:** E3 ledger
-  (sums `CycleDebits` under the lock), E4 reconcile/latch, E5 binding (`BudgetRequest` must add
-  `maxRequests`/`maxBytes`), E6, E8, E7. E3/E4 own the write-once rules the schema cannot
-  express (`usage_finalized_usd`, `provider_build_id`, `provider_run.final_charge_op_at`) and
-  `ApifyUsageRead` append-only. Owner/operator before F5a: set the eight unit prices from
+  `decide_admission`; Slice E settings keys that deny rather than raise). **E3 done**
+  (`acquisition.apify.ledger`: `reserve` under the budget advisory lock with the MS2-D-34 cycle
+  predicate, account snapshot + counted cycle discovery, MS2-D-45 claim/export/import, operator
+  reservations; commands `apify_ledger_claim`, `apify_ledger_handoff`, `apify_operator_reserve`
+  (reserve only), `apify_budget_reset --discovery`; 0022 gained the authority's
+  `imported_record_digest` and `handoff_record`). **Next:** E4 reconcile/latch (take
+  `ledger.take_budget_lock` first; add `apify_operator_reserve --settle` and the latch
+  `apify_budget_reset --reason`), E5 binding (`BudgetRequest` must add `maxRequests`/`maxBytes`;
+  refresh the snapshot before `reserve`, attach the provider_run to the reserved row), E6, E8,
+  E7. E4 owns the write-once rules the schema cannot express (`usage_finalized_usd`,
+  `provider_build_id`, `provider_run.final_charge_op_at`) and `ApifyUsageRead` append-only; E3
+  writes none of those fields. Owner/operator before F5a: set the eight unit prices from
   `apify.com/pricing`, plus `…_MARGIN`, `…_MAX_TIMEOUT_S`, `…_MAX_KV_WRITES`, `…_MAX_KV_BYTES`,
   and `…_STORAGE_MAX_LIFETIME` (no plan defaults; unset denies).
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
