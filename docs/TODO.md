@@ -36,7 +36,9 @@ Instructions for AI agents:
   review of the D/E async-ordering design (watermarks, continuity, retention, charge horizon, R23).
 - [ ] **Blocked on owner:** create the scoped runtime Apify token (OpenBao
   `secret/apps/hw-radar/apify`, env `HW_RADAR_APIFY_TOKEN`); the unscoped operator/deploy key
-  exists at `secret/apps/hw-radar/agent/apify` (OQ25 resolved 2026-09-25).
+  exists at `secret/apps/hw-radar/agent/apify` (OQ25 resolved 2026-09-25). Permissions needed:
+  run Hardware Radar-owned Actors, read their runs/default storages, **delete** their run storages
+  (MS2-D-33 cleanup), and ideally read `/users/me/limits` + `/users/me/usage/monthly` (MS2-D-40).
 - [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
   saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
   Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.

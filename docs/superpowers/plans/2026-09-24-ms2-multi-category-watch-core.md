@@ -155,11 +155,11 @@
 > **Revision 9 (owner decisions, s4, 2026-09-25).** Encodes the owner's
 > 2026-09-25 answers to OQ25–OQ29. The authority is the owner's decision as
 > recorded, by a separate decision-record change and not by this plan, in
-> `resolved-questions.md` ([OQ25](../../resolved-questions.md#oq25),
-> [OQ26](../../resolved-questions.md#oq26),
-> [OQ27](../../resolved-questions.md#oq27),
-> [OQ28](../../resolved-questions.md#oq28),
-> [OQ29](../../resolved-questions.md#oq29)) and in the 2026-09-25 amendment of
+> `resolved-questions.md` ([OQ25](../../resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope),
+> [OQ26](../../resolved-questions.md#oq26--external-liability-bound-for-the-shared-apify-account),
+> [OQ27](../../resolved-questions.md#oq27--retention-class-for-non-first-party-reference-data),
+> [OQ28](../../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone),
+> [OQ29](../../resolved-questions.md#oq29--operator-allowance-size)) and in the 2026-09-25 amendment of
 > [ADR 0021](../../adr/adr-0021-hybrid-acquisition-apify.md). Each changed
 > passage is marked **owner decision (s4, 2026-09-25)**. Review rounds 1–7,
 > every decision and task ID, and every migration allocation are unchanged. No
@@ -555,7 +555,7 @@ envelope gets a category-discriminated spec payload and per-row
   and B4c seeds first-party rows only. The `SeedProvenance.source_kind` value for
   such rows is `non_first_party`, which maps to alias `source_kind=manual` at the
   contract level.
-  - **Owner decision (s4, 2026-09-25); [OQ27](../../resolved-questions.md#oq27),
+  - **Owner decision (s4, 2026-09-25); [OQ27](../../resolved-questions.md#oq27--retention-class-for-non-first-party-reference-data),
     R32 resolved.** MS-2 adds no production retention class for non-first-party
     reference data: no `third_party_reference` class and no rewrite of the
     retention CHECKs. Authoritative reference seeds come only from first-party,
@@ -1086,7 +1086,7 @@ only; the owner decides (settled D8 as revised).
   - **(b) A production Actor-backed merchant source** is a separate
     source-admission decision per candidate (MS2-D-44, task F5b). It stays open
     as OQ24, and it is not an MS-2 exit condition (revision 9, owner decision
-    (s4, 2026-09-25), [OQ28](../../resolved-questions.md#oq28)). Newegg stays excluded because its Terms of Use prohibit automated
+    (s4, 2026-09-25), [OQ28](../../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone)). Newegg stays excluded because its Terms of Use prohibit automated
     access and scraping (R1 has the evidence). B&H, ServerPartDeals, and
     refurbished server-parts sellers each need a source-admission record before
     selection. Existing local connectors are not grandfathered into an Actor
@@ -2132,7 +2132,7 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
     12.00, the owner's operating target. Raising it is an owner decision.
   - The operator allowance is the cap of the `operator` admission class. It
     defaults to **1.00** per billing cycle, the owner's setting (revision 9,
-    owner decision (s4, 2026-09-25), [OQ29](../../resolved-questions.md#oq29)),
+    owner decision (s4, 2026-09-25), [OQ29](../../resolved-questions.md#oq29--operator-allowance-size)),
     which replaces the 0.50 assumption of revisions 5–8. At the default target,
     `A = 12.00 − 1.00 = 11.00`. Operator consumption stays inside the cycle
     target and both account checks. Changing the allowance is an owner
@@ -2168,7 +2168,7 @@ enforced as project allocation plus account prepaid headroom (Slice E, migration
        Hardware Radar setting: Hardware Radar never reads another workload's
        code, records, or lifecycle state to derive it.
      - Revision 9 (owner decision (s4, 2026-09-25),
-       [OQ26](../../resolved-questions.md#oq26); R33 resolved): it defaults to
+       [OQ26](../../resolved-questions.md#oq26--external-liability-bound-for-the-shared-apify-account); R33 resolved): it defaults to
        **5.00** per billing cycle, the owner's setting. Hardware Radar
        reserves up to $5.00 of the shared account's prepaid usage for
        consumption outside its ledger, which it neither controls nor
@@ -2425,7 +2425,7 @@ command spellings are illustrative and are verified in D-prep and F5a.
   and, in an emergency, aborting active runs through hw-radar's abort call.
   Revoking the runtime token is the last resort.
 - **Credentials** (revision 9, owner decision (s4, 2026-09-25),
-  [OQ25](../../resolved-questions.md#oq25)). Two roles use two separate
+  [OQ25](../../resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope)). Two roles use two separate
   credentials. Neither is ever the apify-actors venture's token, and CI holds no
   Apify credential.
   - *Operator/deploy:* the owner's dedicated Hardware Radar key at OpenBao
@@ -2753,7 +2753,7 @@ The owner's 18 acceptance items for the first Actor proof (MS2-D-42). "Fixture"
 proofs run in the gate; "live" proofs are F5a evidence recorded in STATUS.
 
 Revision 9 (owner decision (s4, 2026-09-25),
-[OQ28](../../resolved-questions.md#oq28)): these items, evidenced by F5a, are
+[OQ28](../../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone)): these items, evidenced by F5a, are
 the complete Apify portion of MS-2 exit. No production Actor-backed merchant
 source (F5b) is required to close MS-2.
 
@@ -3415,7 +3415,7 @@ and runs last.
     blocked by R32. RAM expansion is a follow-up.
 
     Revision 9 (owner decision (s4, 2026-09-25),
-    [OQ27](../../resolved-questions.md#oq27)): the RAM-expansion follow-up is
+    [OQ27](../../resolved-questions.md#oq27--retention-class-for-non-first-party-reference-data)): the RAM-expansion follow-up is
     **withdrawn**. Its only purpose was admitting those three third-party-hosted
     Micron PDFs, and MS-2 adds no class that would admit them. The existing
     first-party RAM rows stay. Because the importer refuses `non_first_party`
@@ -4506,7 +4506,7 @@ succeeded (revision 5).
   split) replaces revision 4's single owner-gated merchant proof with two tasks.
   Revision 4's step "open the Actor PR in the separate Actor repository" is
   withdrawn (owner-overridden, MS2-D-38). Revision 9 (owner decision (s4,
-  2026-09-25), [OQ28](../../resolved-questions.md#oq28)): F5a alone satisfies
+  2026-09-25), [OQ28](../../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone)): F5a alone satisfies
   the Apify portion of MS-2 exit; F5b is not required.
 - **F5a — Synthetic proof through a real private Actor (MS2-D-42, -43).** Gated
   on: E merged; the scoped Hardware Radar runtime token created and rendered
@@ -4568,7 +4568,7 @@ succeeded (revision 5).
 **MS-2 exit:** AC-1..AC-8 evidenced. The live halves of AC-4 and AC-5 are
 recorded by F5a on the synthetic source (revision 5). The live half of AC-3 is
 recorded after the owner gates clear (F6). Revision 9 (owner decision (s4,
-2026-09-25), [OQ28](../../resolved-questions.md#oq28); R31 resolved): the
+2026-09-25), [OQ28](../../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone); R31 resolved): the
 controlled synthetic Actor proof (F5a, the 18 items of *Synthetic Actor proof
 acceptance*) is sufficient for the Apify portion of MS-2 exit, including MS-2
 Task 6's self-owned-Apify execution and Task 7. F5b is not required to close
@@ -4603,30 +4603,30 @@ drive matcher (ADR 0019, R5).
 | R21 | A start whose response is lost leaves a remote run hw-radar cannot identify (`orphaned_start`). MS2-D-33 detects it at the deadline and trips the latch. Automatic discovery would need an extra list-runs call outside MS2-D-15's seven, which is not planned. | Clean up manually on report; reset the latch | E live operation |
 | R22 | MS2-D-31's per-scope tolerance uses the FULL lane interval. If Actor runs rotate scopes more slowly than that, per-scope continuity keeps restarting. That fails closed (stale absence does not fire), but it can hide real absence until a complete sweep. | Revisit if per-scope cadence becomes configurable | none |
 | R23 | MS2-D-35 residual. Stale-absence sweeps raise no scope watermark, and `last_seen` is `auto_now`, so an import stamps it at persistence time rather than at `observed_at`. A delayed current-eligible import therefore makes a listing look fresher to stale absence by up to the import delay, which the storage deadline bounds (default 24 h). A previously unknown key that a stale sweep would have treated as absent stays active for about one grace longer. This fails toward keeping a listing active, never toward a false delist. Preserved property (revision 5, verbatim): "a delayed import may delay a correct delist, never cause a false delist". Any improvement needs out-of-order tests (MS2-D-39). The fix, stamping `last_seen` from `observed_at` on the import path, touches the `auto_now` contract that `redact_merchant_content` documents. | Decide at the *Slice D entry gate* | none (D entry gate decision) |
-| R24 | **Resolved (owner decision, 2026-09-25; [OQ25](../../resolved-questions.md#oq25)).** `.mcp.json` stays unchanged, with the four anonymous read-only Apify tools, so MCP cannot yet inspect runs, logs, datasets, or KV records. MS2-D-43's read-only list is the target filter, enabled only once a scoped read credential and operator reservations (MS2-D-46) exist. `call-actor`, the RAG web browser, abort, and the task tools stay excluded. The unscoped operator/deploy key is not an MCP credential, and any MCP token stays out of this public repository. MCP is an operator surface, not the runtime protocol; MCP dataset reads are billed account usage (operator allowance). | — (enable the target filter only when its conditions hold) | none; operator inspection uses the CLI or Console under reservations until then |
-| R25 | **Partly resolved (owner decision, 2026-09-25; [OQ25](../../resolved-questions.md#oq25)).** The owner created a dedicated Hardware Radar Apify key, stored at OpenBao `secret/apps/hw-radar/agent/apify`, distinct from the apify-actors venture's token, which Hardware Radar never uses. A 2026-09-25 capability probe showed it is unscoped (full account): it reads account limits and monthly usage and can create Actors, which Apify never allows a scoped token to do. It therefore serves the operator/deploy role only and is never rendered to the production app environment (MS2-D-43). **Residual:** the runtime role needs a separate, owner-created scoped token at `secret/apps/hw-radar/apify`, rendered as `HW_RADAR_APIFY_TOKEN`; its production rendering is deferred until Slice E live admission is ready. Unverified until it exists: whether a scoped token can read `/users/me/limits` and `/users/me/usage/monthly` (MS2-D-15, -40; if not, admission denies with `account_state_unobservable`), and whether the owner's scope (run Hardware Radar-owned Actors, read their runs and default storages) also covers the storage deletes MS2-D-33 needs. | Create the scoped runtime token; confirm its account reads and storage deletes | D3 live verification; E live admission; F5a |
+| R24 | **Resolved (owner decision, 2026-09-25; [OQ25](../../resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope)).** `.mcp.json` stays unchanged, with the four anonymous read-only Apify tools, so MCP cannot yet inspect runs, logs, datasets, or KV records. MS2-D-43's read-only list is the target filter, enabled only once a scoped read credential and operator reservations (MS2-D-46) exist. `call-actor`, the RAG web browser, abort, and the task tools stay excluded. The unscoped operator/deploy key is not an MCP credential, and any MCP token stays out of this public repository. MCP is an operator surface, not the runtime protocol; MCP dataset reads are billed account usage (operator allowance). | — (enable the target filter only when its conditions hold) | none; operator inspection uses the CLI or Console under reservations until then |
+| R25 | **Partly resolved (owner decision, 2026-09-25; [OQ25](../../resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope)).** The owner created a dedicated Hardware Radar Apify key, stored at OpenBao `secret/apps/hw-radar/agent/apify`, distinct from the apify-actors venture's token, which Hardware Radar never uses. A 2026-09-25 capability probe showed it is unscoped (full account): it reads account limits and monthly usage and can create Actors, which Apify never allows a scoped token to do. It therefore serves the operator/deploy role only and is never rendered to the production app environment (MS2-D-43). **Residual:** the runtime role needs a separate, owner-created scoped token at `secret/apps/hw-radar/apify`, rendered as `HW_RADAR_APIFY_TOKEN`; its production rendering is deferred until Slice E live admission is ready. Unverified until it exists: whether a scoped token can read `/users/me/limits` and `/users/me/usage/monthly` (MS2-D-15, -40; if not, admission denies with `account_state_unobservable`), and whether the owner's scope (run Hardware Radar-owned Actors, read their runs and default storages) also covers the storage deletes MS2-D-33 needs. | Create the scoped runtime token; confirm its account reads and storage deletes | D3 live verification; E live admission; F5a |
 | R26 | Usage finalization is unverified on this account: Apify documents a preliminary first figure and advises a re-read after about 10 s, but the actual settle time is unmeasured. Revision 6 (R5-03): elapsed time is only a minimum delay; settlement needs identical consecutive reads, and the default `…_RUN_USAGE_SETTLEMENT=bound` returns no capacity until F5a's readings converge. | Review F5a's finalization trail; approve `stable_reads` only if it converges | E accuracy |
 | R27 | Post-run consumption (dataset reads, storage, transfer) is unmeasured, so the post-run cost counts at its full bound, which makes admission tighter than actual spend. The account is shared: other workloads (the apify-actors venture) reduce the prepaid allowance Hardware Radar may use (bounded only by R33). Revision 6: two environments in one cycle are governed by the ledger authority and drained handoff (MS2-D-45), replacing revision 5's target reduction. | Approve `counted` mode after F5a | E live admission |
 | R28 | The residential-proxy feature is available on the account (verified 2026-09-24), so nothing at the account level stops an Actor from using it. Code tests, the input schema, and the proxy usage latch are the controls (MS2-D-26, MS2-D-38, MS2-D-44). | — | none |
 | R29 | Monorepo `apify push` scoping is unconfirmed: whether it uploads only `actors/<name>/` when run there. D-prep verifies it through the version's `sourceFiles`; the fallback is a Git-source Actor with no push webhook (MS2-D-43). | — | F5a deployment |
 | R30 | The platform limit may deviate by up to about 10% at enforcement (Apify help center). The account limit is therefore a secondary backstop, not proof of zero overage. Revision 6 (R5-02): the margin does not bound other workloads either; Hardware Radar's own admission stays within the owner-declared share (R33), and whole-account safety also depends on other workloads honoring that bound. Whether the platform aborts a running run at the limit is unverified, and the enforcement experiment must not run on the shared account without owner sign-off. | Sign off before any enforcement experiment | none |
-| R31 | **Resolved (owner decision, 2026-09-25; [OQ28](../../resolved-questions.md#oq28)).** The controlled synthetic Actor proof (F5a) is sufficient for the Apify portion of MS-2 exit, including Task 6's self-owned-Apify execution. F5b is not required to close MS-2; it stays source- and legal-gated by OQ24, which may remain open after MS-2 closes. | — | none |
-| R32 | **Resolved (owner decision, 2026-09-25; [OQ27](../../resolved-questions.md#oq27)).** MS-2 adds no production retention class for non-first-party reference data: no `third_party_reference` class and no rewrite of the `*_retention_ttl_coherent` CHECKs. Authoritative reference seeds come only from first-party, manufacturer-authoritative sources; non-first-party PDFs and pages may inform research or manual review but never automatically seed authoritative aliases or specs. The importer's refusal of `non_first_party` documents (MS2-D-06) is the MS-2 behavior. B4c's RAM expansion, whose only purpose was admitting three third-party-hosted Micron PDFs, is withdrawn; the existing first-party RAM rows stay. Reopen only with a concrete source, intended use, provenance model, and actual need. | — | none |
-| R33 | **Resolved (owner decision, 2026-09-25; [OQ26](../../resolved-questions.md#oq26)).** `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD` is the maximum that other workloads sharing the Apify account may consume in one billing cycle (equivalently, `P −` it is Hardware Radar's allocated share). It defaults to the owner-set 5.00 per cycle: Hardware Radar reserves up to $5.00 of the prepaid usage for consumption outside its ledger. It is a conservative Hardware Radar accounting bound, not permission for another project to spend $5. Paid admission still fails closed when the value is explicitly empty or invalid, when the account snapshot is stale or unobservable, and when the invariant cannot be satisfied (MS2-D-40 check 2). Residual: Hardware Radar derives the bound from no other workload's code or records, cannot enforce it on those workloads, and detects a breach only when a snapshot shows it (`external_liability_exceeded` trips the latch). | — (changing the bound is an owner decision) | none |
+| R31 | **Resolved (owner decision, 2026-09-25; [OQ28](../../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone)).** The controlled synthetic Actor proof (F5a) is sufficient for the Apify portion of MS-2 exit, including Task 6's self-owned-Apify execution. F5b is not required to close MS-2; it stays source- and legal-gated by OQ24, which may remain open after MS-2 closes. | — | none |
+| R32 | **Resolved (owner decision, 2026-09-25; [OQ27](../../resolved-questions.md#oq27--retention-class-for-non-first-party-reference-data)).** MS-2 adds no production retention class for non-first-party reference data: no `third_party_reference` class and no rewrite of the `*_retention_ttl_coherent` CHECKs. Authoritative reference seeds come only from first-party, manufacturer-authoritative sources; non-first-party PDFs and pages may inform research or manual review but never automatically seed authoritative aliases or specs. The importer's refusal of `non_first_party` documents (MS2-D-06) is the MS-2 behavior. B4c's RAM expansion, whose only purpose was admitting three third-party-hosted Micron PDFs, is withdrawn; the existing first-party RAM rows stay. Reopen only with a concrete source, intended use, provenance model, and actual need. | — | none |
+| R33 | **Resolved (owner decision, 2026-09-25; [OQ26](../../resolved-questions.md#oq26--external-liability-bound-for-the-shared-apify-account)).** `HW_RADAR_APIFY_EXTERNAL_LIABILITY_USD` is the maximum that other workloads sharing the Apify account may consume in one billing cycle (equivalently, `P −` it is Hardware Radar's allocated share). It defaults to the owner-set 5.00 per cycle: Hardware Radar reserves up to $5.00 of the prepaid usage for consumption outside its ledger. It is a conservative Hardware Radar accounting bound, not permission for another project to spend $5. Paid admission still fails closed when the value is explicitly empty or invalid, when the account snapshot is stale or unobservable, and when the invariant cannot be satisfied (MS2-D-40 check 2). Residual: Hardware Radar derives the bound from no other workload's code or records, cannot enforce it on those workloads, and detects a breach only when a snapshot shows it (`external_liability_exceeded` trips the latch). | — (changing the bound is an owner decision) | none |
 | R34 | Revision 6 admission is deliberately conservative and may leave Hardware Radar well under its $12 target: reconciled spend is debited on top of the snapshot while no inclusion watermark exists (R5-01); run usage settles at its execution bound until F5a supports `stable_reads` (R5-03); and the external-liability bound is reserved in full. With the verified figures ($19 prepaid, $1.90 margin) and no watermark, late-cycle headroom falls roughly by Hardware Radar's own settled spend. Revision 9: with the owner's 5.00 bound, check 2 caps Hardware Radar's cycle debit at $12.10 ($17.10 − $5.00), just above the $12 target, so at the verified figures the target binds before check 2. | Set `…_USAGE_INCLUSION_LAG_S` and `stable_reads` only from F5a evidence | E live capacity |
 | R35 | The first ledger authority in a cycle (`apify_ledger_claim --origin`, MS2-D-45) rests on an owner attestation that no other environment admitted paid work that cycle; every later authority is machine-checked (continuation, or a drained handoff bound to one destination ledger, revision 7). Residual: a handoff record is a digest-keyed file, not a cryptographically signed one, so the checks protect against mistakes, not against deliberate hand-editing. | Attest only when true | E live admission |
-| R36 | Operator reservations (MS2-D-46) are a procedural control: the Console, CLI, and MCP cannot be intercepted, so an operation run without a reservation is unaccounted. Revision 9 (owner decision, 2026-09-25; [OQ29](../../resolved-questions.md#oq29)): the allowance defaults to 1.00 per cycle, replacing the 0.50 assumption under which one build bound ($0.41) nearly filled it. Two build bounds ($0.82) now fit, leaving $0.18 for inspection envelopes, and a third build ($1.23) does not. Under the default `bound` settlement a settled build returns little capacity, so at most two builds fit per cycle, fewer when inspection envelopes are reserved, until F5a evidence allows `stable_reads`. | Reserve before every build or inspection; changing the allowance is an owner decision | F5a deployment cadence |
+| R36 | Operator reservations (MS2-D-46) are a procedural control: the Console, CLI, and MCP cannot be intercepted, so an operation run without a reservation is unaccounted. Revision 9 (owner decision, 2026-09-25; [OQ29](../../resolved-questions.md#oq29--operator-allowance-size)): the allowance defaults to 1.00 per cycle, replacing the 0.50 assumption under which one build bound ($0.41) nearly filled it. Two build bounds ($0.82) now fit, leaving $0.18 for inspection envelopes, and a third build ($1.23) does not. Under the default `bound` settlement a settled build returns little capacity, so at most two builds fit per cycle, fewer when inspection envelopes are reserved, until F5a evidence allows `stable_reads`. | Reserve before every build or inspection; changing the allowance is an owner decision | F5a deployment cadence |
 | R37 | (Revision 7; revised in revision 8.) Correction monitoring (MS2-D-41, selector 4) runs for a fixed window after a row's last charge (default seven days, an assumption) and closes only when a successful closing read at or after the deadline commits. A provider correction that arises after that closing read is not observed by any environment; window closure is not provider finality. Under the default `bound` settlement the settled amount already equals the enforced execution bound, so the exposure matters mainly under `stable_reads`. The window delays a drained handoff by at least one window (MS2-D-45). Revision 8 residual: a closing read that can never succeed (for example, a run or build record no longer returned) keeps its obligation open, visible as `correction_close_overdue`, and blocks handoff indefinitely; that fails closed, and any release of such an obligation would need a plan revision. | Choose `stable_reads` only if F5a's read trail shows no correction after half the window | E accuracy under `stable_reads`; handoff timing |
 
 No new ADR or OQ file is created by this plan. Revision 5: OQ23 is resolved and
 OQ24 split by the owner's 2026-09-24 decisions, recorded in
 `resolved-questions.md`, `open-questions.md`, and ADR 0021's amendment (not by
 this plan). Revision 9: OQ25–OQ29 are resolved by the owner's 2026-09-25
-decisions ([OQ25](../../resolved-questions.md#oq25),
-[OQ26](../../resolved-questions.md#oq26),
-[OQ27](../../resolved-questions.md#oq27),
-[OQ28](../../resolved-questions.md#oq28),
-[OQ29](../../resolved-questions.md#oq29)), recorded in `resolved-questions.md`
+decisions ([OQ25](../../resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope),
+[OQ26](../../resolved-questions.md#oq26--external-liability-bound-for-the-shared-apify-account),
+[OQ27](../../resolved-questions.md#oq27--retention-class-for-non-first-party-reference-data),
+[OQ28](../../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone),
+[OQ29](../../resolved-questions.md#oq29--operator-allowance-size)), recorded in `resolved-questions.md`
 and ADR 0021's 2026-09-25 amendment (not by this plan). R24, R31, R32, R33, and
 R36 are resolved, and R25 is resolved except for its runtime-token residual.
 R12 still offers an optional ADR for MS2-D-07. The owner items this plan still

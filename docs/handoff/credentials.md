@@ -18,7 +18,8 @@ Never store credential values in this repository.
 - `EBAY_CLIENT_ID` — OpenBao `secret/api-keys/commerce/ebay`
 - `EBAY_CLIENT_SECRET` — OpenBao `secret/api-keys/commerce/ebay`
 - `HW_RADAR_APIFY_TOKEN` — OpenBao `secret/apps/hw-radar/apify`. Runtime, **scoped** token
-  (run only Hardware Radar-owned Actors, read their runs/default storages). Not yet created by
+  (run only Hardware Radar-owned Actors, read their runs/default storages, delete their run
+  storages for MS2-D-33 cleanup; account limits/usage reads needed by MS2-D-40 to be verified). Not yet created by
   the owner; production rendering is deferred until Slice E live admission is ready.
   `HW_RADAR_APIFY_ENABLED` defaults to `false` as the fail-closed kill switch.
 
