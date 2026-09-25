@@ -79,10 +79,12 @@ Instructions for AI agents:
   `ABSENT_STALE` delisting (deployed 2026-09-06; expected 6h grace).
 - [ ] **Blocked on owner:** choose the fix for production `/static/` 403 (nginx cannot traverse the
   `0750` app root; admin CSS only) — [bug 001](handoff/bugs/001-nginx-static-403.md).
-- [ ] Adopt Django 6.1 as its own gated change (Dependabot PR #19 closed: it could not update
-  `uv.lock`). 6.0 mainstream support ended 2026-08-04; security fixes run to April 2027.
-- [ ] Confirm the first uv-ecosystem Dependabot run opens PRs against `dev` and that one merges
-  under the `dev` signed-commit rule (config `001a5b6` live on `main` since PR #27, `96ce005`).
+- [ ] Decide Dependabot PR #31 (Django 6.0.8 -> 6.1.1, CI green): review 6.1 backwards-incompatible
+  changes vs raw-SQL Timescale migrations/constraints. 6.0 security support runs to April 2027.
+- [ ] Land Dependabot PR #28 (dev tools): ruff 0.16 reformats 9 files; needs a signed `ruff format`
+  follow-up commit and a lint review.
+- [ ] Review Dependabot PR #32 (scrapy 2.19): adds an aiohttp dependency tree; dependency-review
+  flags aiohappyeyeballs (PSF LICENSE-history false positive like typing-extensions?).
 - [ ] Give the Seller table a retention policy before merchant usernames enter IR-002 redaction.
 - [ ] Decide the WD Purple recert opt-in question.
 - [ ] **Deferred:** MS-2a scoring-substrate execution
