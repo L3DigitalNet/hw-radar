@@ -3931,8 +3931,9 @@ and operator-verified account settings (Slice E; revision 12, owner decision
        correct.
     *Rejected:* an operator-class exemption from the kill switch or the
     latch. It would weaken the unchanged blanket stops.
-- **Operator reconciliation (procedural; recommended at each cycle close
-  and during F5a).** Under an `inspect` reservation, the operator reads the
+- **Operator reconciliation (procedural; required each billing cycle and
+  during F5a — rev-12 Codex round 2, R12-202, aligning with the C-011
+  clarification).** Under an `inspect` reservation, the operator reads the
   cycle's monthly usage with the operator key and compares it with
   `apify_spend_report`. If other workloads (account usage minus Hardware
   Radar's settled spend) exceed `E`, or a configured value no longer matches,
@@ -6463,6 +6464,13 @@ migration.
     `account_base_price_usd: Decimal | None`,
     `account_data_retention_days: int | None`, and
     `account_verified_on: date | None`.
+    Rev-12 Codex round 2 (R12-02): the fields have no defaults, so this
+    commit also adds them to the two direct constructors,
+    `tests/unit/test_apify_budget.py` `CFG` and `tests/db/ledger_support.py`
+    `BUDGET`, with the values E9.2's inventory lists (anchor `C1_START`, limit
+    `19.00`, base price `19.00`, retention 31, verified-on
+    `C1_START.date()`). The retired fields stay until E9.2 removes them, so
+    E9.1 is gate-green on its own.
   - Add the pure `billing_cycle_bounds(anchor: datetime, now: datetime) ->
     tuple[datetime, datetime] | None` with MS2-D-48 *Derivation* exactly:
     compute `start(k)` from the anchor, never by iteration; the end is the
@@ -6614,9 +6622,8 @@ same commit, or basedpyright and pytest go red.
   `84c5cd0`).** Change every item in this commit:
   - `tests/db/ledger_support.py`:
     - module docstring line 5;
-    - `BUDGET` lines 94 and 113–114: drop the two retired fields and add
-      the five new ones (anchor `C1_START`, limit `19.00`, base price
-      `19.00`, retention 31, verified-on `C1_START.date()`);
+    - `BUDGET` lines 94 and 113–114: drop the two retired fields (E9.1
+      already added the five new ones, R12-02 round 2);
     - delete `STANDING` (line 130);
     - `config()`;
     - `cycle()` lines 145–162: stop writing the `account_*` fields;
@@ -6796,8 +6803,19 @@ follow-up R12-01).**
 - `jobs.start_provider_run`: in the `except` around `client.start_run`, after
   `_record_start_error` commits, if `isinstance(exc, ApifyApiError) and
   exc.status_code == 402`, call `await
-  sync_to_async(trip_latch)(LatchReason.ACCOUNT_LIMIT_REFUSED,
-  provider_run_id=row.pk)` and return the result above. Otherwise, keep the
+  sync_to_async(trip_start_refusal)(row.pk)` and return the result above.
+  Rev-12 Codex round 2 (R12-201): the direct callback must not use
+  `trip_latch`, whose idempotence covers only open trips (`ledger.py`
+  `trip_latch_locked`). A start callback delayed past a repair and an owner
+  reset would otherwise re-trip an already-handled 402. `ledger.trip_start_refusal(provider_run_id)`
+  takes the budget lock and trips `account_limit_refused` for the row only
+  when the row has no trip with that reason, open **or cleared** (the same
+  predicate as `trip_stranded_start_refusals_locked` below, shared as one
+  helper). Other reasons keep `trip_latch`'s semantics. Test:
+  `test_delayed_402_callback_after_repair_and_owner_clear_does_not_retrip`
+  (pause the callback after `_record_start_error` commits, run a tick's
+  repair, owner-clear with `apify_budget_reset`, resume the callback, and
+  assert no new trip and that admission is not paused). Otherwise, keep the
   current behavior. Add a comment that cites MS2-D-48 and why the type string
   is not matched.
 - `ledger.py`: add `trip_stranded_start_refusals_locked(estimator_version,
@@ -7580,6 +7598,16 @@ weakened.
 
 R39 is closed. A further review round is optional: the follow-up adds no
 decision, and each change is covered by a named test or procedure.
+
+**Codex round 2 (bounded delegate, 2026-09-25): REVISION_REQUIRED.** R12-01,
+-03, -04, and -05 closed. Dispositions of what remained (applied by the
+orchestrator in place, no new decision):
+
+| Finding | Severity | Disposition | Where | Proof |
+| --- | --- | --- | --- | --- |
+| R12-02 (partial) E9.1 adds required `BudgetSettings` fields but the constructors change only in E9.2 | medium | Accepted; resolved. E9.1 adds the five fields to both direct constructors (`CFG`, `BUDGET`); E9.2 only drops the retired fields | E9.1, E9.2 | E9.1 gate |
+| R12-201 a delayed direct 402 callback re-trips a trip the owner already cleared (`trip_latch` is idempotent over open trips only) | medium | Accepted; resolved. The callback uses budget-locked `ledger.trip_start_refusal`, sharing the open-or-cleared predicate with the repair sweep; other reasons unchanged | E9.3 | `test_delayed_402_callback_after_repair_and_owner_clear_does_not_retrip` |
+| R12-202 operator reconciliation "recommended" contradicts C-011's "each billing cycle" | low | Accepted; resolved. Reconciliation is required each billing cycle and during F5a | MS2-D-48 *Operator reconciliation* | procedure |
 
 ## Next slice after A
 
