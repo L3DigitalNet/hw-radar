@@ -438,3 +438,29 @@ def test_empty_rev_parse_stdout_fails_closed(
     with pytest.raises(CommandError, match="--allow-repo-output"):
         call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(out))
     assert not (out / "staging.jsonl").exists()
+
+
+def test_duplicate_ids_are_staged_once_first_wins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # eBay can return one item from two sweeps (or twice across pages); the
+    # corpus loader rejects a duplicate id, so staging keeps the first.
+    monkeypatch.setenv("EBAY_CLIENT_ID", "id")
+    monkeypatch.setenv("EBAY_CLIENT_SECRET", "secret")
+    first = _listing("EBAY-1", title="Seagate Exos X18 18TB first")
+    second = _listing("EBAY-1", title="Seagate Exos X18 18TB second")
+    _install(monkeypatch, {"ebay": FakeAdapter("ebay", [first, _listing("EBAY-2"), second])})
+
+    call_command("harvest_corpus", "--source", "ebay", "--out", str(tmp_path))
+
+    entries, meta = _read_staging(tmp_path)
+    assert [(e["id"], e["title"]) for e in entries] == [
+        ("ebay:EBAY-1", "Seagate Exos X18 18TB first"),
+        ("ebay:EBAY-2", "Seagate Exos X18 ST18000NM000J 18TB"),
+    ]
+    assert meta["sources"]["ebay"] == {
+        "status": "ok",
+        "harvested": 2,
+        "skipped_malformed": 0,
+        "duplicates_dropped": 1,
+    }

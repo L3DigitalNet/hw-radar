@@ -42,6 +42,7 @@ import asyncio
 import logging
 import statistics
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import date, datetime
 
 from asgiref.sync import sync_to_async
@@ -146,9 +147,12 @@ def _median_body_bytes(site: SourceSite) -> int | None:
     #
     # The basis still averages over every item of a run, including items that
     # opt out of the comparison (RawItem.body_size_comparable, e.g. eBay's
-    # short final sweep pages). They can only pull the average DOWN, which
-    # makes the rule less sensitive for the remaining full pages, never
-    # trigger it; a few-KB challenge page stays far below either basis.
+    # category sweep pages). They move the average either way: short final
+    # pages pull it down, while full 200-item category pages pull it UP past a
+    # legacy page that returned fewer items, so a legitimately short legacy
+    # page is judged against a larger basis than before. The rule still only
+    # fires below SOFT_BLOCK_BODY_RATIO of the basis, which a normal Browse
+    # page is not near; a few-KB challenge page stays far below either basis.
     rows = (
         ScraperRun.objects.filter(source_site=site, status=RunStatus.SUCCESS, run_kind=RunKind.FULL)
         .filter(
@@ -441,6 +445,10 @@ def _scope_reports(
     return provider.delist_scopes(batch, parsed)
 
 
+def _widen_seen(gated: DelistScope | None, seen: frozenset[str]) -> DelistScope | None:
+    return None if gated is None else replace(gated, seen_keys=gated.seen_keys | seen)
+
+
 async def _apply_scope_reports(
     site: SourceSite,
     provider: CollectionProvider,
@@ -457,7 +465,14 @@ async def _apply_scope_reports(
     (apply_delist filters on collection_scope). Order is deterministic: the
     NULL scope first, then scope keys ascending.
 
-    Two deviations from applying each report as if it were its own run:
+    Three deviations from applying each report as if it were its own run:
+    - every gated scope's seen keys are widened to every key parsed anywhere
+      in this run, so no scope delists a listing another sweep of the same run
+      just saw. A scope-less (legacy) observation never rewrites a listing's
+      collection_scope, so a GPU-scope listing seen this run only by the drive
+      search is still a GPU delist candidate, and its last_observed_at equals
+      this sweep's observed_at, which apply_delist's ordering guard lets
+      through. Widening only removes candidates, never adds them;
     - a non-NULL report with no scope BREAKS that scope's continuity (see
       ScopeSweepReport.scope); the NULL scope keeps the single-scope rule;
     - when the run also swept the NULL scope, the non-NULL calls pass
@@ -468,6 +483,9 @@ async def _apply_scope_reports(
     total delisted, and per-scope outcomes for detail_json["scopes"].
     """
     ordered = sorted(reports, key=lambda r: (r.scope_key is not None, r.scope_key or ""))
+    seen_in_run = frozenset(p.source_listing_key for p in parsed).union(
+        *(r.scope.seen_keys for r in ordered if r.scope is not None)
+    )
     null_swept = any(r.scope_key is None for r in ordered)
     per_scope: list[ProviderRunEvidence] = []
     outcomes: list[dict[str, object]] = []
@@ -481,7 +499,7 @@ async def _apply_scope_reports(
             site,
             swept_scope_key=report.scope_key,
             eligible=eligible,
-            gated=gate_delist_scope(report.scope, evidence),
+            gated=_widen_seen(gate_delist_scope(report.scope, evidence), seen_in_run),
             event_time=batch.fetched_at,
             null_scope_swept=null_swept,
         )

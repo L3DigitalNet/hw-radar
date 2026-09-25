@@ -20,10 +20,11 @@ import pytest
 from django.utils import timezone
 
 from hw_radar.acquisition.contracts import NullResolver, RawBatch, RawItem
-from hw_radar.acquisition.pipeline import run_source
-from hw_radar.acquisition.sources import ADAPTERS
+from hw_radar.acquisition.pipeline import FETCH_TIMEOUT_S, run_source
+from hw_radar.acquisition.sources import ADAPTERS, ebay
 from hw_radar.acquisition.sources.ebay import (
     _TOKEN_CACHE,  # pyright: ignore[reportPrivateUsage]
+    CATEGORY_DEADLINE_S,
     CATEGORY_SWEEPS,
     FIXED_PRICE_FILTER,
     CategorySweep,
@@ -94,17 +95,25 @@ class Browse:
         self.legacy = legacy
         self.pages = {(s.category_id, s.q): pages for s, pages in sweeps.items()}
         self.calls: list[str] = []
+        # Seconds to stall before answering a call, keyed like `calls`.
+        self.delays: dict[str, float] = {}
+        # Statuses for successive token requests; exhausted -> 200.
+        self.token_statuses: list[int] = []
 
-    def handler(self, request: httpx.Request) -> httpx.Response:
+    async def handler(self, request: httpx.Request) -> httpx.Response:
         if request.url.path == "/identity/v1/oauth2/token":
-            return httpx.Response(200, json=TOKEN_BODY)
+            status = self.token_statuses.pop(0) if self.token_statuses else 200
+            return httpx.Response(status, json=TOKEN_BODY if status == 200 else {})
         params = request.url.params
         category = params.get("category_ids")
         if category is None:
             self.calls.append("legacy")
             return httpx.Response(200, json=self.legacy)
         offset = int(params["offset"])
-        self.calls.append(f"{category}:{offset}")
+        label = f"{category}:{offset}"
+        self.calls.append(label)
+        if label in self.delays:
+            await asyncio.sleep(self.delays[label])
         assert params["limit"] == "200"
         assert params["filter"] == FIXED_PRICE_FILTER
         page = self.pages[(category, params["q"])][offset // 200]
@@ -262,9 +271,10 @@ def test_unconfigured_sweep_page_is_dropped_not_unhinted() -> None:
     assert adapter.last_parse_skipped == 2
 
 
-def test_pagination_reaches_complete_when_total_within_cap(
-    loop: asyncio.AbstractEventLoop,
-) -> None:
+def test_multi_page_sweep_within_cap_is_unprovable(loop: asyncio.AbstractEventLoop) -> None:
+    # Every page-level check passes (no `next` at the end, stable total, all
+    # ids seen), yet offset paging over a moving ranking cannot prove it saw
+    # everything: the sweep stays incomplete but still polls its scope.
     pages: list[Page] = [
         _page(["g-1", "g-2"], total=5, more=True),
         _page(["g-3", "g-4"], total=5, more=True),
@@ -278,13 +288,44 @@ def test_pagination_reaches_complete_when_total_within_cap(
     assert _scopes(run)[GPU.scope_key] == {
         "scope_key": GPU.scope_key,
         "pages": 3,
-        "complete": True,
-        "reason": "complete",
+        "complete": False,
+        "reason": "multi_page_unprovable",
         "continuity": "recorded",
         "delisted": 0,
     }
+    assert _row(GPU).last_complete_sweep_at is None
+    assert _row(GPU).continuous_since is not None
+    assert Listing.objects.filter(collection_scope=GPU.scope_key).count() == 5
+
+
+def test_single_page_sweep_is_complete(loop: asyncio.AbstractEventLoop) -> None:
+    browse = Browse(_legacy(), {GPU: [_page(["g-1", "g-2"], total=2)]})
+    run = _run(loop, browse.adapter([GPU]))
+    outcome = _scopes(run)[GPU.scope_key]
+    assert (outcome["complete"], outcome["reason"], outcome["pages"]) == (True, "complete", 1)
     # The watermark a complete sweep raises proves the gate let it through.
     assert _row(GPU).last_complete_sweep_at is not None
+
+
+def test_offset_churn_never_delists_a_live_listing(loop: asyncio.AbstractEventLoop) -> None:
+    # The verifier's g201 case, scaled down: between page 1 and page 2 one
+    # ranked-earlier item is removed and one new item is added, so g-mid
+    # slides across the page boundary unseen while `total` and the distinct-id
+    # count both still match. Read as complete, g-mid (live) is delisted and
+    # redacted on the spot.
+    browse = Browse(_legacy(), {GPU: [_page(["g-1", "g-mid"], total=2)]})
+    _run(loop, browse.adapter([GPU]))
+    browse.pages = {  # pyright: ignore[reportAttributeAccessIssue] - Page is a union
+        (GPU.category_id, GPU.q): [
+            _page(["g-1"], total=2, more=True),
+            _page(["g-new"], total=2),
+        ]
+    }
+    run = _run(loop, browse.adapter([GPU]))
+
+    assert _scopes(run)[GPU.scope_key]["reason"] == "multi_page_unprovable"
+    assert run.detail_json["listings_delisted"] == 0
+    assert Listing.objects.get(source_listing_key="g-mid").delisted_at is None
 
 
 def test_page_cap_hit_is_incomplete(loop: asyncio.AbstractEventLoop) -> None:
@@ -507,6 +548,96 @@ def test_probe_is_one_request_and_a_fired_run_skips_category_sweeps(
     assert browse.calls == ["legacy", "legacy"]
     assert list(_scopes(run)) == [None]
     assert not ScopeSweepContinuity.objects.exists()
+
+
+def test_listing_seen_only_by_the_drive_search_survives_a_complete_scope_sweep(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    # x-1 was swept into the GPU scope; this run only the drive search sees
+    # it. A scope-less observation keeps the row's GPU scope, so the complete
+    # GPU sweep that omits x-1 would delist a listing this very run observed.
+    browse = Browse(_legacy("drive-a"), {GPU: [_page(["gpu-1", "x-1"], total=2)]})
+    _run(loop, browse.adapter([GPU]))
+    assert Listing.objects.get(source_listing_key="x-1").collection_scope == GPU.scope_key
+
+    browse.legacy = _legacy("drive-a", "x-1")
+    browse.pages = {(GPU.category_id, GPU.q): [_page(["gpu-1"], total=1)]}  # pyright: ignore[reportAttributeAccessIssue]
+    run = _run(loop, browse.adapter([GPU]))
+
+    assert _scopes(run)[GPU.scope_key]["complete"] is True
+    assert run.detail_json["listings_delisted"] == 0
+    assert Listing.objects.get(source_listing_key="x-1").delisted_at is None
+
+
+def test_one_key_from_two_sweeps_persists_once_under_the_first_sweep(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    # dup-1 comes back from the drive search, the GPU sweep and the RAM sweep.
+    # One record per key survives parse: the first category sweep in
+    # configuration order (GPU), never the unhinted drive record.
+    browse = Browse(
+        _legacy("drive-a", "dup-1"),
+        {GPU: [_page(["dup-1", "gpu-1"], total=2)], RAM: [_page(["dup-1"], total=1)]},
+    )
+    adapter = browse.adapter([GPU, RAM])
+    batch = loop.run_until_complete(adapter.fetch())
+    parsed = adapter.parse(batch)
+    assert [p.source_listing_key for p in parsed] == ["drive-a", "dup-1", "gpu-1"]
+    dup = next(p for p in parsed if p.source_listing_key == "dup-1")
+    assert (dup.category_hint, dup.collection_scope) == ("gpu", GPU.scope_key)
+    # Each sweep still vouches for what it saw, so RAM's complete sweep
+    # does not lose dup-1 from its seen keys.
+    reports = {r.scope_key: r for r in adapter.delist_scopes(batch, parsed)}
+    ram_scope = reports[RAM.scope_key].scope
+    assert ram_scope is not None
+    assert ram_scope.seen_keys == frozenset({"dup-1"})
+
+    run = _run(loop, browse.adapter([GPU, RAM]))
+    assert run.status == RunStatus.SUCCESS
+    listing = Listing.objects.get(source_listing_key="dup-1")
+    assert listing.collection_scope == GPU.scope_key
+    assert OfferSnapshot.objects.filter(listing=listing).count() == 1
+
+
+def test_category_deadline_sits_inside_the_fetch_timeout() -> None:
+    assert CATEGORY_DEADLINE_S <= FETCH_TIMEOUT_S / 2
+
+
+def test_time_budget_ends_the_sweep_not_the_run(
+    loop: asyncio.AbstractEventLoop, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(ebay, "CATEGORY_DEADLINE_S", 0.3)
+    pages: list[Page] = [_page(["g-1"], total=2, more=True), _page(["g-2"], total=2)]
+    browse = Browse(_legacy("drive-a"), {GPU: pages, CPU: [_page(["cpu-1"], total=1)]})
+    browse.delays["27386:200"] = 5.0  # stalls past the deadline, far inside the client timeout
+    run = _run(loop, browse.adapter([GPU, CPU]))
+
+    assert run.status == RunStatus.SUCCESS, run.error
+    outcomes = _scopes(run)
+    gpu = outcomes[GPU.scope_key]
+    assert (gpu["complete"], gpu["reason"], gpu["pages"]) == (False, "time_budget", 1)
+    # The deadline covers every sweep: CPU is never started and breaks.
+    cpu = outcomes[CPU.scope_key]
+    assert (cpu["reason"], cpu["pages"], cpu["continuity"]) == ("time_budget", 0, "broken")
+    assert browse.calls == ["legacy", "27386:0", "27386:200"]
+    assert Listing.objects.filter(source_listing_key__in=["drive-a", "g-1"]).count() == 2
+
+
+def test_any_category_page_exception_fails_only_its_sweep(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    # The GPU page answers 401; the re-mint's token POST then answers 500 and
+    # raise_for_status raises HTTPStatusError, not a TransportError.
+    browse = Browse(_legacy("drive-a"), {GPU: [401], CPU: [_page(["cpu-1"], total=1)]})
+    browse.token_statuses = [200, 500]
+    run = _run(loop, browse.adapter([GPU, CPU]))
+
+    assert run.status == RunStatus.SUCCESS, run.error
+    outcomes = _scopes(run)
+    assert outcomes[GPU.scope_key]["reason"] == "page_failed:HTTPStatusError"
+    assert outcomes[GPU.scope_key]["continuity"] == "broken"
+    assert outcomes[CPU.scope_key]["complete"] is True
+    assert Listing.objects.filter(source_listing_key__in=["drive-a", "cpu-1"]).count() == 2
 
 
 def test_scheduled_adapter_sweeps_every_category() -> None:

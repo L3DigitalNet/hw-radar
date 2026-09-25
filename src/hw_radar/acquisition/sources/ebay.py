@@ -39,6 +39,21 @@ continuity per scope: a complete GPU sweep can never delist RAM, CPU, or legacy
 drive (NULL-scope) listings. The class default is legacy-only; the production
 registry entry is category_sweep_adapter(), which adds CATEGORY_SWEEPS.
 
+Only a SINGLE-PAGE category sweep can be complete. Browse pages by offset over
+a Best Match ranking that moves while we page: a removal before the page
+boundary plus an addition after it leaves `total` and the distinct-id count
+unchanged while one live item slides across the boundary unseen. No check on
+the pages we got can rule that out, and a false complete sweep delists a live
+listing on the spot and redacts it (IR-002). A multi-page sweep is therefore
+incomplete (`multi_page_unprovable`): its observations and continuity still
+count, and its absences go through the grace/stale path like any truncated
+sweep. One page is a single ranking snapshot, so there is no boundary to fall
+through.
+
+Category sweeps never cost the drive sweep: the legacy GET runs first with its
+own error semantics, and every category page runs under a wall-clock deadline
+(CATEGORY_DEADLINE_S) and catches any exception, ending only its own sweep.
+
 Browse facts the sweep code relies on (live eBay API, 2026-09-25, app token):
   - `limit` must be 1..200 (errorId 12006); `offset` must be 0 or a multiple of
     `limit` (12515); `category_ids` accepts ONE id (12030).
@@ -52,6 +67,8 @@ Browse facts the sweep code relies on (live eBay API, 2026-09-25, app token):
     legacy GET + at most RUN_PAGE_BUDGET category pages) = 3,024/day, plus one
     legacy GET per heartbeat-fired FULL run, which skips the category sweeps
     (see probe()). Paginating inside probe() or a fired run would exceed it.
+    A 401 re-mint (_search) adds one more GET to the call it affects, plus a
+    token POST, which is outside the Browse quota.
 
 Creds/config from env (OpenBao-injected at runtime; never in the repo):
 EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_API_BASE (default https://api.ebay.com).
@@ -59,6 +76,7 @@ EBAY_CLIENT_ID, EBAY_CLIENT_SECRET, EBAY_API_BASE (default https://api.ebay.com)
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
@@ -131,7 +149,20 @@ FIXED_PRICE_FILTER: Final = "buyingOptions:{FIXED_PRICE}"
 # already has, and its completeness check sees the last kept page's `next`.
 _STOP_NO_NEXT = "no_next"
 _STOP_PAGE_CAP = "page_cap"
+_STOP_TIME_BUDGET = "time_budget"
 _PAGE_FAILED = "page_failed"
+# Stops that end a sweep in the ordinary way; any other stop (a failed page or
+# the time budget) is the more specific reason a report records.
+_CLEAN_STOPS: Final = frozenset({_STOP_NO_NEXT, _STOP_PAGE_CAP})
+
+# Wall-clock deadline for ALL category pages of one fetch(), measured from the
+# start of fetch() so a slow legacy GET shrinks it. Cross-file contract: it must
+# sit well inside pipeline.FETCH_TIMEOUT_S (120 s), whose expiry fails the whole
+# run — drive sweep included — as a TimeoutError. With the 30 s client timeout,
+# 16 sequential calls could otherwise run to 480 s. Each page request is itself
+# bounded by the time left, so the sweeps end by this deadline, not after it.
+# Pinned below FETCH_TIMEOUT_S by tests/db/test_source_ebay_category_sweeps.py.
+CATEGORY_DEADLINE_S: Final = 60.0
 
 
 @dataclass(frozen=True)
@@ -292,6 +323,31 @@ def _page_count(payload: dict[str, object] | None) -> int:
     return len(summaries) if summaries is not None else 0
 
 
+def _one_per_key(per_page: list[list[ParsedListing]]) -> list[ParsedListing]:
+    """Keep one listing per source_listing_key across all pages of a batch.
+
+    A key can come back from two category sweeps, from the drive keyword search
+    and a sweep, or twice from one sweep when the ranking shifts between pages.
+    Two records for one key in one batch would each rewrite the listing's
+    scope and hint in persist order, and share one observed_at. The winner is
+    deterministic: the first category-sweep occurrence (sweeps in configuration
+    order, pages in offset order), else the first legacy occurrence. A sweep
+    beats the keyword search because its hint comes from the eBay category the
+    item is listed in; the unhinted legacy record would resolve it as a drive
+    (R14). Output keeps batch order. Dropping a repeat never costs absence
+    evidence: each scope's seen keys come from its own pages (delist_scopes),
+    and the pipeline excludes every key seen anywhere in the run.
+    """
+    winners: dict[str, ParsedListing] = {}
+    for listings in sorted(
+        per_page, key=lambda page: page[0].collection_scope is None if page else True
+    ):
+        for listing in listings:
+            winners.setdefault(listing.source_listing_key, listing)
+    kept = {id(listing) for listing in winners.values()}
+    return [listing for listings in per_page for listing in listings if id(listing) in kept]
+
+
 def _legacy_verdict(pages: list[RawItem], skipped: int) -> str | None:
     """None when the legacy sweep provably enumerated its result set, else why not.
 
@@ -319,7 +375,10 @@ def _legacy_verdict(pages: list[RawItem], skipped: int) -> str | None:
 def _category_verdict(sweep: CategorySweep, pages: list[RawItem], skipped: int) -> str | None:
     """None when a category sweep provably enumerated its result set, else why not.
 
-    Conservative by construction — every condition must hold:
+    Conservative by construction — every condition must hold, and a sweep of
+    more than one page is never complete however they come out (module
+    docstring: offset paging cannot prove enumeration). The multi-page checks
+    still run first so the recorded reason names the more specific defect:
       - pages are the contiguous offsets 0, PAGE_LIMIT, ... (no page skipped);
       - no parse drop in the sweep's pages;
       - no empty page after the first: Browse ends past its window with a 200,
@@ -361,6 +420,10 @@ def _category_verdict(sweep: CategorySweep, pages: list[RawItem], skipped: int) 
         return "total_unstable"
     if totals.pop() > len(ids):
         return "total_exceeds_seen"
+    if len(pages) > 1:
+        # Every check above can pass under offset-paging churn (module
+        # docstring); only a single page proves enumeration.
+        return "multi_page_unprovable"
     return None
 
 
@@ -461,20 +524,32 @@ class EbayAdapter:
         return resp
 
     async def _sweep_pages(
-        self, client: httpx.AsyncClient, base: str, sweep: CategorySweep
+        self, client: httpx.AsyncClient, base: str, sweep: CategorySweep, deadline: float
     ) -> tuple[list[RawItem], str]:
         """Fetch one category sweep's pages; return them and why paging stopped.
 
-        Pages follow `next`, never `total`, up to sweep.max_pages. A page that
-        fails (transport error, non-200, non-JSON) ends the sweep and is not
-        returned — see _PAGE_FAILED — so the run stays classified by the pages
-        it actually uses.
+        Pages follow `next`, never `total`, up to sweep.max_pages, and stop at
+        `deadline` (loop time; see CATEGORY_DEADLINE_S). A page that fails in
+        ANY way — transport error, a token re-mint that raises, non-200,
+        non-JSON — ends the sweep and is not returned (see _PAGE_FAILED), so
+        neither the run's classification nor its survival depends on a
+        category page. Only cancellation (a BaseException) propagates.
         """
+        loop = asyncio.get_running_loop()
         pages: list[RawItem] = []
         for page in range(sweep.max_pages):
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return pages, self._stopped(sweep, page, _STOP_TIME_BUDGET)
+            budget = asyncio.timeout(remaining)
             try:
-                resp = await self._search(client, base, sweep.params(page))
-            except httpx.TransportError as exc:
+                async with budget:
+                    resp = await self._search(client, base, sweep.params(page))
+            except TimeoutError as exc:
+                if budget.expired():
+                    return pages, self._stopped(sweep, page, _STOP_TIME_BUDGET)
+                return pages, self._page_failed(sweep, page, type(exc).__name__)
+            except Exception as exc:  # any category-page failure is that sweep's alone
                 return pages, self._page_failed(sweep, page, type(exc).__name__)
             if resp.status_code != 200:
                 return pages, self._page_failed(sweep, page, f"http_{resp.status_code}")
@@ -501,21 +576,28 @@ class EbayAdapter:
                 return pages, _STOP_NO_NEXT
         return pages, _STOP_PAGE_CAP
 
+    @classmethod
+    def _page_failed(cls, sweep: CategorySweep, page: int, detail: str) -> str:
+        return cls._stopped(sweep, page, f"{_PAGE_FAILED}:{detail}")
+
     @staticmethod
-    def _page_failed(sweep: CategorySweep, page: int, detail: str) -> str:
+    def _stopped(sweep: CategorySweep, page: int, reason: str) -> str:
         logger.warning(
             "ebay sweep %s stopped at page %d: %s; sweep marked incomplete",
             sweep.scope_key,
             page,
-            detail,
+            reason,
         )
-        return f"{_PAGE_FAILED}:{detail}"
+        return reason
 
     async def fetch(self) -> RawBatch:
         owns = self._client is None
         client = self._client or httpx.AsyncClient(timeout=30.0)
         base = _api_base()
+        deadline = asyncio.get_running_loop().time() + CATEGORY_DEADLINE_S
         try:
+            # The legacy GET keeps its MS-1 error semantics: an exception here
+            # still fails the run.
             resp = await self._search(client, base, SEARCH_PARAMS)
             items = [
                 RawItem(
@@ -533,7 +615,9 @@ class EbayAdapter:
             # the quota is per application, so a 429 lands here too.
             if resp.status_code == 200 and not self._heartbeat_probed:
                 for sweep in self._sweeps:
-                    pages, stops[sweep.scope_key] = await self._sweep_pages(client, base, sweep)
+                    pages, stops[sweep.scope_key] = await self._sweep_pages(
+                        client, base, sweep, deadline
+                    )
                     items.extend(pages)
             batch = RawBatch(source=self.name, fetched_at=datetime.now(UTC), items=items)
             self._last_batch, self._last_stops = batch, stops
@@ -621,27 +705,35 @@ class EbayAdapter:
         # after the sweep set changed) is dropped whole: its listings would
         # otherwise go unhinted and resolve as drives.
         self.last_parse_skipped = 0
-        out: list[ParsedListing] = []
+        per_page: list[list[ParsedListing]] = []
         for item in batch.items:
             sweep = self._page_sweep(item)
             if sweep is False:
                 self.last_parse_skipped += max(_page_count(item.payload_json), 1)
                 continue
             listings, skipped = self._parse_page(item, sweep)
-            out.extend(listings)
+            per_page.append(listings)
             self.last_parse_skipped += skipped
-        return out
+        if not self._sweeps:
+            # Legacy-only adapter: exactly the MS-1 output, repeats included.
+            return [listing for listings in per_page for listing in listings]
+        return _one_per_key(per_page)
 
     def _legacy_report(
         self, batch: RawBatch, parsed: list[ParsedListing]
     ) -> ScopeSweepReport | None:
-        keys = frozenset(p.source_listing_key for p in parsed if p.collection_scope is None)
+        # Seen keys come from the sweep's own pages, not `parsed`: parse()
+        # keeps one record per key across sweeps (_one_per_key), so a key the
+        # drive search shared with a category sweep is absent from `parsed`'s
+        # NULL-scope records although this sweep saw it.
+        pages = [item for item in batch.items if self._page_sweep(item) is None]
+        parsed_pages = [self._parse_page(p, None) for p in pages]
+        keys = frozenset(p.source_listing_key for page, _ in parsed_pages for p in page)
         if not keys:
             # Nothing to conclude from: an empty sweep would otherwise "prove"
             # that every NULL-scope eBay listing we track has ended.
             return None
-        pages = [item for item in batch.items if self._page_sweep(item) is None]
-        why_not = _legacy_verdict(pages, sum(self._parse_page(p, None)[1] for p in pages))
+        why_not = _legacy_verdict(pages, sum(skipped for _, skipped in parsed_pages))
         scope = DelistScope(
             seen_keys=keys,
             observed_at=batch.fetched_at,
@@ -698,12 +790,13 @@ class EbayAdapter:
             stop = stops.get(key)
             if not pages and stop is None:
                 continue
-            keys = frozenset(p.source_listing_key for p in parsed if p.collection_scope == key)
-            failed = stop if stop is not None and stop.startswith(_PAGE_FAILED) else None
+            parsed_pages = [self._parse_page(p, sweep) for p in pages]
+            keys = frozenset(p.source_listing_key for page, _ in parsed_pages for p in page)
+            stopped = stop if stop is not None and stop not in _CLEAN_STOPS else None
             if not keys:
-                reports.append(ScopeSweepReport(key, None, len(pages), failed or "empty"))
+                reports.append(ScopeSweepReport(key, None, len(pages), stopped or "empty"))
                 continue
-            skipped = sum(self._parse_page(p, sweep)[1] for p in pages)
+            skipped = sum(n for _, n in parsed_pages)
             why_not = _category_verdict(sweep, pages, skipped)
             scope = DelistScope(
                 seen_keys=keys,
@@ -712,7 +805,7 @@ class EbayAdapter:
                 absence_grace=DELIST_ABSENCE_GRACE,
                 scope_key=key,
             )
-            reason = failed or why_not or "complete"
+            reason = stopped or why_not or "complete"
             reports.append(ScopeSweepReport(key, scope, len(pages), reason))
         return reports
 
