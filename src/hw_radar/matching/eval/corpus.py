@@ -49,10 +49,10 @@ from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.types import Grain
 
 # The five harvestable sources. Counterpart: `acquisition.sources.ADAPTERS`, which
-# additionally registers the `demo` fixture adapter — demo listings are synthetic
-# and must never enter a precision corpus. tests/unit/test_corpus_schema.py pins
-# this set against the registry so a new connector fails loudly here rather than
-# being silently unharvestable.
+# additionally registers the fixture adapters in its FIXTURE_SOURCE_KEYS (`demo`,
+# `synthetic`) — their listings are fixtures and must never enter a precision
+# corpus. tests/unit/test_corpus_schema.py pins this set against the registry so
+# a new connector fails loudly here rather than being silently unharvestable.
 CORPUS_SOURCE_KEYS: frozenset[str] = frozenset(
     {"serverpartdeals", "goharddrive", "wd-recertified", "seagate-recertified", "ebay"}
 )

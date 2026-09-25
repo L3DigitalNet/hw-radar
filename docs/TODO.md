@@ -85,6 +85,9 @@ Instructions for AI agents:
      the synthetic `RUN_SPECS` entry stays inert (`no_run_spec`) until
      `HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT` is set, and `apify_smoke --fixture-commit <sha>`
      (default build `candidate`) starts, imports, and reports one run through the ledger.
+     Live AC-4 switch code is in too: `apify_synthetic_setup --provider local|apify` and
+     `synthetic_collect_local` (local adapter over the same pinned pages; set the commit setting
+     to the smoke's `--fixture-commit`).
   4. Operator: `apify_operator_reserve --kind build` before `apify push`/build; settle it.
   5. Owner runs `apify_ledger_claim` (it materializes the configured cycle); set
      `HW_RADAR_APIFY_ENABLED=true`; then the capability probe (R25).

@@ -207,7 +207,8 @@ def adapter_retention(adapter: SourceAdapter) -> AdapterRetention:
     run_source's own defaults are merchant_fact with no TTL, so a call site that
     forgets silently persists bounded evidence indefinitely, where the DR-001
     sweeper can never reach it. Call sites: run_heartbeat (acquisition.heartbeat),
-    and poll_source / recovery_probe_job in hw_radar.poller.service.
+    and run_local_full_lane (poll_source's and synthetic_collect_local's) /
+    recovery_probe_job in hw_radar.poller.service.
     """
     return AdapterRetention(
         retention_class=getattr(adapter, "retention_class", RetentionClass.MERCHANT_FACT),

@@ -25,8 +25,8 @@ def test_unregistered_site_raises_unknown_source_retention() -> None:
 
 
 def test_synthetic_actor_site_is_registered_as_indefinite_merchant_fact() -> None:
-    # MS2-D-42: the synthetic proof site is Actor-only, and MS2-D-33 denies a
-    # bounded class an Actor path, so it is merchant_fact with no TTL.
+    # MS2-D-42: the synthetic proof site is Actor-collected, and MS2-D-33 denies
+    # a bounded class an Actor path, so it is merchant_fact with no TTL.
     assert source_retention("synthetic") == AdapterRetention(
         retention_class=RetentionClass.MERCHANT_FACT, expires_policy=None
     )

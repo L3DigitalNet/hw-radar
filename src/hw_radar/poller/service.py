@@ -55,7 +55,9 @@ from hw_radar.catalog.models import (
     ProviderRun,
     RunKind,
     SchedulingLane,
+    ScraperRun,
     SourceConfig,
+    SourceLaneState,
 )
 from hw_radar.catalog.models.provider import ImportState
 from hw_radar.matching.resolver import CatalogResolver
@@ -82,6 +84,38 @@ RETENTION_SWEEP_SECONDS = 3_600
 
 def heartbeat() -> None:
     logger.info("poller heartbeat: alive")
+
+
+async def run_local_full_lane(
+    config: SourceConfig, lane_state: SourceLaneState
+) -> ScraperRun | None:
+    """Run a `local` source's registered adapter once on the FULL lane and apply the outcome.
+
+    The body of poll_source after admission, shared with synthetic_collect_local
+    so an operator's one-off local run is the scheduled job's own code path.
+    Returns the recorded ScraperRun, or None, running nothing, when no adapter
+    is registered for the site. Performs no admission check and never reads
+    `enabled` or collection_provider: those are each caller's gate.
+    """
+    factory = ADAPTERS.get(config.source_site.normalized_name)
+    if factory is None:
+        return None
+    # DR-001/DR-008: the adapter's own retention must ride along, or run_source
+    # defaults every persisted row to indefinite merchant_fact — eBay evidence
+    # from a scheduled poll would then outlive its 6h window forever, unreachable
+    # by the retention sweeper. tests/db/test_poller_retention_wiring.py pins it.
+    adapter = factory()
+    retention = adapter_retention(adapter)
+    run, outcome = await run_source(
+        adapter,
+        CatalogResolver(),
+        retention_class=retention.retention_class,
+        expires_policy=retention.expires_policy,
+    )
+    await sync_to_async(apply_run_outcome)(
+        config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
+    )
+    return run
 
 
 async def poll_source(site_key: str, registry: BucketRegistry, scheduler: AsyncIOScheduler) -> None:
@@ -111,26 +145,10 @@ async def poll_source(site_key: str, registry: BucketRegistry, scheduler: AsyncI
         result = await start_provider_run(config, run_kind=RunKind.FULL)
         logger.info("source %s apify start: %s %s", site_key, result.status, result.reason)
         return
-    factory = ADAPTERS.get(site_key)
-    if factory is None:
+    interval_before = lane_state.current_interval_s
+    if await run_local_full_lane(config, lane_state) is None:
         logger.warning("source %s enabled but has no adapter registered", site_key)
         return
-    # DR-001/DR-008: the adapter's own retention must ride along, or run_source
-    # defaults every persisted row to indefinite merchant_fact — eBay evidence
-    # from a scheduled poll would then outlive its 6h window forever, unreachable
-    # by the retention sweeper. tests/db/test_poller_retention_wiring.py pins it.
-    adapter = factory()
-    retention = adapter_retention(adapter)
-    _run, outcome = await run_source(
-        adapter,
-        CatalogResolver(),
-        retention_class=retention.retention_class,
-        expires_policy=retention.expires_policy,
-    )
-    interval_before = lane_state.current_interval_s
-    await sync_to_async(apply_run_outcome)(
-        config, outcome, lane_state=lane_state, now=timezone.now(), rand=random.random
-    )
     if lane_state.current_interval_s != interval_before:
         job: Job | None = scheduler.get_job(f"poll-{site_key}")
         if job is not None:

@@ -1,13 +1,15 @@
 """The synthetic proof site's identity and run input (MS2-D-42, -43; F5a).
 
-The synthetic site is the Actor-only proof source: hw-radar-synthetic-collector
+The synthetic site is the Actor proof source: hw-radar-synthetic-collector
 fetches committed fixture pages from the public repository at a pinned commit,
 so a run exercises the whole paid path (admission, start, poll, import,
 cleanup, settlement) without touching a merchant. This module owns what that
 run asks for; acquisition.apify.jobs wraps it into the site's ActorRunSpec and
 registers it in RUN_SPECS, and the apify_synthetic_setup and apify_smoke
 commands use the same constants, so the site row, the spec, and the smoke
-cannot disagree on the key or the scope.
+cannot disagree on the key or the scope. The site's local adapter
+(acquisition.sources.synthetic, for the AC-4 provider switch) emits its rows
+with the same key, hint, scope, and fixture paths.
 
 run_input returns the unvalidated wire (camelCase) dict: validation belongs to
 SyntheticCollectorInput, which start_provider_run applies before anything is

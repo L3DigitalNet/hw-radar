@@ -523,7 +523,7 @@ def _int(value: object) -> int:
 def _apply_outcome(row: ProviderRun, outcome: RunOutcome, rand: Callable[[], float]) -> None:
     config = SourceConfig.objects.filter(source_site=row.source_site).first()
     if config is None:
-        # Sites without a SourceConfig (the Actor-only synthetic site before
+        # Sites without a SourceConfig (the synthetic site before
         # F5a seeds one) have no lifecycle to advance.
         return
     lane = config.lane_state(SchedulingLane.FULL)

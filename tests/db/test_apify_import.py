@@ -23,19 +23,23 @@ import json
 from collections.abc import Coroutine, Iterator
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from io import StringIO
 from pathlib import Path
 from typing import Any, Final, cast
 
 import httpx
 import pytest
 from django.conf import settings
+from django.core.management import call_command
 from django.db import connection
 from django.test import override_settings
 from django.utils import timezone
 from ordering_support import listing, observe, record, sweep
+from test_synthetic_local import COMMIT as FIXTURE_COMMIT
+from test_synthetic_local import FakeRaw
 
-from hw_radar.acquisition import pipeline
-from hw_radar.acquisition.apify import importer
+from hw_radar.acquisition import pipeline, sources
+from hw_radar.acquisition.apify import importer, synthetic
 from hw_radar.acquisition.apify.client import ApifyClient
 from hw_radar.acquisition.apify.contract import (
     DATASET_PAGE_ENVELOPE_BYTES,
@@ -62,6 +66,7 @@ from hw_radar.acquisition.pipeline import MEDIAN_BODY_WINDOW, run_collection, ru
 from hw_radar.acquisition.providers import LocalCollectionProvider
 from hw_radar.acquisition.retention_policy import UnknownSourceRetention, source_retention
 from hw_radar.acquisition.scheduling.apply import apply_run_outcome
+from hw_radar.acquisition.sources.synthetic import SyntheticAdapter
 from hw_radar.catalog.models import (
     ApifyBudgetLatch,
     Category,
@@ -1470,6 +1475,101 @@ def test_provider_switch_preserves_identity_history_and_watch_state(
     assert snapshot_keys == {
         (pk, at) for pk in listing_pks.values() for at in (local_before, started, local_after)
     }
+
+
+def _site_spec_fixture(started: datetime) -> dict[str, Any]:
+    # The complete fixture as the site's own spec asks for it: the `drive` hint
+    # and the site's scope (acquisition.apify.synthetic), in the rows, the
+    # admission, and the OUTPUT echo alike. The rows' url and listing fields
+    # stay the Actor's own output for the committed pages.
+    fixture = copy.deepcopy(_fixture("complete"))
+    for item in (
+        *fixture["datasetItems"],
+        fixture["admitted"]["queryScope"],
+        fixture["output"]["queryScope"],
+    ):
+        item["categoryHint"] = synthetic.CATEGORY_HINT
+        item["collectionScope"] = synthetic.COLLECTION_SCOPE
+    fixture["startedAt"] = started.isoformat()
+    return fixture
+
+
+def _switch_to(provider: str) -> None:
+    call_command("apify_synthetic_setup", "--provider", provider, stdout=StringIO())
+
+
+def test_live_switch_local_actor_local_over_the_same_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The F5a live AC-4 sequence, offline: the real setup and local-collection
+    # commands with the registered SyntheticAdapter over the Actor's committed
+    # pages, and a real import of the Actor's own output for those pages.
+    raw = FakeRaw()
+
+    def adapter() -> SyntheticAdapter:
+        return SyntheticAdapter(client=httpx.AsyncClient(transport=httpx.MockTransport(raw)))
+
+    monkeypatch.setitem(sources.ADAPTERS, synthetic.SITE_KEY, adapter)
+    call_command("apify_synthetic_setup", stdout=StringIO())
+    site = SourceSite.objects.get(normalized_name=synthetic.SITE_KEY)
+    watch = _drive_watch()
+
+    with override_settings(HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT=FIXTURE_COMMIT):
+        # 1. Local.
+        _switch_to("local")
+        call_command("synthetic_collect_local", stdout=StringIO())
+        listings = Listing.objects.filter(source_site=site)
+        listing_pks = dict(listings.values_list("source_listing_key", "pk"))
+        local_urls = dict(listings.values_list("source_listing_key", "canonical_url"))
+        evaluation_pks = set(
+            WatchEvaluation.objects.filter(watch=watch).values_list("pk", flat=True)
+        )
+        # 2. Actor: the import of the Actor's rows for the same pages, started
+        # after the local fetch so its observation is the current one.
+        _switch_to("apify")
+        fixture = _site_spec_fixture(timezone.now())
+        row = _provider_run(site, fixture)
+        assert _importer_run(row, _fake(fixture)) is ImportState.FINALIZED
+        # 3. Local again.
+        _switch_to("local")
+        call_command("synthetic_collect_local", stdout=StringIO())
+
+    row.refresh_from_db()
+    assert row.completeness == RunCompleteness.COMPLETE
+    assert row.stage_detail["listings_delisted"] == 0
+    actor_rows = {item["sourceListingKey"]: item for item in fixture["datasetItems"]}
+    # Same canonical identities from both providers: the same keys, and the
+    # local URL is byte for byte the Actor's.
+    assert sorted(listing_pks) == sorted(actor_rows)
+    assert local_urls == {key: item["url"] for key, item in actor_rows.items()}
+    listings = Listing.objects.filter(source_site=site)
+    assert dict(listings.values_list("source_listing_key", "pk")) == listing_pks
+    assert dict(listings.values_list("source_listing_key", "canonical_url")) == local_urls
+    assert all(current.delisted_at is None for current in listings)
+    assert {current.collection_scope for current in listings} == {synthetic.COLLECTION_SCOPE}
+    # Appended history: one snapshot per run on the one listing per key, the
+    # Actor's between the two local ones, all at the Actor's price.
+    started = datetime.fromisoformat(fixture["startedAt"])
+    local_times: set[datetime] = set()
+    for key, pk in listing_pks.items():
+        history = list(
+            OfferSnapshot.objects.filter(listing__pk=pk)
+            .order_by("observed_at")
+            .values_list("observed_at", "item_price")
+        )
+        assert len(history) == 3, key
+        assert history[1][0] == started, key
+        assert {price for _, price in history} == {Decimal(actor_rows[key]["price"])}, key
+        local_times.update((history[0][0], history[2][0]))
+    assert len(local_times) == 2
+    # Watch state survives both switches, re-bound to the newest local observation.
+    evaluations = WatchEvaluation.objects.filter(watch=watch)
+    assert set(evaluations.values_list("pk", flat=True)) == evaluation_pks
+    assert len(evaluation_pks) == len(listing_pks)
+    assert {e.snapshot_observed_at for e in evaluations} == {max(local_times)}
+    config = SourceConfig.objects.get(source_site=site)
+    assert (config.collection_provider, config.enabled) == (ProviderKind.LOCAL, False)
+    assert len(raw.requests) == 4
 
 
 # ── D8: truncation and emptiness (AC-5, ADR 0021 :100) ────────────────────────

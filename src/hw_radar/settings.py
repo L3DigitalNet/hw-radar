@@ -31,8 +31,9 @@ Environment contract (see .env.example for dev values):
                             (default "hw-radar-synthetic-collector", MS2-D-38)
   HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT
                             optional; the 40-hex commit whose fixture pages the
-                            synthetic proof site's scheduled spec pins (MS2-D-42).
-                            Unset (the default) registers no spec for the site
+                            synthetic proof site's scheduled spec and its local
+                            adapter pin (MS2-D-42). Unset (the default) registers
+                            no spec for the site and refuses every local fetch
   HW_RADAR_APIFY_STORAGE_CLEANUP_MAX / HW_RADAR_APIFY_IMPORT_MARGIN
                             optional, in seconds; the remote-storage deadline after
                             admission (default 86400) and the import time a start's
@@ -235,7 +236,8 @@ HW_RADAR_APIFY_ACTOR_NAME = os.environ.get(
 # `no_run_spec` exactly as an unregistered one. A present but malformed value is
 # passed through so the start refuses it loudly as `invalid_input` rather than
 # silently looking unconfigured. apify_smoke takes its commit per invocation and
-# ignores this setting.
+# ignores this setting. The local synthetic adapter (acquisition.sources.
+# synthetic) reads it too, and refuses to fetch while it is empty or malformed.
 HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT = os.environ.get(
     "HW_RADAR_APIFY_SYNTHETIC_FIXTURE_COMMIT", ""
 ).strip()
