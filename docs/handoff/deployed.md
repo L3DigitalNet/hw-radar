@@ -1,18 +1,19 @@
 # Deployed State
 
-Last updated: 2026-09-25 (release `508b1f0`)
+Last updated: 2026-09-25 (release `c2adae0`)
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `508b1f0` (PR #35:
-  MS-2 Slices D/E, provider runs and the Apify spend ledger, F5a tooling, F-01),
-  run 36194557063, approved 2026-09-25T22:10Z. Earlier: `531916e` (PR #34, run
-  36122297450), `96ce005` (run 36116766253), and `ac8d608` (run 36078378772),
-  which shipped migrations 0018-0020.
-- Host-verified after `508b1f0`: `RELEASE` and `/healthz` (local + public)
-  report `508b1f0`, `database: true`; login 200; public
-  `/static/admin/css/base.css` 200; web, poller, bao-agent, nginx, PostgreSQL
-  active, 0 restarts; no warning-level journal entries.
+- Deploys run from `main` via the Deploy workflow. Latest: `c2adae0` (PR #36:
+  MS-2 Slice F, eBay category sweeps, `pilot_report`, goHardDrive and Scrapy DNS
+  fixes; no migrations), run 36201686493, deployed 2026-09-25T23:47Z. A
+  docs-only follow-up merge may move `RELEASE` past it with identical code.
+  Earlier: `508b1f0` (PR #35, Slices D/E, run 36194557063), `531916e` (PR #34),
+  and `ac8d608` (run 36078378772), which shipped migrations 0018-0020.
+- Host-verified after `c2adae0`: `RELEASE` and `/healthz` (local + public)
+  report `c2adae0`, `database: true`; login 200; public
+  `/static/admin/css/base.css` 200; web and poller active, 0 restarts; no
+  warning-level journal entries; catalog/listing row counts unchanged.
 - Migrations 0021 (`provider_runs`) and 0022 (`apify_spend_ledger`) applied
   2026-09-25T22:10Z; both are additive. `migrate --plan` empty,
   `makemigrations --check` clean, pre/post catalog row counts identical, new
@@ -26,7 +27,8 @@ Last updated: 2026-09-25 (release `508b1f0`)
   environment's correction monitoring closes (2026-10-02 ~21:09Z) and
   `apify_ledger_handoff` runs.
 - All `SourceConfig` rows still `enabled=False` (provider `local`); the poller
-  logged `poller started (0 source job(s))`; no `scraper_runs` rows.
+  logged `poller started (0 source job(s))` at 23:47Z; no `scraper_runs` rows, so
+  the new eBay category sweeps are deployed but have never run.
 - Static files: `STATIC_ROOT` `/var/lib/hw-radar/staticfiles` (deploy-owned,
   0755/0644, no `hwradar` link); the deploy smoke fetches `base.css` through
   nginx. [Bug 001](bugs/001-nginx-static-403.md) is fixed and verified.

@@ -38,7 +38,7 @@
   +$0.00527 account usage for the whole proof. Evidence: `docs/evidence/2026-09-25-f5a-synthetic-proof.md`.
 - **F-01 (owner-approved):** `HW_RADAR_APIFY_MAX_KV_WRITES` is 3; admission denies values below the
   two-write floor (`f8b8067`).
-- **F1–F4 on `dev` (2026-09-25, not deployed):** eBay GPU/RAM/CPU category sweeps with per-scope
+- **F1–F4 deployed 2026-09-25 (`c2adae0`, PR #36; sources off, so nothing runs):** eBay GPU/RAM/CPU category sweeps with per-scope
   absence; only single-page sweeps prove complete; category IDs and the 5,000/day quota re-verified
   live. F2: no change (ServerPartDeals' terms prohibit it). `pilot_report` added; the scratch-DB pilot
   found 0% condition coverage, unseeded category catalogs, and two connector defects (fixed). F4:

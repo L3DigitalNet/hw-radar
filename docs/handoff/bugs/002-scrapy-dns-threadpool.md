@@ -1,6 +1,6 @@
 # Bug 002: Scrapy connectors time out on every real host
 
-Status: fixed on `dev` 2026-09-25 (`b9e01a1`); not yet deployed. No production impact: every
+Status: fixed 2026-09-25 (`b9e01a1`); deployed in `c2adae0`. No production impact: every
 source is disabled, so no Scrapy connector has ever run in production.
 Found: 2026-09-25, during the MS-1e live harvest (goHardDrive harvested 0 listings).
 Severity: high for the goHardDrive source, the only Scrapy connector with a real host. It could
