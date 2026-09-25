@@ -90,3 +90,26 @@ jobs:
             echo "healthz did not become ready within ~30s" >&2
             exit 1
           '
+
+      - name: Static smoke test (through CT nginx)
+        # /healthz goes straight to gunicorn and never exercises nginx static
+        # serving, which is how bug 001 (403 on /static/) shipped green. Fetch a
+        # collected Django admin asset through the CT nginx instead. The Host
+        # header is read from the rsynced nginx conf (its server_name) rather than
+        # repeated here; without it the request lands on nginx's default site.
+        # tests/unit/test_static_root_contract.py pins the conf shape and asset.
+        run: |
+          ssh -o StrictHostKeyChecking=accept-new "$DEPLOY_USER@$DEPLOY_HOST" '
+            conf=/opt/hw-radar/app/deploy/nginx/hw-radar.conf
+            host=$(awk "\$1 == \"server_name\" { sub(/;\$/, \"\", \$2); print \$2; exit }" "$conf")
+            if [ -z "$host" ]; then echo "no server_name in $conf" >&2; exit 1; fi
+            asset=/static/admin/css/base.css
+            code=000
+            for _ in $(seq 1 5); do
+              code=$(curl -sS -o /dev/null -w "%{http_code}" -H "Host: $host" "http://127.0.0.1$asset") || code=000
+              if [ "$code" = 200 ]; then echo "static OK: $asset"; exit 0; fi
+              sleep 2
+            done
+            echo "nginx returned HTTP $code for $asset (expected 200)" >&2
+            exit 1
+          '

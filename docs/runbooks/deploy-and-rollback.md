@@ -5,7 +5,7 @@
 1. Commit to `dev`; CI (`check`) runs on push.
 2. Open/merge the `dev -> main` PR. CI `check` + `dependency-review` must be green.
 3. The merge triggers `deploy.yml`: gate re-runs, then the deploy job waits for the production Environment reviewer approval.
-4. Approve -> ephemeral tailnet join -> rsync -> on-CT `uv sync --frozen --no-dev` -> `migrate` -> `collectstatic` -> restart -> healthz smoke test.
+4. Approve -> ephemeral tailnet join -> rsync -> on-CT `uv sync --frozen --no-dev` -> `migrate` -> `collectstatic` into `/var/lib/hw-radar/staticfiles` (preflight fails the deploy if that directory is not provisioned) -> restart -> healthz smoke test -> static smoke test (`/static/admin/css/base.css` through the CT nginx must return 200).
 
 ## Rollback
 

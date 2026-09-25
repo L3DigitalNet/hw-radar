@@ -8,7 +8,9 @@ Environment contract (see .env.example for dev values):
   HW_RADAR_ALLOWED_HOSTS    REQUIRED in production (comma-separated public host(s));
                             no deployment host is hardcoded (public repo). CSRF
                             trusted origins are derived from it.
-  HW_RADAR_STATIC_ROOT      collectstatic target (prod: served by nginx)
+  HW_RADAR_STATIC_ROOT      optional collectstatic target override; defaults to
+                            PRODUCTION_STATIC_ROOT in production (served by nginx)
+                            and BASE_DIR/staticfiles otherwise
 Production values arrive via the bao-agent tmpfs render (systemd
 EnvironmentFile=/run/bao-agent/hw-radar.env) - never a plaintext file at rest.
 """
@@ -125,7 +127,21 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = "/static/"
-STATIC_ROOT = Path(os.environ.get("HW_RADAR_STATIC_ROOT", BASE_DIR / "staticfiles"))
+# Production collects static files OUTSIDE /opt/hw-radar (bug 001). The app root
+# is hwradar:hwradar 0750 and its group can read the bao-agent secret render, so
+# the two ways to let nginx (www-data) into it — joining group hwradar, or ACLs
+# on the app root — would also hand nginx the application secrets. This path is
+# deploy-owned 0755 with no hwradar link. Cross-file contract: must equal the
+# `alias` in deploy/nginx/hw-radar.conf and the directory created in
+# docs/runbooks/provisioning.md; deploy/deploy-remote.sh reads the effective
+# value from these settings. tests/unit/test_static_root_contract.py pins them.
+PRODUCTION_STATIC_ROOT = Path("/var/lib/hw-radar/staticfiles")
+STATIC_ROOT = Path(
+    os.environ.get(
+        "HW_RADAR_STATIC_ROOT",
+        PRODUCTION_STATIC_ROOT if IS_PRODUCTION else BASE_DIR / "staticfiles",
+    )
+)
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
