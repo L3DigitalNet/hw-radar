@@ -22,14 +22,17 @@ COMMANDS: tuple[tuple[str, ...], ...] = (
     ("uv", "run", "basedpyright"),
     ("uv", "run", "coverage", "run", "-m", "pytest"),
     ("uv", "run", "coverage", "report"),
-    ("uv", "run", "pip-audit"),
+    # --skip-editable: the project itself is installed editable and is not on
+    # PyPI; auditing it only asks PyPI about an unpublished name, which fails the
+    # gate whenever PyPI answers that lookup with 5xx instead of 404.
+    ("uv", "run", "pip-audit", "--skip-editable"),
 )
 
 ACTOR_CHECKS: tuple[tuple[str, ...], ...] = (
     ("basedpyright",),
     ("coverage", "run", "-m", "pytest"),
     ("coverage", "report"),
-    ("pip-audit",),
+    ("pip-audit", "--skip-editable"),
 )
 
 

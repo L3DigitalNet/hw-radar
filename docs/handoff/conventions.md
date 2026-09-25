@@ -1,6 +1,6 @@
 # Conventions
 
-Last updated: 2026-07-06
+Last updated: 2026-09-25
 
 ## Quick Reference
 
@@ -16,6 +16,7 @@ Last updated: 2026-07-06
 | Handoff | Keep `state.md` short; route durable facts by lifetime. |
 | Test fixtures | Never reuse migration-seeded unique keys (see #9). |
 | TODO upkeep | When working from `TODO.md`, update that item in the same change (see #10). |
+| Signed commits | `dev` and `main` both require verified signatures; never lift either rule without fresh owner approval (see #11). |
 
 ## Numbered Conventions
 
@@ -51,3 +52,12 @@ Last updated: 2026-07-06
     work once it is reflected in `STATUS.md`, narrow partially completed work,
     and add follow-ups discovered during implementation or review. Preserve the
     separation between user-owned and agent-tracked sections.
+
+## Branch Protection Conventions
+
+11. **Both long-lived branches require verified signatures.** Since 2026-09-25
+    `dev` has classic protection with `required_signatures`, `enforce_admins`,
+    and no force-push or deletion; `main` keeps its stricter rule set.
+    Dependabot commits and GitHub merge/update-branch commits are verified, so
+    automation still merges. Version-update PRs target `dev`; security PRs
+    still open on `main` and are landed on `dev` by signed cherry-pick.

@@ -32,9 +32,10 @@ workflow, using hybrid acquisition: inexpensive direct/local collectors where th
 fit and self-owned private Apify Actors selectively under a hard **$20/month**
 Hardware Radar Apify ceiling.
 
-**The multi-category watch core is under way and not yet deployed:** GPU/RAM/CPU
-first-class categories, category-specific `match | no_match | unknown`
-requirement evaluation, and Hardware Radar's first self-owned Apify Actor project
+**The multi-category watch core is under way.** Its first slices are deployed
+with every marketplace source still disabled: GPU/RAM/CPU first-class
+categories, category-specific `match | no_match | unknown` requirement
+evaluation, and Hardware Radar's first self-owned Apify Actor project
 (`actors/hw-radar-synthetic-collector`; nothing pushed to or run on Apify yet).
 
 ## Documentation
@@ -65,7 +66,7 @@ The verification gate needs the dev database running. Actor projects under
 `actors/<name>/` are separate uv projects with their own lockfiles;
 `scripts.check` gates them too.
 
-**Branching:** `main` is protected and advances only via a pull request from `dev`. `dev` is the long-lived working branch — **commit and push to it directly** (no PR needed); use a short-lived `feature/*` branch only when you want isolation. To update `main`, open a PR from `dev` and **merge with a merge commit** (not squash — keeps `dev` in sync with `main` and preserves history); the PR must pass CI and carry signed commits.
+**Branching:** `main` is protected and advances only via a pull request from `dev`. `dev` is the long-lived working branch — **commit and push to it directly** (no PR needed); use a short-lived `feature/*` branch only when you want isolation. To update `main`, open a PR from `dev` and **merge with a merge commit** (not squash — keeps `dev` in sync with `main` and preserves history); the PR must pass CI and carry signed commits. Both `dev` and `main` require GitHub-verified signatures, so an unsigned commit is rejected before it can block a later `dev` → `main` merge. Dependabot opens version-update PRs against `dev`.
 
 ## Decided stack
 

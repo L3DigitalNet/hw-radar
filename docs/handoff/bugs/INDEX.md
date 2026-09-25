@@ -1,3 +1,5 @@
 # Bug Records
 
-No durable handoff bug records yet.
+| ID | Title | Status |
+| --- | --- | --- |
+| [001](001-nginx-static-403.md) | nginx cannot serve `/static/` (403) in production | Open, owner decision |

@@ -1,31 +1,29 @@
 # Deployed State
 
-Last updated: 2026-09-06
+Last updated: 2026-09-25
 
 ## Current Deployment
 
-- The service deploys from `main` via the GitHub Actions Deploy workflow.
-  Latest confirmed deployed increment: PR #22 dev→main merge commit
-  `f3303b1`, deploy run 34056023371. Verified 2026-09-06 via `/healthz`,
-  reporting release `f3303b1`, `database: true`.
-- Migrations 0014-0017 are now applied in production: 0014 (partial
-  `expires_at` indexes), 0015 (`SourceLaneState.continuous_since` / CR-004
-  grace), 0016 (identity partial indexes), 0017 (`listing_derived_alias`
-  class plus the DR-001 CHECK pair with backfill).
-- Production runtime uses the deployment assets under `deploy/` and the Django
-  settings in `src/hw_radar/settings.py`; the app exposes `/healthz` for
-  release and database health checks.
-- The Deploy workflow's GitHub production environment requires a manual
-  reviewer approval before it runs on each push to `main`. An unapproved run
-  sits pending and dies at GitHub's 30-day cap; this caused production to go
-  stale at MS-1b from 2026-07-05 until PR #20's run succeeded only after an
-  owner-authorized approval. Every future merge to `main` needs the same
-  approval or the deploy will not run.
-- The approval can be given via the `pending_deployments` API by the owner's
-  account; PR #22's run 34056023371 was approved that way, on the owner's
-  ratification.
-- PR #15's deploy run separately failed the pip-audit gate on `cryptography`
-  49.0.0 (PYSEC-2026-3552); fixed this session by upgrading to 50.0.0.
+- Deploys run from `main` via the Deploy workflow. Latest: `ac8d608` (PR #26,
+  includes PR #25), run 36078378772, succeeded 2026-09-25T08:50:08Z. The
+  superseded `c728613` run 36077354704 was cancelled unapproved.
+- Host-verified after the run: `RELEASE` and `/healthz` (local + public) report
+  `ac8d608`, `database: true`; login 200; web, poller, bao-agent, nginx, and
+  PostgreSQL active, 0 restarts; no warning-level journal entries.
+- Migrations 0018-0020 applied 2026-09-25T08:50Z: spec satellites, category
+  rows (`gpu`, `ram`, `cpu`, `nic`, `hba`, `motherboard`, `server` beside
+  `drive`), watch requirements/`watch_evaluation`. `migrate --plan` empty and
+  `makemigrations --check` clean. Pre/post row counts match; new tables empty.
+- All `SourceConfig` rows still `enabled=False`; the poller logged
+  `poller started (0 source job(s))`; no `scraper_runs` rows; the env render
+  has no Apify variable (names checked only; OQ25), so no Actor run can start.
+- Pre-existing anomaly: nginx 403 on `/static/` since 2026-07-05 (admin CSS
+  only) — [bug 001](bugs/001-nginx-static-403.md).
+- Runtime assets live under `deploy/`; `/healthz` reports release and DB health.
+- The production environment needs a reviewer approval per push to `main`; an
+  unapproved run dies at GitHub's 30-day cap (production sat stale at MS-1b
+  2026-07-05 until PR #20). The owner's account can approve via the
+  `pending_deployments` API (runs 34056023371, 36078378772).
 
 ## Public-Safe Boundary
 
