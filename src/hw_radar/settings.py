@@ -456,6 +456,16 @@ HW_RADAR_APIFY_POST_RUN_COST_MODE = _env_choice(
 HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT = _env_choice(
     "HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT", "bound", ("bound", "stable_reads")
 )
+# How long an admitted runtime reservation may stay without a provider_run
+# before the apify-poll tick releases it (reconcile.release_unattached_reservations).
+# The window it covers, ledger.reserve's commit to jobs._create_run's, is a
+# few local steps with no Apify call; 900 s (an assumption) is far above it,
+# so a slow but live start is not released under itself. Correctness never
+# rests on the grace: _create_run re-checks the row under the budget lock and
+# refuses a released one. Invalid means never release (the row keeps counting).
+HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S = _env_int(
+    "HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S", 900
+)
 # Per-environment ledger identity (MS2-D-45); no default, never a secret.
 HW_RADAR_APIFY_LEDGER_ID = os.environ.get("HW_RADAR_APIFY_LEDGER_ID", "").strip()
 

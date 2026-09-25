@@ -196,6 +196,7 @@ _BUDGET_DEFAULTS: dict[str, object] = {
     "HW_RADAR_APIFY_CORRECTION_WINDOW_S": 604800,
     "HW_RADAR_APIFY_POST_RUN_COST_MODE": "bound",
     "HW_RADAR_APIFY_RUN_USAGE_SETTLEMENT": "bound",
+    "HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S": 900,
     "HW_RADAR_APIFY_LEDGER_ID": "",
 }
 
@@ -251,9 +252,12 @@ def test_invalid_budget_int_parses_to_none(monkeypatch: pytest.MonkeyPatch, raw:
         monkeypatch,
         HW_RADAR_APIFY_MAX_CORRECTION_READS=raw,
         HW_RADAR_APIFY_STORAGE_MAX_LIFETIME=raw,
+        HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S=raw,
     )
     assert loaded.HW_RADAR_APIFY_MAX_CORRECTION_READS is None
     assert loaded.HW_RADAR_APIFY_STORAGE_MAX_LIFETIME is None
+    # None never releases (reconcile.release_unattached_reservations).
+    assert loaded.HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S is None
 
 
 @pytest.mark.parametrize("raw", ["", "2026-09-32", "yes"])

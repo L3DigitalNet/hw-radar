@@ -5737,6 +5737,31 @@ the then-current code. D-prep (D1, D3) is not gated.
     overrides `fresh`/`stale`. Bootstrap order: the first enabled start
     discovers the cycle and is denied `ledger_authority_missing`, after which
     `apify_ledger_claim` can claim it.
+  - Crash windows closed 2026-09-25 (verifier findings d1, d2). (d2) The
+    `orphaned_start` and `delete_attempts_exhausted` trips now commit in the
+    same transaction as the row mark: `storage_cleanup._begin` and `_finish`
+    take the budget lock before the provider_run lock. This supersedes E4's
+    "each after the row transaction commits" for these two reasons. Before,
+    selectors 2 and 3 dropped the marked row, so a process loss between the
+    two commits lost the trip for good. Every tick also runs
+    `storage_cleanup.trip_stranded_latches`. It trips orphaned rows,
+    `delete_failed` rows, and rows still `retained` at the attempt cap, but
+    only when that (reason, run) has never had a trip, open or cleared. The
+    owner's reset therefore stays final (R21). (d1) Every tick runs
+    `reconcile.release_unattached_reservations`. It releases runtime
+    reservations still `reserved` with no provider_run after
+    `HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S` (default 900). A
+    released row gets `actual_usd` 0 and `reason` `unattached_reservation`;
+    operator rows are never released. This complies with MS2-D-32's
+    `released` ("a start that never ran") and MS2-D-34's "none is released
+    while charge-producing work remains". By MS2-D-33 row-before-start, the
+    start request is sent only after `_create_run` commits the attached run,
+    so such a row never reached Apify. `_create_run` attaches under the
+    budget lock only a reservation that is still open and unattached.
+    Otherwise it rolls back and the start returns `denied`
+    `reservation_not_open` without sending anything. The spend report lists
+    released rows under "Released rows". Tests:
+    `test_apify_crash_windows.py`.
 - **E6 — Attribution report (AC-7).** Revision 5: `apify_spend_report` prints,
   per billing cycle (the authoritative view): the cycle bounds, the project
   allocation, consumed finalized usage, outstanding reservations, remaining

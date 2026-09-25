@@ -303,6 +303,10 @@ class StartRefusal(StrEnum):
     SCOPE_RUN_OUTSTANDING = "scope_run_outstanding"
 
 
+# The DENIED reason when _create_run finds its reservation already closed.
+RESERVATION_NOT_OPEN: Final = "reservation_not_open"
+
+
 @dataclass(frozen=True, slots=True)
 class StartResult:
     status: StartStatus
@@ -448,25 +452,32 @@ async def start_provider_run(
         query_scope = QueryScope.model_validate(
             {name: getattr(validated, name) for name in QueryScope.model_fields}
         ).model_dump(mode="json")
-        row = await sync_to_async(_create_run)(
-            {
-                "provider_kind": ProviderKind.APIFY,
-                "source_site": config.source_site,
-                "actor_ref": actor_id,
-                "contract_schema_version": RUN_SCHEMA_VERSION,
-                "query_scope": query_scope,
-                "scope_key": validated.collection_scope,
-                "memory_mb": spec.memory_mb,
-                "timeout_s": spec.timeout_s,
-                "max_items": validated.max_items,
-                "max_pages": validated.max_pages,
-                "admission_class": admission_class,
-                "run_kind": run_kind,
-                "admitted_at": admitted_at,
-                "storage_cleanup_due_at": due_at,
-            },
-            decision.reservation_id,
-        )
+        try:
+            row = await sync_to_async(_create_run)(
+                {
+                    "provider_kind": ProviderKind.APIFY,
+                    "source_site": config.source_site,
+                    "actor_ref": actor_id,
+                    "contract_schema_version": RUN_SCHEMA_VERSION,
+                    "query_scope": query_scope,
+                    "scope_key": validated.collection_scope,
+                    "memory_mb": spec.memory_mb,
+                    "timeout_s": spec.timeout_s,
+                    "max_items": validated.max_items,
+                    "max_pages": validated.max_pages,
+                    "admission_class": admission_class,
+                    "run_kind": run_kind,
+                    "admitted_at": admitted_at,
+                    "storage_cleanup_due_at": due_at,
+                },
+                decision.reservation_id,
+            )
+        except ReservationNotOpen as exc:
+            # Refused before the start request: the reservation was released
+            # (or otherwise closed) under this start, so a run started now
+            # would charge against nothing in the ledger.
+            logger.error("apify start for %s refused: %s", site_key, exc)
+            return StartResult(StartStatus.DENIED, RESERVATION_NOT_OPEN)
         try:
             run = await client.start_run(
                 actor_id,
@@ -529,16 +540,26 @@ def _has_outstanding_full_run(config: SourceConfig, scope_key: str) -> bool:
     )
 
 
+class ReservationNotOpen(RuntimeError):
+    """The start's reservation is no longer `reserved` and unattached; nothing was created."""
+
+
 def _create_run(fields: dict[str, object], reservation_id: int | None) -> ProviderRun:
     """Create the provider_run and attach it to its reservation in one commit.
 
     One transaction, so a crash can never leave a run whose spend no ledger
     row tracks: selector 2 reconciles only runs that have a reservation, and
     an unattached run would be imported and cleaned up but never settled. A
-    crash before this commit leaves the admitted reservation unattached,
-    which fails closed: it counts at its estimate in every cycle and the
-    spend report lists it `no_provider_run`. Lock order (MS2-D-35): the
-    budget lock, then the new provider_run, then the reservation row.
+    crash before this commit leaves the admitted reservation unattached: it
+    counts at its estimate (the spend report lists it `no_provider_run`)
+    until reconcile.release_unattached_reservations releases it after the
+    grace. Lock order (MS2-D-35): the budget lock, then the new provider_run,
+    then the reservation row.
+
+    Raises ReservationNotOpen, creating nothing, when the reservation is not
+    this start's own open one, e.g. released by that unit because this start
+    stalled past the grace. The check is the filtered attach under the budget
+    lock, which the release also holds, so the two cannot interleave.
     """
     with transaction.atomic():
         if reservation_id is not None:
@@ -553,7 +574,7 @@ def _create_run(fields: dict[str, object], reservation_id: int | None) -> Provid
             if attached != 1:
                 # Rolls the row back: a run is never started against a
                 # reservation that is not this start's own open one.
-                raise RuntimeError(f"reservation {reservation_id} is not open and unattached")
+                raise ReservationNotOpen(f"reservation {reservation_id} is not open and unattached")
     return row
 
 
@@ -721,7 +742,9 @@ def _storage_work_left() -> Q:
     A row at the delete-attempt cap (left `delete_failed`, MS2-D-32) or marked
     `orphaned_start` (nothing to abort or delete, MS2-D-33) is excluded:
     re-selecting it would only re-log the same terminal state every tick. Both
-    stay visible to reporting and to E's latch through their own columns.
+    stay visible to reporting through their own columns; their latch trip
+    commits with the mark (storage_cleanup), and trip_stranded_latches
+    re-detects one that never did, so dropping them here cannot lose it.
     """
     return (
         ~Q(storage_state=StorageState.DELETED)
@@ -794,6 +817,11 @@ class TickReport:
     reconciled: list[int] = field(default_factory=list)
     builds: list[int] = field(default_factory=list)
     monitored: list[int] = field(default_factory=list)
+    # The two ledger sweeps that precede the selectors: reservation ids
+    # released as unattached, and provider_run ids whose lost latch trip was
+    # re-detected and tripped.
+    released: list[int] = field(default_factory=list)
+    latch_repaired: list[int] = field(default_factory=list)
     failed: list[int] = field(default_factory=list)
     error: str = ""
 
@@ -987,6 +1015,13 @@ async def apify_poll_tick(
     Pending selector-4 markers left by an earlier process are NOT resolved
     here but once at poller start (poller.service.run): a marker this
     process stamped must stay pending while its read is in flight.
+
+    Before the selectors, two database-only sweeps repair state a process
+    loss can strand: storage_cleanup.trip_stranded_latches trips the latch
+    for an orphaned or delete_failed row that never tripped it, and
+    reconcile.release_unattached_reservations releases runtime reservations
+    that never got a provider_run. Either one failing is logged and does not
+    stop the selectors: the rows they would repair keep failing closed.
     """
     # Imported here, not at module top: storage_cleanup builds on this module's
     # observation writer, so a top-level import would be circular.
@@ -1065,6 +1100,20 @@ async def apify_poll_tick(
             return "overdue"
 
         return unit
+
+    # Every tick, not once at start: the conditions arise while the process
+    # runs (a crash-restart is only one way in), and both sweeps are one
+    # lock-free exists() when there is nothing to do.
+    try:
+        report.latch_repaired = await sync_to_async(storage_cleanup.trip_stranded_latches)(now())
+    except Exception:
+        logger.exception("apify-poll: stranded-latch sweep failed")
+    try:
+        report.released = await sync_to_async(reconcile.release_unattached_reservations)(
+            now(), settings.HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S
+        )
+    except Exception:
+        logger.exception("apify-poll: unattached-reservation release failed")
 
     try:
         for pk in await sync_to_async(select_active)(now()):

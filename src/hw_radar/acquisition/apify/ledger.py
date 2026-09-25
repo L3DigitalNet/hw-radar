@@ -500,9 +500,11 @@ def trip_latch_locked(
 ) -> bool:
     """Record a trip; the caller holds the budget lock. False if already open.
 
-    Idempotent per (reason, provider_run) while the trip is open, because the
-    D-side hooks re-detect the same terminal condition (a delete_failed row,
-    an orphaned start) on every tick; one open trip already pauses admission.
+    Idempotent per (reason, provider_run) while the trip is open, because
+    conditions are re-detected: storage_cleanup.trip_stranded_latches checks
+    every tick for an orphaned or delete_failed row that never tripped, and
+    the jobs.py hooks re-run a start mismatch's trip on resume. One open trip
+    already pauses admission.
     """
     if ApifyBudgetLatch.objects.filter(
         cleared_at__isnull=True, reason=reason, provider_run_id=provider_run_id

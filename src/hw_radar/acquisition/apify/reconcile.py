@@ -6,8 +6,8 @@ that takes the budget advisory lock first (`ledger.take_budget_lock`), then the
 `provider_run` row, then the `ApifySpendReservation` row (MS2-D-35 total lock
 order, ED-05). A latch condition found in such a transaction is tripped inside
 it (the budget lock is already held); a condition found while holding only a
-`provider_run` lock (the D-side hooks) is tripped by `ledger.trip_latch` after
-that transaction commits, never from inside it.
+`provider_run` lock (the jobs.py start and import hooks) is tripped by
+`ledger.trip_latch` after that transaction commits, never from inside it.
 
 Usage reads (MS2-D-41). Every run or build read that returns a record is
 appended to `ApifyUsageRead` in the transaction that applies it; reads are
@@ -39,6 +39,21 @@ completion appends the read, applies any upward correction (MS2-D-47: raise
 settled and actual, re-check every cycle's invariants, trip on a breach), and,
 for the first successful read at or after the deadline, closes monitoring in
 the same commit. A failed read closes nothing and backs off.
+
+Unattached release (MS2-D-32 *Settlement*: `released` is "a start that never
+ran"). `release_unattached_reservations` releases an admitted runtime
+reservation that has no provider_run once
+HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S has passed since `reserved_at`.
+Such a row can only come from a crash between `ledger.reserve`'s commit and
+`jobs._create_run`'s, or a `_create_run` that rolled back; by MS2-D-33
+row-before-start the start request is sent only after `_create_run` commits
+the attached provider_run, so the row provably never reached Apify and no
+charge-producing work exists for it. That
+is what makes the release compliant with MS2-D-34's "none is released while
+charge-producing work remains"; it is not an unreconciled row aging out. Both
+sides take the budget lock, and `_create_run` attaches only a row that is
+still `reserved` and unattached, so a release and a late start serialize: the
+start whose reservation was released is refused before anything is sent.
 
 SCOPE: no Apify call is made here; jobs.py sends the calls and hands the
 results in. Admission (reserve) and the cycle predicate are ledger.py's; the
@@ -604,6 +619,52 @@ def select_build_settlement(now: datetime) -> list[int]:
         .order_by("pk")
         .values_list("pk", flat=True)
     )
+
+
+# The `reason` a release writes. A fixed code, never free text: the spend
+# report prints it (report.py's released section matches on this constant).
+UNATTACHED_RESERVATION: Final = "unattached_reservation"
+_RELEASABLE_CLASSES: Final = (AdmissionClass.WATCH_REFRESH.value, AdmissionClass.DISCOVERY.value)
+
+
+def release_unattached_reservations(now: datetime, grace_s: int | None) -> list[int]:
+    """Release runtime reservations admitted over `grace_s` ago that never got a run.
+
+    Returns the released reservation ids. An unset or negative grace releases
+    nothing (fail closed: the rows keep counting at their estimate). Operator
+    rows are never touched: they have no provider_run by design (MS2-D-46)
+    and settle only through `--settle`. The released row keeps its bounds and
+    `reserved_at` for the record; `actual_usd` is 0 because nothing ran.
+    """
+    if grace_s is None or grace_s < 0:
+        return []
+    candidates = ApifySpendReservation.objects.filter(
+        status=ReservationStatus.RESERVED,
+        provider_run__isnull=True,
+        admission_class__in=_RELEASABLE_CLASSES,
+        reserved_at__lte=now - timedelta(seconds=grace_s),
+    )
+    # Lock-free first: an ordinary tick has nothing to release and must not
+    # contend with admission for the budget lock.
+    if not candidates.exists():
+        return []
+    released: list[int] = []
+    with transaction.atomic():
+        take_budget_lock()
+        # Re-read under the lock: a _create_run that committed its attach
+        # after the check above is no longer a candidate.
+        for resv in candidates.select_for_update().order_by("pk"):
+            resv.status = ReservationStatus.RELEASED
+            resv.actual_usd = Decimal(0)
+            resv.reason = UNATTACHED_RESERVATION
+            resv.save(update_fields=["status", "actual_usd", "reason"])
+            logger.warning(
+                "reservation %s released: admitted %s with no provider_run attached",
+                resv.pk,
+                resv.reserved_at.isoformat(),
+            )
+            released.append(resv.pk)
+    return released
 
 
 def plan_build_read(reservation_id: int, now: datetime, config: LedgerConfig) -> str | None:

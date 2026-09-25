@@ -8,7 +8,7 @@ consumption split into settled, outstanding, and monitoring debits, the
 remaining project budget, the stored account snapshot, the declared external
 liability, the inclusion-watermark status, the ledger authority, operator
 consumption by kind, and per-source and per-provider totals. Ledger-wide
-sections follow: unsettled rows, overruns and latch trips, and a
+sections follow: unsettled rows, released rows, overruns and latch trips, and a
 trailing-31-day trend labelled secondary, which never admits or denies.
 
 Read-only by construction: nothing here writes a row, takes the budget lock,
@@ -62,7 +62,11 @@ from hw_radar.acquisition.apify.ledger import (
     discovery_status,
     load_ledger_config,
 )
-from hw_radar.acquisition.apify.reconcile import correction_close_overdue, is_unreconciled_stale
+from hw_radar.acquisition.apify.reconcile import (
+    UNATTACHED_RESERVATION,
+    correction_close_overdue,
+    is_unreconciled_stale,
+)
 from hw_radar.catalog.models import (
     AdmissionClass,
     ApifyBudgetCycle,
@@ -227,6 +231,7 @@ class SpendReport:
     cycles: list[CycleReport]
     discovery: str | None
     unsettled: list[FlaggedRow]
+    released: list[FlaggedRow]
     overruns: list[FlaggedRow]
     latches: list[str]
     trend_total: Decimal
@@ -601,8 +606,17 @@ def build_report(
     ]
 
     unsettled: list[FlaggedRow] = []
+    released: list[FlaggedRow] = []
     overruns: list[FlaggedRow] = []
     for row in rows:
+        if row.status == ReservationStatus.RELEASED.value:
+            # Debits nothing, so no cycle shows it; listed here so a release
+            # stays auditable. Only the release code is printed: `reason` is
+            # operator free text on operator rows (SCOPE).
+            code = row.reason if row.reason == UNATTACHED_RESERVATION else "released"
+            released.append(
+                FlaggedRow(row.pk, _label(row), row.reserved_at, row.actual_usd, (code,))
+            )
         if row.status in _OPEN_STATUSES:
             unsettled.append(
                 FlaggedRow(
@@ -665,6 +679,7 @@ def build_report(
         cycles=cycle_reports,
         discovery=discovery_status(config),
         unsettled=unsettled,
+        released=released,
         overruns=overruns,
         latches=latches,
         trend_total=trend_total,
@@ -772,6 +787,7 @@ def render_report(report: SpendReport) -> str:
         lines.append("")
         lines += _render_cycle(c)
     lines += ["", "Unsettled rows:", *_render_flagged(report.unsettled)]
+    lines += ["", "Released rows:", *_render_flagged(report.released)]
     lines += ["", "Overrun rows:", *_render_flagged(report.overruns)]
     lines += ["", "Overrun latch trips:"]
     lines += [f"  {text}" for text in report.latches] or ["  (none)"]

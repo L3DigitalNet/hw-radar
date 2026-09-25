@@ -98,7 +98,10 @@ Instructions for AI agents:
   row's creating commit; `budget_paused` + reason in the shortlist; E4 residuals: KV byte-cap
   trip, stale selector-4 markers resolved at poller start, `report.py` on `reconcile`'s
   predicates; over-cap account reads trip the latch). **E8 done** (probe admitted, imported,
-  and settled through the real ledger and reconcile unit). **Next:** E7 close-out. Mirror any
+  and settled through the real ledger and reconcile unit). **Crash windows closed** (verifier
+  d1/d2): the `orphaned_start`/`delete_attempts_exhausted` trips commit with the row mark, and
+  every tick re-detects untripped rows. Every tick also releases runtime reservations left
+  unattached past `HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S` (900). **Next:** E7 close-out. Mirror any
   `ledger._tally` predicate change in `report._place` (pinned by
   `test_cycle_totals_match_ledger_cycle_debits`). Owner/operator before F5a's first paid call:
   set the eight unit prices from `apify.com/pricing`, plus `…_MARGIN`, `…_MAX_TIMEOUT_S`,

@@ -1287,6 +1287,8 @@ def test_latch_trip_never_requested_while_holding_provider_run_lock(
 
     monkeypatch.setattr(ledger, "take_budget_lock", recording_lock)
     monkeypatch.setattr(reconcile_mod, "take_budget_lock", recording_lock)
+    # The storage units trip inside their own budget-locked attempt commits.
+    monkeypatch.setattr(storage_cleanup, "take_budget_lock", recording_lock)
     cycle()
     fake = FakeRuns()
     # Every trip site: a delete cap, an orphaned start, a restart, an
@@ -1519,6 +1521,9 @@ def test_over_cap_control_response_trips_latch() -> None:
 
 
 @pytest.mark.django_db(transaction=True, serialized_rollback=True)
+# B below is an unattached runtime row standing in for a live run's capacity;
+# with no grace it is never released as unattached across the eight days.
+@override_settings(HW_RADAR_APIFY_UNATTACHED_RESERVATION_GRACE_S=None)
 def test_outage_spanning_correction_deadline_closing_read_applies_correction() -> None:
     c1 = cycle()
     claim()
@@ -1555,6 +1560,7 @@ def test_outage_spanning_correction_deadline_closing_read_applies_correction() -
     closing = ApifyUsageRead.objects.get(pk=closing_id)
     assert (closing.read_at, closing.usage_total_usd) == (day0 + 8 * DAY, D("1.00"))
     assert open_latches() == [LatchReason.POST_ADMISSION_INVARIANT_BREACH]
+    assert report.released == []
     # Counted at $1 in the cycle A's charge interval touches.
     assert _runtime(c1) >= ALLOCATION - STANDING + D("0.50")
 

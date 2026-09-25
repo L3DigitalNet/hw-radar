@@ -492,6 +492,8 @@ class ApifySpendReservation(models.Model):
     denial_reason = models.CharField(max_length=60, blank=True, default="")
     # The operator's `--reason` for an operator row (MS2-D-46), kept with the
     # row so the report and the handoff record can say why the spend happened.
+    # On a runtime row it is empty, or the fixed code
+    # reconcile.UNATTACHED_RESERVATION once that row is released.
     reason = models.TextField(blank=True, default="")
     # A capability probe's throwaway dataset id, recorded by `--settle` with
     # its verified deletion; a probe cannot settle without it (MS2-D-46).

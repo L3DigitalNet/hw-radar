@@ -60,9 +60,25 @@ observation in between clears the tick's own `unit_failures` counter.
 Slice E hooks (E4). The commit that records verified deletion is one of the
 two barrier transactions of the work-completion anchor: it calls
 reconcile.stamp_work_completion, so `final_charge_op_at` is set once, by
-whichever of it and the import-terminal commit comes second. Both latch trips
-run through ledger.trip_latch AFTER the row's own transaction commits: the
-budget lock is never requested while a provider_run lock is held (ED-05).
+whichever of it and the import-terminal commit comes second.
+
+Latch trips commit WITH the state that justifies them. `_begin` and `_finish`
+take the budget lock before the provider_run row lock (ED-05, MS2-D-35 order)
+and trip `orphaned_start` / `delete_attempts_exhausted` through
+ledger.trip_latch_locked in the same transaction that marks the row. Rejected
+alternative: commit the mark, then call ledger.trip_latch. Once the mark is
+committed, jobs._storage_work_left drops the row from selectors 2 and 3, so a
+process loss between the two commits would leave the latch untripped for
+good, with nothing ever selecting the row again.
+
+`trip_stranded_latches` re-detects both conditions from persisted state on
+every tick and trips any that never tripped: a row a database already holds
+in that state, a row left `retained` at the cap, or any path that marks
+without tripping. It trips only for a (reason, run) that has NEVER had a
+trip, open or cleared, so the owner's `apify_budget_reset` (R21: clean up
+manually, then reset) is final for a row that stays orphaned or
+delete_failed; re-tripping on "no OPEN trip" would undo every reset on the
+next tick.
 
 SCOPE: this module never reads the dataset or the OUTPUT record and never
 starts a run. Settlement is acquisition.apify.reconcile's.
@@ -84,13 +100,19 @@ from typing import Final, cast
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q, QuerySet
 from django.utils import timezone
 
 from hw_radar.acquisition.apify import importer, jobs
 from hw_radar.acquisition.apify.client import ApifyApiError, ApifyClient, ApifyError, ApifyRun
 from hw_radar.acquisition.apify.contract import TERMINAL_RUN_STATUSES
 from hw_radar.acquisition.apify.importer import RejectReason
-from hw_radar.acquisition.apify.ledger import LatchReason, trip_latch
+from hw_radar.acquisition.apify.ledger import (
+    LatchReason,
+    load_ledger_config,
+    take_budget_lock,
+    trip_latch_locked,
+)
 from hw_radar.acquisition.apify.reconcile import stamp_work_completion
 from hw_radar.catalog.models import ProviderRun
 from hw_radar.catalog.models.provider import ImportState, StorageState
@@ -122,18 +144,22 @@ def _verified(row: ProviderRun) -> dict[str, str]:
     return {str(k): str(v) for k, v in cast(dict[object, object], raw).items()}
 
 
-def _begin(provider_run_id: int, *, overdue: bool) -> _Attempt | LatchReason | None:
+def _begin(provider_run_id: int, *, overdue: bool) -> _Attempt | None:
     """Count one attempt and commit it before any call; None when there is nothing to send.
 
     Nothing is sent for a row already deleted or orphaned, for a selector-2 row
     that is not remote-terminal (it has no terminal evidence and no abort
     path), or for a row at the attempt cap, which is marked `delete_failed`.
-    A LatchReason is returned when this commit just marked the row orphaned or
-    delete_failed: the caller trips the latch after this transaction ends.
+    Marking a row orphaned or delete_failed trips the latch in the same commit.
     """
     now = timezone.now()
     cap: int = settings.HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS
+    version = load_ledger_config().budget.estimator_version
     with transaction.atomic():
+        # Budget lock first, on every attempt, although only the marking
+        # branches trip: whether this attempt marks is known only under the
+        # row lock, and the budget lock may not be requested after it (ED-05).
+        take_budget_lock()
         row = ProviderRun.objects.select_for_update().get(pk=provider_run_id)
         if row.storage_state == StorageState.DELETED.value or row.orphaned_start_at is not None:
             return None
@@ -147,14 +173,14 @@ def _begin(provider_run_id: int, *, overdue: bool) -> _Attempt | LatchReason | N
                     provider_run_id,
                     row.storage_cleanup_due_at.isoformat(),
                 )
-                return LatchReason.ORPHANED_START
+                trip_latch_locked(LatchReason.ORPHANED_START, provider_run_id, version, now)
             return None
         observed_terminal = row.remote_status in TERMINAL_RUN_STATUSES
         if not overdue and not observed_terminal:
             return None
         if row.storage_cleanup_attempts >= cap:
-            _mark_delete_failed(row, cap)
-            return LatchReason.DELETE_ATTEMPTS_EXHAUSTED
+            _mark_delete_failed(row, cap, version, now)
+            return None
         row.storage_cleanup_attempts += 1
         row.save(update_fields=["storage_cleanup_attempts"])
         verified = _verified(row)
@@ -165,11 +191,15 @@ def _begin(provider_run_id: int, *, overdue: bool) -> _Attempt | LatchReason | N
         )
 
 
-def _mark_delete_failed(row: ProviderRun, cap: int) -> None:
-    """Leave a row at the attempt cap `delete_failed`; the caller holds its lock."""
+def _mark_delete_failed(row: ProviderRun, cap: int, estimator_version: str, now: datetime) -> None:
+    """Leave a row at the attempt cap `delete_failed` and trip the latch in the same commit.
+
+    The caller holds the budget lock and then the row lock, in that order.
+    """
     if row.storage_state != StorageState.DELETE_FAILED.value:
         row.storage_state = StorageState.DELETE_FAILED
         row.save(update_fields=["storage_state"])
+    trip_latch_locked(LatchReason.DELETE_ATTEMPTS_EXHAUSTED, row.pk, estimator_version, now)
     logger.error(
         "provider_run %s: storage cleanup failed %s/%s attempts (deadline %s); "
         "dataset %s and KV store %s may still accrue storage",
@@ -233,11 +263,15 @@ async def _delete(storage: Storage, storage_id: str | None, client: ApifyClient)
     return None
 
 
-def _finish(provider_run_id: int, deleted: list[Storage], errors: list[str]) -> StorageState:
+def _finish(provider_run_id: int, deleted: list[Storage], errors: list[str]) -> None:
     """Record the attempt's outcome in one commit: progress, final state, or backoff."""
     now = timezone.now()
     cap: int = settings.HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS
+    version = load_ledger_config().budget.estimator_version
     with transaction.atomic():
+        # Before the row lock, for the same reason as in _begin: a failed
+        # final attempt marks delete_failed and trips in this commit.
+        take_budget_lock()
         row = ProviderRun.objects.select_for_update().get(pk=provider_run_id)
         verified = _verified(row)
         verified.update({s.value: now.isoformat() for s in deleted})
@@ -258,7 +292,7 @@ def _finish(provider_run_id: int, deleted: list[Storage], errors: list[str]) -> 
         row.save(update_fields=fields)
         if row.storage_state != StorageState.DELETED.value:
             if row.storage_cleanup_attempts >= cap:
-                _mark_delete_failed(row, cap)
+                _mark_delete_failed(row, cap, version, now)
             else:
                 logger.warning(
                     "provider_run %s: storage cleanup attempt %s/%s failed: %s",
@@ -267,7 +301,57 @@ def _finish(provider_run_id: int, deleted: list[Storage], errors: list[str]) -> 
                     cap,
                     "; ".join(errors),
                 )
-        return StorageState(row.storage_state)
+
+
+def _stranded() -> tuple[QuerySet[ProviderRun], QuerySet[ProviderRun]]:
+    """(orphaned, exhausted) rows whose latch condition has never been tripped.
+
+    `exhausted` also takes a row still `retained` at the attempt cap: a crash
+    between _begin's final counted attempt and its _finish, or a lowered
+    HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS, leaves it there, and the selectors
+    (attempts < cap) would never hand it to _begin to be marked.
+    """
+    cap: int = settings.HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS
+    orphaned = ProviderRun.objects.filter(orphaned_start_at__isnull=False).exclude(
+        budget_latch_trips__reason=LatchReason.ORPHANED_START
+    )
+    exhausted = ProviderRun.objects.filter(
+        Q(storage_state=StorageState.DELETE_FAILED)
+        | (
+            ~Q(storage_state=StorageState.DELETED)
+            & Q(storage_cleanup_attempts__gte=cap, orphaned_start_at__isnull=True)
+        )
+    ).exclude(budget_latch_trips__reason=LatchReason.DELETE_ATTEMPTS_EXHAUSTED)
+    return orphaned, exhausted
+
+
+def trip_stranded_latches(now: datetime | None = None) -> list[int]:
+    """Trip the latch for every orphaned or exhausted row that never tripped it.
+
+    Run once per apify-poll tick (module docstring). Returns the provider_run
+    ids it tripped for. The candidate check is lock-free, so an ordinary tick
+    takes no budget lock. The candidates are re-read under the lock, so a
+    trip that _begin or _finish committed after the lock-free check is seen
+    and never duplicated.
+    """
+    orphaned, exhausted = _stranded()
+    if not orphaned.exists() and not exhausted.exists():
+        return []
+    cap: int = settings.HW_RADAR_APIFY_MAX_DELETE_ATTEMPTS
+    version = load_ledger_config().budget.estimator_version
+    at = now or timezone.now()
+    tripped: list[int] = []
+    with transaction.atomic():
+        take_budget_lock()
+        for pk in orphaned.values_list("pk", flat=True):
+            logger.error("provider_run %s: orphaned_start without a latch trip; tripping now", pk)
+            trip_latch_locked(LatchReason.ORPHANED_START, pk, version, at)
+            tripped.append(pk)
+        pks = list(exhausted.values_list("pk", flat=True))
+        for row in ProviderRun.objects.select_for_update().filter(pk__in=pks).order_by("pk"):
+            _mark_delete_failed(row, cap, version, at)
+            tripped.append(row.pk)
+    return tripped
 
 
 def _retry_delay(attempts: int) -> timedelta:
@@ -279,9 +363,6 @@ def _retry_delay(attempts: int) -> timedelta:
 
 async def _attempt(provider_run_id: int, client: ApifyClient, *, overdue: bool) -> None:
     attempt = await sync_to_async(_begin)(provider_run_id, overdue=overdue)
-    if isinstance(attempt, LatchReason):
-        await sync_to_async(trip_latch)(attempt, provider_run_id=provider_run_id)
-        return
     if attempt is None:
         return
     if not attempt.observed_terminal:
@@ -289,7 +370,7 @@ async def _attempt(provider_run_id: int, client: ApifyClient, *, overdue: bool) 
         if errors:
             # No terminal evidence: the run may still be charging compute, so
             # this attempt deletes nothing.
-            await _finish_and_trip(provider_run_id, [], errors)
+            await sync_to_async(_finish)(provider_run_id, [], errors)
             return
     # Re-read after the observations: an abort or GET answer may have filled a
     # storage id the start response lacked (never replaced one it recorded).
@@ -303,16 +384,7 @@ async def _attempt(provider_run_id: int, client: ApifyClient, *, overdue: bool) 
             deleted.append(storage)
         else:
             errors.append(failure)
-    await _finish_and_trip(provider_run_id, deleted, errors)
-
-
-async def _finish_and_trip(provider_run_id: int, deleted: list[Storage], errors: list[str]) -> None:
-    state = await sync_to_async(_finish)(provider_run_id, deleted, errors)
-    if state is StorageState.DELETE_FAILED:
-        # After _finish committed: never request the budget lock under a row lock.
-        await sync_to_async(trip_latch)(
-            LatchReason.DELETE_ATTEMPTS_EXHAUSTED, provider_run_id=provider_run_id
-        )
+    await sync_to_async(_finish)(provider_run_id, deleted, errors)
 
 
 async def cleanup_storage_unit(provider_run_id: int, client: ApifyClient) -> None:
