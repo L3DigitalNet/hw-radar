@@ -13,7 +13,7 @@ import os
 import socket
 import sys
 from collections.abc import AsyncIterator, Callable, Coroutine
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -401,130 +401,11 @@ def test_delete_other_errors_raise() -> None:
     _run(go())
 
 
-def test_account_limits_parsed_into_cycle_bounds() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert (request.method, request.url.path) == ("GET", "/v2/users/me/limits")
-        return _json_response(
-            {
-                "data": {
-                    "monthlyUsageCycle": {
-                        "startAt": "2026-09-05T00:00:00.000Z",
-                        "endAt": "2026-10-04T23:59:59.999Z",
-                    },
-                    "limits": {"maxMonthlyUsageUsd": 19, "dataRetentionDays": 31},
-                    "current": {"monthlyUsageUsd": 0.0931},
-                }
-            }
-        )
-
-    async def go() -> None:
-        async with _client(handler) as client:
-            limits = await client.get_account_limits()
-        assert limits.cycle_start == datetime(2026, 9, 5, tzinfo=UTC)
-        assert limits.cycle_end == datetime(2026, 10, 4, 23, 59, 59, 999000, tzinfo=UTC)
-        assert limits.max_monthly_usage_usd == Decimal(19)
-        assert limits.monthly_usage_usd == Decimal("0.0931")
-
-    _run(go())
-
-
-@pytest.mark.parametrize(
-    "cycle",
-    [
-        None,
-        {"startAt": "2026-09-05T00:00:00.000Z"},
-        {"startAt": "2026-10-05T00:00:00.000Z", "endAt": "2026-09-05T00:00:00.000Z"},
-        {"startAt": "not-a-date", "endAt": "2026-10-04T23:59:59.999Z"},
-    ],
-)
-def test_account_limits_without_valid_cycle_fail_closed(cycle: object) -> None:
-    # MS2-D-40 denies with cycle_unknown when the cycle is unobservable; the
-    # client must raise rather than invent bounds.
-    body: dict[str, object] = {"data": {"monthlyUsageCycle": cycle, "limits": {}, "current": {}}}
-
-    async def go() -> None:
-        async with _client(lambda _r: _json_response(body)) as client:
-            with pytest.raises(ApifyResponseError):
-                await client.get_account_limits()
-
-    _run(go())
-
-
-def test_monthly_usage_parsed_with_date_parameter() -> None:
-    seen: list[httpx.Request] = []
-    body = {
-        "data": {
-            "usageCycle": {
-                "startAt": "2026-09-05T00:00:00.000Z",
-                "endAt": "2026-10-04T23:59:59.999Z",
-            },
-            "monthlyServiceUsage": {
-                "ACTOR_COMPUTE_UNITS": {"quantity": 0.4, "amountAfterVolumeDiscountUsd": 0.08},
-                "DATASET_READS": {"quantity": 1000, "amountAfterVolumeDiscountUsd": 0.0004},
-                "BROKEN": {"quantity": 1},
-            },
-            "dailyServiceUsages": [
-                {
-                    "date": "2026-09-05T00:00:00.000Z",
-                    "serviceUsage": {"ACTOR_COMPUTE_UNITS": {"amountAfterVolumeDiscountUsd": 0.08}},
-                    "totalUsageCreditsUsd": 0.08,
-                }
-            ],
-            "totalUsageCreditsUsdAfterVolumeDiscount": 0.0804,
-        }
-    }
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        assert request.url.path == "/v2/users/me/usage/monthly"
-        return _json_response(body)
-
-    async def go() -> None:
-        async with _client(handler) as client:
-            usage = await client.get_monthly_usage(date(2026, 9, 5))
-            await client.get_monthly_usage()
-        assert usage.cycle_start == datetime(2026, 9, 5, tzinfo=UTC)
-        assert usage.cycle_end is not None and usage.cycle_end.month == 10
-        # An item with no parseable amount is dropped, not read as zero.
-        assert usage.service_usd == {
-            "ACTOR_COMPUTE_UNITS": Decimal("0.08"),
-            "DATASET_READS": Decimal("0.0004"),
-        }
-        (day,) = usage.daily
-        assert day.date == datetime(2026, 9, 5, tzinfo=UTC)
-        assert day.service_usd == {"ACTOR_COMPUTE_UNITS": Decimal("0.08")}
-        assert day.total_usd == Decimal("0.08")
-        assert usage.total_usd == Decimal("0.0804")
-
-    _run(go())
-    assert dict(seen[0].url.params) == {"date": "2026-09-05"}
-    assert dict(seen[1].url.params) == {}
-
-
-def test_account_plan_parsed_from_users_me() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path == "/v2/users/me"
-        return _json_response(
-            {
-                "data": {
-                    "username": "someone",
-                    "plan": {
-                        "id": "STARTER",
-                        "monthlyBasePriceUsd": 19,
-                        "monthlyUsageCreditsUsd": 19,
-                    },
-                }
-            }
-        )
-
-    async def go() -> None:
-        async with _client(handler) as client:
-            plan = await client.get_account_plan()
-        assert plan.plan_id == "STARTER"
-        assert plan.monthly_base_price_usd == Decimal(19)
-        assert plan.monthly_usage_credits_usd == Decimal(19)
-
-    _run(go())
+def test_client_has_no_account_read_methods() -> None:
+    # MS2-D-48: the runtime reads no account state; the operator reads it
+    # outside the application (CLI, curl, or Console), never through this client.
+    for name in ("get_account_limits", "get_monthly_usage", "get_account_plan"):
+        assert not hasattr(ApifyClient, name), name
 
 
 def test_token_sent_only_as_bearer_header() -> None:
@@ -784,44 +665,6 @@ def test_unparseable_usage_component_is_surfaced_not_dropped() -> None:
         assert clean.unparseable_usage == ()
         assert built.unparseable_usage == ("usage.ACTOR_COMPUTE_UNITS",)
         assert built.detail()["unparseable_usage"] == ["usage.ACTOR_COMPUTE_UNITS"]
-
-    _run(go())
-
-
-@pytest.mark.parametrize(
-    ("retention", "expected"),
-    [
-        (31, 31),
-        (7.0, 7),
-        (None, None),
-        ("31", None),
-        (True, None),
-        (0, None),
-        (-1, None),
-        (31.5, None),
-    ],
-)
-def test_account_limits_parse_data_retention_days(retention: object, expected: int | None) -> None:
-    limits: dict[str, object] = {"maxMonthlyUsageUsd": 19}
-    if retention is not None:
-        limits["dataRetentionDays"] = retention
-    body = {
-        "data": {
-            "monthlyUsageCycle": {
-                "startAt": "2026-09-05T00:00:00.000Z",
-                "endAt": "2026-10-04T23:59:59.999Z",
-            },
-            "limits": limits,
-            "current": {},
-        }
-    }
-
-    async def go() -> None:
-        async with _client(lambda _r: _json_response(body)) as client:
-            parsed = await client.get_account_limits()
-        # Missing or invalid is None, not an error: admission owns the denial
-        # (MS2-D-40), and the cycle bounds above must still be readable.
-        assert parsed.data_retention_days == expected
 
     _run(go())
 

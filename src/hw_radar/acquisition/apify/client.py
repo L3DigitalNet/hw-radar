@@ -7,10 +7,11 @@ than the raw JSON, so callers never depend on Apify's wire names:
 * runs: ``start_run``, ``get_run``, ``abort_run``;
 * run storages: ``list_dataset_items`` / ``iter_dataset_items`` (paginated),
   ``get_record``, ``delete_dataset``, ``delete_key_value_store``;
-* account reads for the billing-cycle budget (MS2-D-40): ``get_account_limits``,
-  ``get_monthly_usage``, and ``get_account_plan`` (the plan block, because the
-  limits response does not carry the base price or prepaid credit);
 * ``get_build`` for operator builds settled through the ledger (MS2-D-46).
+
+It deliberately has no account read (MS2-D-48): the runtime token cannot read
+the account endpoints, and the billing cycle and account limits are
+operator-verified settings, read by the operator outside the application.
 
 There is deliberately no retry, backoff, or polling loop here. The poll job
 (MS2-D-16) owns cadence and retries, and a retry hidden inside the transport
@@ -111,31 +112,18 @@ F5a's live reads remain the final check:
 * Build record (``status``, ``finishedAt``, ``buildNumber``, ``usage``,
   ``usageUsd``, ``usageTotalUsd``; usage hidden from unauthenticated reads):
   https://docs.apify.com/api/v2/actor-build-get
-* Limits (``monthlyUsageCycle.startAt/endAt``, ``limits.maxMonthlyUsageUsd``,
-  ``limits.dataRetentionDays`` (a required integer in the OpenAPI ``Limits``
-  schema, 2026-09-25), ``current.monthlyUsageUsd``):
-  https://docs.apify.com/api/v2/users-me-limits-get
-* Monthly usage (``date`` as ``YYYY-MM-DD``, ``usageCycle``,
-  ``monthlyServiceUsage.*.amountAfterVolumeDiscountUsd``,
-  ``dailyServiceUsages[].{date, serviceUsage, totalUsageCreditsUsd}``,
-  ``totalUsageCreditsUsdAfterVolumeDiscount``):
-  https://docs.apify.com/api/v2/users-me-usage-monthly-get
 
 UNCONFIRMED at this revision (parsing is tolerant, so a wrong guess yields
-``None``, a dropped monthly-usage item, or an ``unparseable_usage`` entry, never
-a crash or a fabricated number; F5a settles these live):
+``None`` or an ``unparseable_usage`` entry, never a crash or a fabricated
+number; F5a settles these live):
 
-* Exact casing of the build and monthly-usage sub-fields: taken from page
-  summaries, not verbatim schemas.
+* Exact casing of the build sub-fields: taken from page summaries, not
+  verbatim schemas.
 * Whether a run's ``options`` echoes ``restartOnError``. The OpenAPI
   ``RunOptions`` schema does not list it (2026-09-25), so
   ``RunOptions.restart_on_error`` is usually ``None``; an observed restart is
   visible as ``ApifyRun.restart_count`` (``stats.restartCount``), which is
   documented.
-* The ``GET /v2/users/me`` plan block (``plan.id``,
-  ``plan.monthlyBasePriceUsd``, ``plan.monthlyUsageCreditsUsd``): names match the
-  owner's live account read, not a reference page. That the limits response
-  lacks them is inferred from its documented field list.
 * The response to aborting a run that has already finished.
 * Whether an input failing the Actor's input schema creates no billable run:
   the synchronous 400 is documented, the absence of any charge is inferred.
@@ -149,7 +137,7 @@ import os
 import socket
 from collections.abc import AsyncIterator, Generator, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Final, Literal, Self, cast, override
 from urllib.parse import quote
@@ -163,8 +151,6 @@ __all__ = [
     "DEFAULT_DATASET_PAGE_SIZE",
     "HTTP_RECEIVE_BUFFER_BYTES",
     "MAX_API_REQUEST_BODY_BYTES",
-    "AccountLimits",
-    "AccountPlan",
     "ApifyApiError",
     "ApifyBuild",
     "ApifyClient",
@@ -175,11 +161,9 @@ __all__ = [
     "ApifyResponseTooLargeError",
     "ApifyRun",
     "ApifyTokenMissingError",
-    "DailyUsage",
     "DatasetPage",
     "DeleteOutcome",
     "KeyValueRecord",
-    "MonthlyUsage",
     "RunOptions",
 ]
 
@@ -394,59 +378,6 @@ class KeyValueRecord:
     body: bytes
 
 
-@dataclass(frozen=True, slots=True)
-class AccountLimits:
-    """The billing cycle and account limit from ``GET /v2/users/me/limits``.
-
-    The cycle bounds are required: without them MS2-D-40 cannot place spend in
-    a period, so their absence raises ``ApifyResponseError`` instead of
-    defaulting. The dollar figures are nullable. ``data_retention_days`` is
-    ``None`` when ``limits.dataRetentionDays`` is missing or not a positive
-    integer; the client does not raise, because the consequence (admission
-    denies with ``unbounded_component``, MS2-D-40) is the caller's.
-    """
-
-    cycle_start: datetime
-    cycle_end: datetime
-    max_monthly_usage_usd: Decimal | None
-    monthly_usage_usd: Decimal | None
-    data_retention_days: int | None
-
-
-@dataclass(frozen=True, slots=True)
-class AccountPlan:
-    """The plan block of ``GET /v2/users/me`` (MS2-D-40 cash-ceiling guard)."""
-
-    plan_id: str | None
-    monthly_base_price_usd: Decimal | None
-    monthly_usage_credits_usd: Decimal | None
-
-
-@dataclass(frozen=True, slots=True)
-class DailyUsage:
-    """One day of per-service usage; ``service_usd`` maps item → dollars."""
-
-    date: datetime | None
-    service_usd: Mapping[str, Decimal]
-    total_usd: Decimal | None
-
-
-@dataclass(frozen=True, slots=True)
-class MonthlyUsage:
-    """Per-cycle and per-day service usage from ``GET /v2/users/me/usage/monthly``.
-
-    Service maps carry only items whose dollar amount parsed; an item with an
-    unparseable amount is dropped rather than read as zero, and ``total_usd``
-    is Apify's own total, never a sum computed here.
-    """
-
-    cycle_start: datetime | None
-    cycle_end: datetime | None
-    service_usd: Mapping[str, Decimal]
-    daily: Sequence[DailyUsage]
-    total_usd: Decimal | None
-
-
 class _BearerAuth(httpx.Auth):
     """Attach the bearer token to each outgoing request.
 
@@ -648,62 +579,6 @@ class ApifyClient:
     async def delete_key_value_store(self, store_id: str) -> DeleteOutcome:
         """Delete the key-value store; a 404 is ``"absent"`` (see ``_delete``)."""
         return await self._delete(f"/v2/key-value-stores/{_seg(store_id)}")
-
-    async def get_account_limits(self) -> AccountLimits:
-        """Return the account's current billing cycle, limit, and cycle usage."""
-        data = _data(await self._request_json("GET", "/v2/users/me/limits"))
-        cycle = _mapping(data.get("monthlyUsageCycle"))
-        start = _opt_dt(cycle.get("startAt"))
-        end = _opt_dt(cycle.get("endAt"))
-        if start is None or end is None or end <= start:
-            raise ApifyResponseError("limits response lacks a valid monthlyUsageCycle")
-        return AccountLimits(
-            cycle_start=start,
-            cycle_end=end,
-            max_monthly_usage_usd=_opt_money(
-                _mapping(data.get("limits")).get("maxMonthlyUsageUsd")
-            ),
-            monthly_usage_usd=_opt_money(_mapping(data.get("current")).get("monthlyUsageUsd")),
-            data_retention_days=_opt_positive_int(
-                _mapping(data.get("limits")).get("dataRetentionDays")
-            ),
-        )
-
-    async def get_monthly_usage(self, on: date | None = None) -> MonthlyUsage:
-        """Return usage for the billing cycle containing ``on`` (default: current)."""
-        params = {"date": on.isoformat()} if on is not None else None
-        data = _data(await self._request_json("GET", "/v2/users/me/usage/monthly", params=params))
-        cycle = _mapping(data.get("usageCycle"))
-        daily_raw = data.get("dailyServiceUsages")
-        days = cast(list[object], daily_raw) if isinstance(daily_raw, list) else []
-        daily = [
-            DailyUsage(
-                date=_opt_dt(day.get("date")),
-                service_usd=_service_usd(day.get("serviceUsage")),
-                total_usd=_opt_money(day.get("totalUsageCreditsUsd")),
-            )
-            for day in map(_mapping, days)
-        ]
-        return MonthlyUsage(
-            cycle_start=_opt_dt(cycle.get("startAt")),
-            cycle_end=_opt_dt(cycle.get("endAt")),
-            service_usd=_service_usd(data.get("monthlyServiceUsage")),
-            daily=daily,
-            total_usd=_opt_money(data.get("totalUsageCreditsUsdAfterVolumeDiscount")),
-        )
-
-    async def get_account_plan(self) -> AccountPlan:
-        """Return the plan's base price and prepaid usage credit."""
-        # SCOPE: only the plan block is extracted. The private-user response
-        # also carries account data unrelated to billing (it can include the
-        # Apify Proxy password), so the raw body is never returned or stored.
-        data = _data(await self._request_json("GET", "/v2/users/me"))
-        plan = _mapping(data.get("plan"))
-        return AccountPlan(
-            plan_id=_opt_str(plan.get("id")),
-            monthly_base_price_usd=_opt_money(plan.get("monthlyBasePriceUsd")),
-            monthly_usage_credits_usd=_opt_money(plan.get("monthlyUsageCreditsUsd")),
-        )
 
     async def _delete(self, path: str) -> DeleteOutcome:
         try:
@@ -934,11 +809,6 @@ def _opt_money(value: object) -> Decimal | None:
     return None
 
 
-def _opt_positive_int(value: object) -> int | None:
-    parsed = _opt_int(value)
-    return parsed if parsed is not None and parsed > 0 else None
-
-
 def _usage_map(
     data: Mapping[str, object], field: str
 ) -> tuple[Mapping[str, Decimal] | None, tuple[str, ...]]:
@@ -967,15 +837,6 @@ def _usage_map(
         else:
             parsed[key] = money
     return parsed, tuple(bad)
-
-
-def _service_usd(value: object) -> Mapping[str, Decimal]:
-    parsed: dict[str, Decimal] = {}
-    for item, detail in _mapping(value).items():
-        amount = _opt_money(_mapping(detail).get("amountAfterVolumeDiscountUsd"))
-        if amount is not None:
-            parsed[item] = amount
-    return parsed
 
 
 def _opt_dt(value: object) -> datetime | None:

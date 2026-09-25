@@ -9,6 +9,7 @@ the ledger's own read counters stayed at zero.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -147,3 +148,19 @@ def test_runtime_paths_never_request_account_endpoints(
     assert [p for p in fake.paths if p.startswith(ACCOUNT_PREFIX)] == []
     assert list(ApifyBudgetCycle.objects.values_list("account_read_count", flat=True)) == [0]
     assert not ApifyCycleDiscovery.objects.exists()
+
+
+SRC_ROOT = Path(__file__).resolve().parents[2] / "src" / "hw_radar"
+
+
+@pytest.mark.django_db(transaction=False)
+def test_no_runtime_module_references_account_endpoints() -> None:
+    # Static half of MS2-D-48: no runtime module may even name an account
+    # endpoint, so no future caller can reach one through a helper.
+    hits = [
+        f"{path.relative_to(SRC_ROOT)}:{n}"
+        for path in sorted(SRC_ROOT.rglob("*.py"))
+        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+        if "/v2/users" in line or "users/me" in line
+    ]
+    assert hits == []

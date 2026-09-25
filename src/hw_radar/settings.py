@@ -411,8 +411,9 @@ HW_RADAR_APIFY_WATCH_REFRESH_RESERVE_USD = _env_decimal(
 HW_RADAR_APIFY_CASH_CEILING_USD = _env_decimal("HW_RADAR_APIFY_CASH_CEILING_USD", "20.00")
 
 
-# Absent means "10% of the observed prepaid credit" (MS2-D-40), which is only
-# known per snapshot, so absent parses to None. A present value that is empty or
+# Absent means "10% of the configured account limit" (MS2-D-40, -48:
+# HW_RADAR_APIFY_ACCOUNT_LIMIT_USD), which budget.account_margin_usd computes,
+# so absent parses to None. A present value that is empty or
 # invalid must NOT fall back to that default, so it parses to Decimal("NaN"),
 # which budget.account_margin_usd refuses (`budget_setting_invalid`).
 def _env_account_margin() -> Decimal | None:
@@ -483,21 +484,14 @@ HW_RADAR_APIFY_MAX_KV_BYTES = _env_int("HW_RADAR_APIFY_MAX_KV_BYTES")
 HW_RADAR_APIFY_STORAGE_MAX_LIFETIME = _env_int("HW_RADAR_APIFY_STORAGE_MAX_LIFETIME")
 HW_RADAR_APIFY_API_CALL_OVERHEAD_BYTES = _env_int("HW_RADAR_APIFY_API_CALL_OVERHEAD_BYTES", 262144)
 HW_RADAR_APIFY_MAX_CORRECTION_READS = _env_int("HW_RADAR_APIFY_MAX_CORRECTION_READS", 12)
-HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE = _env_int(
-    "HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE", 3000
-)
-HW_RADAR_APIFY_MAX_DISCOVERY_READS = _env_int("HW_RADAR_APIFY_MAX_DISCOVERY_READS", 24)
-HW_RADAR_APIFY_DISCOVERY_READ_INTERVAL_S = _env_int("HW_RADAR_APIFY_DISCOVERY_READ_INTERVAL_S", 300)
 
 # Ledger timings and settlement modes (MS2-D-40, -41, -45), in seconds.
-# USAGE_INCLUSION_LAG_S has no default: unset (or invalid) means no inclusion
-# watermark, so all reconciled cycle spend stays debited on top of the snapshot.
-HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S = _env_int(
-    "HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S", 900
-)
+# The account-read keys (MAX_ACCOUNT_READS_PER_CYCLE, MAX_DISCOVERY_READS,
+# DISCOVERY_READ_INTERVAL_S, ACCOUNT_SNAPSHOT_MAX_AGE_S, USAGE_INCLUSION_LAG_S)
+# are retired with runtime account reads (MS2-D-48); a stale value in an
+# environment is ignored.
 HW_RADAR_APIFY_CYCLE_BOUNDARY_GUARD_S = _env_int("HW_RADAR_APIFY_CYCLE_BOUNDARY_GUARD_S", 3600)
 HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S = _env_int("HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S", 10)
-HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S = _env_int("HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S")
 HW_RADAR_APIFY_USAGE_STABLE_READS = _env_int("HW_RADAR_APIFY_USAGE_STABLE_READS", 2)
 HW_RADAR_APIFY_USAGE_STABLE_INTERVAL_S = _env_int("HW_RADAR_APIFY_USAGE_STABLE_INTERVAL_S", 60)
 HW_RADAR_APIFY_USAGE_FINALIZE_DEADLINE_S = _env_int(

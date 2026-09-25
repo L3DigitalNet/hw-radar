@@ -188,13 +188,8 @@ _BUDGET_DEFAULTS: dict[str, object] = {
     "HW_RADAR_APIFY_STORAGE_MAX_LIFETIME": None,
     "HW_RADAR_APIFY_API_CALL_OVERHEAD_BYTES": 262144,
     "HW_RADAR_APIFY_MAX_CORRECTION_READS": 12,
-    "HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE": 3000,
-    "HW_RADAR_APIFY_MAX_DISCOVERY_READS": 24,
-    "HW_RADAR_APIFY_DISCOVERY_READ_INTERVAL_S": 300,
-    "HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S": 900,
     "HW_RADAR_APIFY_CYCLE_BOUNDARY_GUARD_S": 3600,
     "HW_RADAR_APIFY_USAGE_SETTLE_DELAY_S": 10,
-    "HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S": None,
     "HW_RADAR_APIFY_USAGE_STABLE_READS": 2,
     "HW_RADAR_APIFY_USAGE_STABLE_INTERVAL_S": 60,
     "HW_RADAR_APIFY_USAGE_FINALIZE_DEADLINE_S": 86400,
@@ -338,3 +333,19 @@ def test_account_settings_have_no_default(monkeypatch: pytest.MonkeyPatch) -> No
     loaded = _load_budget(monkeypatch)
     for key in _ACCOUNT_KEYS:
         assert getattr(loaded, key) is None, key
+
+
+_RETIRED_ACCOUNT_READ_KEYS = (
+    "HW_RADAR_APIFY_MAX_ACCOUNT_READS_PER_CYCLE",
+    "HW_RADAR_APIFY_MAX_DISCOVERY_READS",
+    "HW_RADAR_APIFY_DISCOVERY_READ_INTERVAL_S",
+    "HW_RADAR_APIFY_ACCOUNT_SNAPSHOT_MAX_AGE_S",
+    "HW_RADAR_APIFY_USAGE_INCLUSION_LAG_S",
+)
+
+
+def test_retired_account_read_settings_are_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # MS2-D-48: nothing reads them; a value left in an environment is ignored.
+    loaded = _load_budget(monkeypatch, **dict.fromkeys(_RETIRED_ACCOUNT_READ_KEYS, "5"))
+    for key in _RETIRED_ACCOUNT_READ_KEYS:
+        assert not hasattr(loaded, key), key
