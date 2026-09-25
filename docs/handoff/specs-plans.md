@@ -1,6 +1,6 @@
 # Specs And Plans
 
-Last updated: 2026-09-24 (session 2: Slice B complete, Slice C code complete, D-prep D1+D3; MS-2 plan rev 8, review converged)
+Last updated: 2026-09-25 (session 4: plan revs 9–11, Slices D and E complete on dev)
 
 ## MS-2 Plan Review Lineage
 
@@ -12,12 +12,15 @@ Last updated: 2026-09-24 (session 2: Slice B complete, Slice C code complete, D-
 - r6 `6af5388b` (codex): REVISION NEEDED, 3 partial + 2 new, all accepted, addressed in rev 7.
 - r7 `01639c2a` (codex): REVISION NEEDED, 2 partial + 1 new, all accepted, addressed in rev 8.
 - r8 `b73b6633` (codex): READY, no new findings. Converged at rev 8 (session 2, Apify budget design).
+- Rev 9 (s4): owner decisions OQ25–OQ29; Codex delegate `be0b1419`: 3 low, fixed.
+- Rev 10 (s4): Slice D entry-gate architect review (ED-01..ED-20). Codex delegate on rev 10: 3 high/6 medium/3 low → rev 11 (R10-01..R10-12; owner accepted residual R38).
+- Final Codex resolution check of rev 11: 10/12 resolved, R10-02/R10-03 completed in-house (`e76478c`). Review loop closed; later deviations recorded as landing notes in the plan.
 
 ## Active Design Artifacts
 
 | Artifact | Role | Status |
 | --- | --- | --- |
-| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 8, review converged (see "Review lineage" above). Slice B complete on `dev`. Slice C code complete (C5 close-out this session). D-prep (D1+D3) code complete; no Apify push/build/run yet. Next: Slice D entry-gate review, then D2. |
+| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 11 (+ landing notes). Slices A–E complete on `dev` (D9/E7 verifier passes recorded). No Apify push/build/run yet. Next: Slice F — F5a synthetic Actor proof once the owner prerequisites in `docs/TODO.md` hold. |
 | `docs/research/2026-09-24-ms2-code-dependency-map.md` | Code dependency map supporting the MS-2 plan | Active; keep alongside the plan |
 | `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` | Advanced HDD/SSD scoring design | Revision 14 owner-accepted; **deferred from immediate milestone sequencing by ADR 0022**; retain for later category-local drive scoring |
 | `docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md` | Deferred HDD/SSD scoring-substrate plan | Revision 4 reviewed; **do not execute now**. Rebase schema/migration assumptions before any future owner-authorized activation. |

@@ -2,10 +2,10 @@
 
 ## Current focus
 
-- Prod `531916e` (bug 001 static fix verified); MS-2 schema 0018-0020 live, all sources off, no Apify runtime token.
-- OQ25-OQ29 resolved 2026-09-25 (plan rev 9); OQ24 open. Scoped runtime Apify token = owner action.
-- Gate @c31a6d4 green: 1242 passed/1 skip, 96% cov; Actor 67 passed, 99%. No open PRs.
-- Next: plan rev 10 (Slice D entry-gate findings) then D2; F5a needs the scoped token + Slice E.
+- Prod `531916e`; dev `ce1e72a` adds MS-2 Slices D+E (migrations 0021/0022 undeployed). Sources off.
+- Production stays deny-all: RUN_SPECS empty, kill switch off, no Actor id, unit prices unset.
+- Gate @40b7295: 1902 passed/1 skip, 95% cov; Actor 75 passed, 99%. No open PRs.
+- Next: F5a prerequisites in docs/TODO.md (owner: scoped token, prices, ledger claim); OQ24 open.
 
 ## Active incidents
 

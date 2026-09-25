@@ -1,6 +1,6 @@
 # Architecture Notes
 
-Last updated: 2026-09-24
+Last updated: 2026-09-25
 
 ## Component Graph
 
@@ -25,17 +25,25 @@ Last updated: 2026-09-24
 - `acquisition`: `sources/` (five drive-focused direct connectors — eBay,
   GoHardDrive, Seagate, ServerPartDeals, WD — plus a `demo` source),
   `scheduling/` (fast/slow lane admission, backoff, checkpoints),
-  `deadman`/`heartbeat` (availability monitoring), and `apify/` (`client`,
-  the Apify API client, and hw-radar's side of the versioned Actor contract —
-  Pydantic models mirroring the committed JSON Schema — and `classify_run`,
-  the run-completeness classifier for remote collector runs).
+  `deadman`/`heartbeat` (availability monitoring), `stages` (transactional
+  persist/delist stages shared by the local and remote paths), `persist`
+  (ordering-guarded observation writes), `retention_policy` (per-source
+  retention registry; remote retention never defaults), and `apify/`:
+  `client` (byte-capped Apify API client), `contract` + `classify_run`
+  (hw-radar's side of the versioned Actor contract), `provider` + `importer`
+  (durable staged import state machine), `jobs` (start job behind
+  `LedgerAdmission`; `apify-poll` selectors), `storage_cleanup` (deadline-bound
+  run-storage deletion), `budget` (DB-free cost/admission policy), `ledger`
+  (advisory-lock reservations, cycle snapshot, authority handoff, overrun
+  latch), `reconcile` (settlement, correction monitoring), `report`
+  (`apify_spend_report`). Ledger tables live in `catalog/models/provider.py`.
 - `refdata`: ADR-0018 truncated fetch→parse→normalize pipeline (seed
   documents, importer, discovery loop, monthly refresh; not a Django app), now
   multi-category with first-party CPU/GPU/RAM seeds alongside the original
   drive seeds.
 - `actors/<name>/`: Hardware Radar's own Apify Actors, each a separate uv
   project gated by `scripts/check.py` and CI. First and only Actor so far:
-  `actors/hw-radar-synthetic-collector` (D-prep code complete; no Apify
+  `actors/hw-radar-synthetic-collector` (code complete; no Apify
   push/build/run has occurred).
 - Runtime jobs: APScheduler poller service (UTC-pinned), daily
   maintenance/recovery jobs, monthly refdata refresh, and dead-man heartbeat
@@ -48,8 +56,9 @@ Last updated: 2026-09-24
   implemented; live harvest, label draft, owner audit, and the ADR-0019 flip
   are pending, so all marketplace sources ship disabled)
 - MS-2 multi-category watch core (re-baselined by ADR-0021/ADR-0022, replacing
-  the old MS-2a scoring-substrate sequencing): Slices A–C and D-prep complete
-  on `dev`; Slice D entry-gate design review, D2 onward, and Slice E remain;
+  the old MS-2a scoring-substrate sequencing): Slices A–E complete on `dev`
+  (migrations 0021/0022 undeployed); Slice F (pilot sources, F5a synthetic
+  Actor proof) remains, gated on the owner prerequisites in `docs/TODO.md`;
   OQ25–OQ29 resolved 2026-09-25, OQ24 (production merchant source) still owner-
   gated. ADR-0011's detailed drive-scoring design is accepted but deferred from
   the immediate critical path.
