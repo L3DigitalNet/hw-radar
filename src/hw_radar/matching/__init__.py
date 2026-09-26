@@ -55,7 +55,8 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               hardening (Codex s8 r1-r3): a title naming a different CPU model
 #               vetoes a seeded OPN hit; item-tied "Nx" counts are lots; model
 #               priors upgrade to a newly asserted condition; condition and lock
-#               wording share one 3-token negation window, and a denied condition
+#               wording share one 3-token negation window and one registry of
+#               negator-owning phrases; a denied condition or recert channel
 #               vetoes store folds and variant priors; brand-contradicted
 #               automated priors are re-decided. Edges stamped
 #               2026.09.2 are re-decided (C.3.5): e.g. "90%NEW" variant(new) priors
