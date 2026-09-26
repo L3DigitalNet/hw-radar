@@ -83,8 +83,14 @@ def extract_candidates(
         existing = out.get(candidate.normalized)
         if existing is None or candidate.confidence > existing.confidence:
             out[candidate.normalized] = candidate
-        elif existing.from_structured_field and not candidate.from_structured_field:
-            out[candidate.normalized] = replace(existing, also_in_title=True)
+        elif (
+            existing.from_structured_field
+            and not candidate.from_structured_field
+            and existing.title_kind is not TokenKind.MANUFACTURER_MPN
+        ):
+            # The title's strongest classification of the token wins, so a
+            # later weaker pass cannot demote an MPN-shaped title occurrence.
+            out[candidate.normalized] = replace(existing, title_kind=candidate.kind)
 
     if structured_mpn:
         canonical = structured_mpn.casefold().strip()

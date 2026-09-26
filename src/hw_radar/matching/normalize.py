@@ -85,6 +85,12 @@ _CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of", "fit for", "su
 #       _CONDITIONS), never a reference, so it is excluded. So is "for sale"
 #       ("For sale: Seagate ST12000NE0008"): a sales preamble whose object is
 #       the listed item itself, and masking it erased the whole identity.
+#       Likewise the repair/spares condition preambles ("For spares or repair:
+#       Seagate ST12000NE0008", "For parts or repair", "For repair"): they
+#       say what state the listed drive is in, and the colon after them is
+#       noise, not a clause boundary, so the span ran on through the MPN
+#       (round-4 R4-C). The exclusion is the word after "for" only, so "FOR
+#       Seagate Exos ..." still masks.
 #   "compatible" — drive: "Compatible Seagate ST12000NE0008 12TB" and
 #       "Compatible WD Ultrastar DC HC560 0F38785" (MS-1e ebay-0388) sell a
 #       look-alike of the cited drive. Mid-title it describes the drive's own
@@ -92,9 +98,9 @@ _CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of", "fit for", "su
 #       "compatible with" is a shared phrase and masks anywhere.
 _CATEGORY_LEADING_REFERENCE_WORDS: tuple[str, ...] = ("for", "compatible")
 # Per-word negative lookaheads: what may NOT follow a leading word for it to
-# open a span. Keyed per word because "parts"/"sale" are exceptions to "for"
-# only; sharing them would silently narrow every other leading word.
-_LEADING_EXCLUSIONS: dict[str, str] = {"for": r"(?!\s+(?:parts|sale)\b)"}
+# open a span. Keyed per word because these are exceptions to "for" only;
+# sharing them would silently narrow every other leading word.
+_LEADING_EXCLUSIONS: dict[str, str] = {"for": r"(?!\s+(?:parts|sale|spares|repair)\b)"}
 
 # Non-ASCII reference phrases, folded to their registered ASCII form BEFORE
 # noise stripping, which would otherwise erase them and hand the cited

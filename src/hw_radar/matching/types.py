@@ -103,12 +103,16 @@ class MpnCandidate:
     )
     confidence: float = 0.5
     from_structured_field: bool = False
-    # Set on a structured-field candidate whose token the title also carries.
-    # Deduplication keeps one candidate per join key (the structured one wins
-    # on confidence); without this flag the title occurrence vanished and the
-    # drive distinct-MPN guard, which counts title MPNs only, missed it
-    # (round-3 R3-A: title "WD40EFPX/WD40EFZX" over structured "WD40EFPX").
-    also_in_title: bool = False
+    # Set on a structured-field candidate whose token the title also carries:
+    # the kind the TITLE occurrence was classified as. Deduplication keeps one
+    # candidate per join key (the structured one wins on confidence), and the
+    # winner's `kind` comes from the structured raw text, which may not be
+    # MPN-shaped ("WD40 EFPX" is UNKNOWN_CODE). The drive distinct-MPN guard
+    # counts title MANUFACTURER_MPN occurrences, so it reads this, not `kind`;
+    # a bool here lost the classification and hid the title's second MPN
+    # (round-3 R3-A and its round-4 residual: "WD40EFPX/WD40EFZX" over a
+    # structured "WD40 EFPX"). None = the title does not carry the token.
+    title_kind: TokenKind | None = None
     # An identifier that may only demote an accept: its alias hits feed
     # ladder.conflicting_alias_models but never ground a rung-0..2 accept. The
     # one producer is the WD retail-PN pass in mpn.extract_candidates, whose

@@ -42,7 +42,7 @@ from hw_radar.catalog.models import (
     RetentionClass,
     SourceSite,
 )
-from hw_radar.matching import MATCHER_VERSION, categories
+from hw_radar.matching import MATCHER_VERSION, categories, ladder
 from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.resolver import CatalogResolver
 
@@ -327,7 +327,14 @@ def test_cross_category_prior_goes_to_review(site: SourceSite) -> None:
         method=ResolutionMethod.EXACT_ALIAS,
         confidence=0.98,
         matcher_version=MATCHER_VERSION,
-        evidence={"outcome": "accept", "rung": 1, "category": "drive"},
+        # The identifiers the gpu re-observation will compute: this case pins
+        # the cross-category guard, not an identifier-change re-decision.
+        evidence={
+            "outcome": "accept",
+            "rung": 1,
+            "category": "drive",
+            "identity_identifiers": _decided_identifiers(_A100_BARE, "gpu"),
+        },
     )
     Listing.objects.filter(pk=listing.pk).update(
         resolution_grain=ResolutionGrain.MODEL, product_model=drive_model
@@ -422,6 +429,16 @@ def test_family_grain_fanout_is_review_for_new_categories(site: SourceSite) -> N
     assert listing.product_family is None
 
 
+def _decided_identifiers(title: str, slug: str) -> list[str]:
+    """The identity_identifiers the resolver records for `title` in a catalog
+    with no alias for it. A fabricated automated prior must carry them to be
+    inherited: without them the resolver re-decides it (review R4-A)."""
+    rules = categories.rules_for(slug)
+    assert rules is not None
+    candidates = rules.extract_candidates(canonicalize_title(title))
+    return ladder.identity_identifiers(candidates, [], rules.decode)
+
+
 def _accepted_prior(
     listing: Listing, model: ProductModel, *, method: str, evidence: dict[str, object]
 ) -> None:
@@ -434,7 +451,12 @@ def _accepted_prior(
         # Current version: these cases pin rung-0 inheritance, which an
         # automated prior from an older matcher_version no longer gets.
         matcher_version=MATCHER_VERSION,
-        evidence={"outcome": "accept", "category": "gpu", **evidence},
+        evidence={
+            "outcome": "accept",
+            "category": "gpu",
+            "identity_identifiers": _decided_identifiers(listing.title_raw, "gpu"),
+            **evidence,
+        },
     )
     Listing.objects.filter(pk=listing.pk).update(
         resolution_grain=ResolutionGrain.MODEL, product_model=model, resolution_confidence=0.95

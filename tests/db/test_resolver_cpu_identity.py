@@ -163,16 +163,20 @@ def test_multi_model_reobservation_does_not_inherit_the_prior(
     site: SourceSite, epyc_7763: ProductModel
 ) -> None:
     """Codex N3: the candidate guard alone let rung 0 inherit a current-version
-    accept once the title started naming a second model."""
+    accept once the title started naming a second model. Since R4-A the
+    changed identifiers discard the prior first; the multi-model title emits
+    no candidate, so the fresh decision is `none`, never an accept."""
     listing = _cpu_listing(site, "n3", _BARE_7763)
     assert _resolve(listing).evidence["outcome"] == "accept"
     Listing.objects.filter(pk=listing.pk).update(title_raw="AMD EPYC 7763 / 7742 64-Core SP3")
     listing.refresh_from_db()
     _observe(listing, observed_at=_OBSERVED_AT + timedelta(hours=1))
     edge = _resolve(listing)
-    assert edge.evidence["rung"] == 0
-    assert edge.evidence["outcome"] == "review"
-    assert edge.evidence["veto"] == ["multi_model"]
+    assert edge.evidence["reconsidered_prior"] == {
+        "reason": "identifiers_changed",
+        "prior_identifiers": ["7763", "epyc7763"],
+    }
+    assert edge.evidence["outcome"] == "none"
     assert listing.product_model is None
 
 
@@ -216,7 +220,9 @@ def test_two_opns_of_different_models_do_not_inherit_the_prior(
     site: SourceSite, seeded_cpus: None
 ) -> None:
     """Round-3 N3 residual: two OPNs (9354's and 9654's) name no EPYC model
-    number, so the multi_model marker stays empty; rung 0 must still refuse."""
+    number, so the multi_model marker stays empty; the prior must not stand.
+    Since R4-A the changed identifiers re-decide it, and rung 1 reviews the
+    two conflicting targets."""
     listing = _cpu_listing(site, "opn-pair", "AMD EPYC 9354 32-Core SP5")
     assert _resolve(listing).evidence["outcome"] == "accept"
     assert listing.product_model == ProductModel.objects.get(model_number="EPYC 9354")
@@ -226,9 +232,13 @@ def test_two_opns_of_different_models_do_not_inherit_the_prior(
     listing.refresh_from_db()
     _observe(listing, observed_at=_OBSERVED_AT + timedelta(hours=1))
     edge = _resolve(listing)
-    assert edge.evidence["rung"] == 0
+    assert edge.evidence["reconsidered_prior"] == {
+        "reason": "identifiers_changed",
+        "prior_identifiers": ["9354", "epyc9354"],
+    }
+    assert edge.evidence["rung"] == 1
     assert edge.evidence["outcome"] == "review"
-    assert edge.evidence["conflicting_alias_models"] == ["100000000789", "100000000798"]
+    assert edge.evidence["conflicting_targets"] == 2
     assert listing.product_model is None
 
 
@@ -249,7 +259,9 @@ def test_reobserved_title_naming_another_epyc_does_not_inherit(
 ) -> None:
     """Round-3 tail T2: the title switched from 7763 to 7742. Its only alias
     hits name 7742, so nothing conflicts among the current identifiers and
-    both are 64-core SP3 parts (no veto); the 7763 prior must not be kept."""
+    both are 64-core SP3 parts (no veto); the 7763 prior must not be kept.
+    Since R4-A the changed identifiers discard it and the title is decided
+    afresh: the exact 7742 aliases accept (auto-accept is forced on here)."""
     listing = _cpu_listing(site, "7763-then-7742", _BARE_7763)
     assert _resolve(listing).evidence["outcome"] == "accept"
     prior_model = ProductModel.objects.get(model_number="EPYC 7763")
@@ -258,11 +270,21 @@ def test_reobserved_title_naming_another_epyc_does_not_inherit(
     listing.refresh_from_db()
     _observe(listing, observed_at=_OBSERVED_AT + timedelta(hours=1))
     edge = _resolve(listing)
-    assert edge.evidence["rung"] == 0
-    assert edge.evidence["outcome"] == "review"
-    assert edge.evidence["prior_model_not_named"] == {
-        "prior_model_id": prior_model.pk,
-        "alias_model_ids": [ProductModel.objects.get(model_number="EPYC 7742").pk],
-        "identifiers": ["epyc7742"],
+    assert edge.evidence["reconsidered_prior"] == {
+        "reason": "identifiers_changed",
+        "prior_identifiers": ["7763", "epyc7763"],
     }
+    assert edge.evidence["rung"] == 1
+    assert listing.product_model == ProductModel.objects.get(model_number="EPYC 7742")
+
+
+def test_coordinated_xeon_models_never_accept(site: SourceSite, seeded_cpus: None) -> None:
+    """Round-4 R4-D: 'Platinum 8358' repeats no 'xeon', so it emitted no
+    candidate and the seeded Gold 6338 aliases were the only hits."""
+    listing = _cpu_listing(
+        site, "gold-plat", "Intel Xeon Gold 6338 / Platinum 8358 32-Core LGA4189"
+    )
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["veto"] == ["multi_model"]
     assert listing.product_model is None

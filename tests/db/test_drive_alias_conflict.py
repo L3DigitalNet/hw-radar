@@ -92,6 +92,7 @@ def test_structured_mpn_does_not_hide_the_second_title_mpn(site: SourceSite) -> 
 def test_retail_pn_of_another_model_blocks_rung_zero(site: SourceSite) -> None:
     # R3-A bypass 2: re-observed naming ALE6L4's retail PN, the listing kept
     # inheriting its ALE6L1 prior because rung 0 never looked at alias hits.
+    # The new identifier now re-decides the prior (R4-A), and rung 1 reviews.
     listing = _listing(site, "ale6l1", "WD Ultrastar WUH722424ALE6L1 24TB SATA")
     assert _resolve(listing).evidence["outcome"] == "accept"
     assert listing.product_model == _model("wuh722424ale6l1")
@@ -101,7 +102,11 @@ def test_retail_pn_of_another_model_blocks_rung_zero(site: SourceSite) -> None:
     listing.refresh_from_db()
     _observe(listing, attrs={}, observed_at=_OBSERVED_AT + timedelta(hours=1))
     edge = _resolve(listing)
-    assert edge.evidence["rung"] == 0
+    assert edge.evidence["reconsidered_prior"] == {
+        "reason": "identifiers_changed",
+        "prior_identifiers": ["wuh722424ale6l1"],
+    }
+    assert edge.evidence["rung"] == 1
     assert edge.evidence["outcome"] == "review"
     assert edge.evidence["conflicting_alias_models"] == ["0f62796", "wuh722424ale6l1"]
     assert listing.product_model is None
@@ -160,10 +165,12 @@ def test_mid_title_compatible_still_resolves(site: SourceSite) -> None:
 
 def test_reobserved_title_naming_another_model_does_not_inherit(site: SourceSite) -> None:
     # Round-3 tail T2: one identifier, one other catalog model. Nothing
-    # conflicts among the CURRENT identifiers, so conflicting_alias_models is
-    # silent; rung 0 must still refuse to keep the ST12000NE0008 prior once
-    # the title names only ST12000NM0008 (same capacity and interface, so no
-    # hard-attribute veto fires either).
+    # conflicts among the CURRENT identifiers and no hard attribute differs,
+    # so the ST12000NE0008 prior survived rung 0. Since R4-A the changed
+    # identifier discards the prior before the ladder runs, and the listing is
+    # decided as a fresh one would be: an exact ST12000NM0008 accept. (The
+    # ladder's prior_model_not_named still guards priors the resolver keeps:
+    # manual accepts and denorm with no automated origin.)
     listing = _listing(site, "ne-then-nm", "Seagate ST12000NE0008 12TB")
     assert _resolve(listing).evidence["outcome"] == "accept"
     prior_model = _model("st12000ne0008")
@@ -172,14 +179,13 @@ def test_reobserved_title_naming_another_model_does_not_inherit(site: SourceSite
     listing.refresh_from_db()
     _observe(listing, attrs={}, observed_at=_OBSERVED_AT + timedelta(hours=1))
     edge = _resolve(listing)
-    assert edge.evidence["rung"] == 0
-    assert edge.evidence["outcome"] == "review"
-    assert edge.evidence["prior_model_not_named"] == {
-        "prior_model_id": prior_model.pk,
-        "alias_model_ids": [_model("st12000nm0008").pk],
-        "identifiers": ["st12000nm0008"],
+    assert edge.evidence["reconsidered_prior"] == {
+        "reason": "identifiers_changed",
+        "prior_identifiers": ["st12000ne0008"],
     }
-    assert listing.product_model is None
+    assert edge.evidence["rung"] == 1
+    assert listing.product_model == _model("st12000nm0008")
+    assert listing.product_model != prior_model
 
 
 def test_reobserved_same_model_still_inherits(site: SourceSite) -> None:
@@ -193,4 +199,38 @@ def test_reobserved_same_model_still_inherits(site: SourceSite) -> None:
     # An unchanged accept writes no new edge, so the current edge is still
     # the rung-1 original; the kept denorm is the observable inheritance.
     assert _resolve(listing).evidence["outcome"] == "accept"
+    assert listing.product_model == _model("st12000ne0008")
+
+
+def test_spaced_structured_mpn_does_not_hide_the_second_title_mpn(site: SourceSite) -> None:
+    # Round-4 R3-A residual: the structured "WD40 EFPX" is not MPN-shaped, won
+    # deduplication, and took the title occurrence's MPN classification with it.
+    listing = _listing(
+        site, "efpx-spaced", "WD Red Plus WD40EFPX/WD40EFZX 4TB", attrs={"mpn": "WD40 EFPX"}
+    )
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["multiple_mpns"] == ["wd40efpx", "wd40efzx"]
+    assert listing.product_model is None
+
+
+def test_retail_pn_of_another_family_vetoes_the_grammar_family(site: SourceSite) -> None:
+    # Round-4 R4-B: WD40EFZX is unseeded, so the grammar proposes Red Plus 4TB;
+    # the authoritative 0F62796 names a 24TB Ultrastar HC580 model.
+    listing = _listing(site, "efzx-0f", "WD Red Plus WD40EFZX 4TB 0F62796")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["rung"] == 2
+    assert edge.evidence["review_only_alias_conflict"] == {
+        "identifiers": ["0f62796"],
+        "fields": ["capacity", "family"],
+    }
+    assert listing.product_family is None
+
+
+def test_repair_preamble_resolves(site: SourceSite) -> None:
+    # Round-4 R4-C: "For spares or repair:" names the listed drive's state.
+    listing = _listing(site, "for-spares", "For spares or repair: Seagate ST12000NE0008 12TB HDD")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "accept"
     assert listing.product_model == _model("st12000ne0008")

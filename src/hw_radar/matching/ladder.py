@@ -11,9 +11,15 @@ grammar decode whose vendor contradicts it never attaches at rung 2. A title
 that names a sibling product line of the target's family (IronWolf Pro vs an
 IronWolf decode) is the same kind of conflict and reviews at every rung.
 So does a listing whose identifiers hit aliases of two different catalog
-models (decide: conflicting_alias_models), inherited priors included, and a
+models (decide: conflicting_alias_models), inherited priors included, a
 re-observed listing whose aliases now name only models other than the one its
-prior inherited (decide: prior_model_not_named).
+prior inherited (decide: prior_model_not_named), and a review-only alias whose
+catalog model contradicts the accepted target (decide:
+review_only_alias_conflicts).
+
+The prior passed in is trusted to describe the listing's current identity:
+the resolver discards an automated prior whose identity_identifiers changed
+before calling decide, so rung 0 here only re-runs the vetoes.
 
 Confidence constants are OQ-provisional tunables; ADR-0016 settings-row
 versions arrive with the rung-3/occurrence thresholds at MS-1c."""
@@ -235,14 +241,15 @@ def distinct_mpns(candidates: Sequence[MpnCandidate], alias_hits: Sequence[Alias
     a repeated MPN, and an MPN's own dash-suffixed form ("WD60EFRX-68MYMN1",
     whose suffix is not MPN-shaped) all leave one MPN. The structured field is
     exempt; it is the merchant's single assertion. A structured candidate the
-    title also carries (`also_in_title`) still counts as a title MPN."""
+    title also carries counts by its TITLE classification (`title_kind`), so
+    a structured "WD40 EFPX" (not MPN-shaped) does not hide the title's
+    MPN-shaped "WD40EFPX"."""
 
     mpns = sorted(
         {
             c.normalized
             for c in candidates
-            if c.kind is TokenKind.MANUFACTURER_MPN
-            and (not c.from_structured_field or c.also_in_title)
+            if (c.title_kind if c.from_structured_field else c.kind) is TokenKind.MANUFACTURER_MPN
         }
     )
     if len(mpns) < 2:
@@ -280,6 +287,104 @@ def conflicting_alias_models(alias_hits: Sequence[AliasHit]) -> list[str]:
     return sorted(models_by_identifier)
 
 
+def identity_identifiers(
+    candidates: Sequence[MpnCandidate],
+    alias_hits: Sequence[AliasHit],
+    decode: Callable[[str], DecodeResult | None],
+) -> list[str]:
+    """The listing's identity-bearing identifiers: the join keys a rung 1-2
+    decision can rest on, sorted.
+
+    A candidate counts when it is MPN-shaped (title or structured occurrence),
+    hits a catalog alias (review-only retail PNs included: they still say which
+    model the title names), or decodes under the category grammar (a spaced
+    structured "ST12000 NE0008" is not MPN-shaped but grounds a rung-2
+    family). Hitless unknown codes are excluded, so title noise that could
+    never have changed a decision does not count as a changed identity.
+
+    Cross-file contract: resolver._run_ladder records this list on every
+    automated (rung 1-2) accept edge and compares it with the current one
+    before inheriting that accept at rung 0; both sides must call this
+    function with the same inputs, or every re-observation reads as an edit."""
+
+    identifiers = {h.candidate_normalized for h in alias_hits}
+    for c in candidates:
+        if TokenKind.MANUFACTURER_MPN in (c.kind, c.title_kind) or (
+            c.kind is not TokenKind.OEM_PN and decode(c.normalized) is not None
+        ):
+            identifiers.add(c.normalized)
+    return sorted(identifiers)
+
+
+def _families_compatible(a: tuple[str, str], b: tuple[str, str]) -> bool:
+    return brands_consistent(a[0], b[0]) and (
+        family_compatible(a[1], b[1]) or family_compatible(b[1], a[1])
+    )
+
+
+def review_only_alias_conflicts(
+    target: TargetRef, target_attrs: HardAttrs, alias_hits: Sequence[AliasHit]
+) -> dict[str, object] | None:
+    """The review-only hits whose catalog model contradicts the accepted target.
+
+    A review-only identifier (a WD retail PN) never grounds an accept, but its
+    alias is catalog-authoritative identity: "WD Red Plus WD40EFZX 4TB 0F62796"
+    decodes to Red Plus at rung 2 while 0F62796 is a 24TB Ultrastar HC580.
+    conflicting_alias_models cannot see that when the retail PN is the only
+    model-carrying identifier. Compared fields are the target's family and
+    capacity; either side unknown cannot conflict, and a family is compatible
+    when one name refines the other ("ultrastar" vs a per-series family), as
+    in family_compatible. A hit on the target's own model is never a conflict.
+    Returns the identifiers and the conflicting fields, or None."""
+
+    identifiers: set[str] = set()
+    fields: set[str] = set()
+    for hit in alias_hits:
+        if not hit.candidate_review_only or hit.target.model_id is None:
+            continue
+        if target.model_id is not None and hit.target.model_id == target.model_id:
+            continue
+        found: list[str] = []
+        a, b = hit.hard_attrs.capacity_bytes, target_attrs.capacity_bytes
+        if a is not None and b is not None and abs(a - b) > CAPACITY_TOLERANCE * max(a, b):
+            found.append("capacity")
+        hit_family, target_family = hit.hard_attrs.family, target_attrs.family
+        if (
+            hit_family is not None
+            and target_family is not None
+            and not _families_compatible(hit_family, target_family)
+        ):
+            found.append("family")
+        if found:
+            identifiers.add(hit.candidate_normalized)
+            fields.update(found)
+    if not identifiers:
+        return None
+    return {"identifiers": sorted(identifiers), "fields": sorted(fields)}
+
+
+def _accepted_target_attrs(
+    verdict: Verdict, prior: PriorResolution | None, decoded: DecodeResult | None
+) -> HardAttrs:
+    """The catalog-side attributes of what an ACCEPT verdict proposes, per rung:
+    the prior's at rung 0, the winning hit's at rung 1 (family only for an OEM
+    fan-out, whose winning hit is one model among several), the decode's at
+    rung 2."""
+
+    if verdict.rung == 0 and prior is not None:
+        return prior.hard_attrs
+    if verdict.rung == 1 and verdict.winning_hit is not None:
+        attrs = verdict.winning_hit.hard_attrs
+        if "oem_fanout" in verdict.evidence:
+            return HardAttrs(family=attrs.family)
+        return attrs
+    if verdict.rung == 2 and decoded is not None and decoded.family_name:
+        return HardAttrs(
+            capacity_bytes=decoded.capacity_bytes, family=(decoded.vendor, decoded.family_name)
+        )
+    return HardAttrs()
+
+
 def prior_model_not_named(
     prior: PriorResolution | None, alias_hits: Sequence[AliasHit]
 ) -> dict[str, object] | None:
@@ -292,7 +397,12 @@ def prior_model_not_named(
     model the title names. No model hit at all (unseeded tokens, a bare family
     name) says nothing, and one hit on the prior's model (the same MPN, or an
     OEM PN fanning out to it among others) keeps the prior. The returned ids
-    and identifiers are the review queue's evidence of what the title names."""
+    and identifiers are the review queue's evidence of what the title names.
+
+    On the resolver path an automated prior whose identifiers changed never
+    reaches rung 0 (resolver._prior_reconsideration), so this guard is the
+    backstop for the priors the resolver does pass: manual accepts, and
+    denorm with no automated origin edge."""
 
     if prior is None or prior.target.model_id is None:
         return None
@@ -344,7 +454,13 @@ def decide(
     alias hits name only models other than the prior's
     (prior_model_not_named): a title edited from "EPYC 7763" to "EPYC 7742"
     has one identifier, so nothing conflicts among the current hits, and the
-    two parts share every veto field."""
+    two parts share every veto field.
+
+    And at every rung: an ACCEPT becomes REVIEW when a review-only alias names
+    a model whose family or capacity contradicts the accepted target
+    (review_only_alias_conflicts). Withholding those hits from grounding keeps
+    them from creating an accept; this is what keeps them from being ignored
+    by one."""
 
     grounding = [h for h in alias_hits if not h.candidate_review_only]
     verdict = _decide(extracted, candidates, prior, grounding, decoded, veto=veto)
@@ -360,6 +476,12 @@ def decide(
         superseded = prior_model_not_named(prior, alias_hits)
         if superseded is not None:
             ambiguity["prior_model_not_named"] = superseded
+    if verdict.target is not None:
+        contradicted = review_only_alias_conflicts(
+            verdict.target, _accepted_target_attrs(verdict, prior, decoded), alias_hits
+        )
+        if contradicted is not None:
+            ambiguity["review_only_alias_conflict"] = contradicted
     if distinct_mpn_guard:
         mpns = distinct_mpns(candidates, alias_hits)
         if mpns:

@@ -40,6 +40,12 @@ Candidate filtering alone is not enough for multi-model titles: rung 0 never
 looks at candidates, so a listing accepted under one title and re-observed
 naming two models would inherit its prior. The ambiguity is therefore also
 extracted as `multi_model`, which vetoes, and the veto re-runs at rung 0.
+The marker covers every product line, not just EPYC: two distinct processor
+names ('Core i7-12700K / Core i9-12900K'), and the Xeon shorthand that names a
+second model without repeating 'xeon' ('Xeon Gold 6338 / Platinum 8358',
+'Gold 6338/6348', 'E5-2680 v4 / E5-2690 v4'). Without it the second model
+emits no candidate at all, so the first model's exact alias is the only hit
+and nothing looks ambiguous (round-4 R4-D).
 
 A listing that is a board, system or bundle carrying the CPU ('Supermicro
 H12DSi-N6 Motherboard With 2x AMD EPYC 7763') names the CPU exactly, so it
@@ -101,8 +107,8 @@ class CpuAttributes(CategoryAttributes):
     # The product-type marker when the listing is a board, system or bundle
     # rather than a bare CPU; None = nothing says so.
     bundle: Attribute[str] | None = None
-    # The distinct EPYC model numbers, space-joined, when the title names more
-    # than one; None = at most one.
+    # The distinct model numbers (EPYC numbers and _line_models keys),
+    # space-joined, when the title names more than one; None = at most one.
     multi_model: Attribute[str] | None = None
 
 
@@ -137,6 +143,10 @@ _TDP = re.compile(r"\b(\d{2,3})\s?w\b")
 # number must also start its own token, hence the Ryzen tier digit needs
 # whitespace after it: an optional '[3579]?' let 'Ryzen 79500' read as tier 7
 # plus model '9500'.
+_EPYC_NAME_PHRASE = re.compile(
+    r"\bepyc\s+(?:(?P<codename>naples|rome|milan(?:-x)?|genoa(?:-x)?|bergamo|siena"
+    r"|turin)\s+)?(?P<num>\d{4}[a-z]{0,2})\b"
+)
 _NAMES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "intel",
@@ -147,13 +157,7 @@ _NAMES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("intel", re.compile(r"\bxeon\s+(?P<num>(?:e[357]|w|d)-?\s?\d{4,5}[a-z]{0,2}(?:\s+v\d)?)\b")),
     ("intel", re.compile(r"\bcore\s+(?P<num>i[3579]-?\s?\d{4,5}[a-z]{0,3})\b")),
     ("intel", re.compile(r"\bcore\s+ultra\s+[3579]\s+(?P<num>\d{3}[a-z]{0,2})\b")),
-    (
-        "amd",
-        re.compile(
-            r"\bepyc\s+(?:(?P<codename>naples|rome|milan(?:-x)?|genoa(?:-x)?|bergamo|siena"
-            r"|turin)\s+)?(?P<num>\d{4}[a-z]{0,2})\b"
-        ),
-    ),
+    ("amd", _EPYC_NAME_PHRASE),
     (
         "amd",
         re.compile(
@@ -262,8 +266,50 @@ def _epyc_models(identity: str) -> set[str]:
     return {m.group(0) for m in _EPYC_MODEL.finditer(unsocketed)}
 
 
+# Xeon shorthand for a second model in a Xeon title: the tier word or the
+# E-series prefix without another 'xeon' ('Gold 6338 / Platinum 8358',
+# 'E5-2680 v4 / E5-2690 v4'), and a bare number continuing a tier name after
+# a slash ('Gold 6338/6348'). Read for the multi-model marker only, never as
+# candidates: without the line word beside them these are not complete
+# processor names, and emitting them would widen what reaches the alias table.
+_XEON_NAME = re.compile(r"\bxeon\b")
+_XEON_TIER_MODEL = re.compile(
+    r"\b(?:platinum|gold|silver|bronze)\s+(?P<num>\d{4}[a-z]{0,2}\+?)(?![a-z0-9])"
+)
+_SLASH_MODEL = re.compile(r"\s*/\s*(?P<num>\d{4}[a-z]{0,2}\+?)(?![a-z0-9])")
+_XEON_E_MODEL = re.compile(r"\b(?P<num>e[357]-?\s?\d{4}[a-z]{0,2}(?:\s*v\d)?)\b")
+
+
+def _model_key(num: str) -> str:
+    # Spacing and hyphens are styling ('e5-2680 v4' = 'e52680v4'); '+' is not
+    # ('8480' and '8480+' are two SKUs), so normalize_alias_text is not used.
+    return re.sub(r"[\s-]", "", num)
+
+
+def _line_models(identity: str) -> set[str]:
+    """The distinct non-EPYC processor models a title names, as _model_key
+    strings. EPYC is _epyc_models' job: its number shape is broader than the
+    name phrase, so reading the EPYC phrase here too could count one model
+    twice under two spellings."""
+    models = {
+        _model_key(m.group("num"))
+        for _vendor, pattern in _NAMES
+        if pattern is not _EPYC_NAME_PHRASE
+        for m in pattern.finditer(identity)
+    }
+    if _XEON_NAME.search(identity) is not None:
+        for m in _XEON_TIER_MODEL.finditer(identity):
+            models.add(_model_key(m.group("num")))
+            pos = m.end()
+            while (more := _SLASH_MODEL.match(identity, pos)) is not None:
+                models.add(_model_key(more.group("num")))
+                pos = more.end()
+        models.update(_model_key(m.group("num")) for m in _XEON_E_MODEL.finditer(identity))
+    return models
+
+
 def _multi_model(identity: str) -> Attribute[str] | None:
-    models = _epyc_models(identity)
+    models = _epyc_models(identity) | _line_models(identity)
     if len(models) < 2:
         return None
     joined = " ".join(sorted(models))

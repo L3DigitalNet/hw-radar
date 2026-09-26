@@ -77,8 +77,13 @@ class CandidateSet:
                 confidence=confidence,
                 from_structured_field=structured,
             )
-        elif existing.from_structured_field and not structured:
-            self._out[normalized] = replace(existing, also_in_title=True)
+        elif (
+            existing.from_structured_field
+            and not structured
+            and existing.title_kind is not TokenKind.MANUFACTURER_MPN
+        ):
+            # Same title-kind rule as mpn.extract_candidates.
+            self._out[normalized] = replace(existing, title_kind=kind)
 
     def __contains__(self, normalized: str) -> bool:
         return normalized in self._out

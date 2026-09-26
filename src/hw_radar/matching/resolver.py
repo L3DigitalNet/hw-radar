@@ -17,9 +17,12 @@ Invariants:
   REPEATED IDENTICAL errors write no new edge; distinct new errors do.
 - Rung 0 prior = the listing's denorm fields (last accepted state): MS-1a
   persist upserts on (source_site, source_listing_key), so a re-observation IS
-  the same row. Exception: an automated (rung 1-2) accept decided under an
-  older MATCHER_VERSION is re-decided by the full ladder, and the new edge
-  records `reconsidered_from_matcher_version`; manual accepts always inherit.
+  the same row. Exceptions, both re-decided by rungs 1-2 instead of
+  inherited: an automated (rung 1-2) accept decided under an older
+  MATCHER_VERSION (the new edge records `reconsidered_from_matcher_version`),
+  and one whose identity-bearing identifiers changed since, or were never
+  recorded (`reconsidered_prior`, see _prior_reconsideration). Manual accepts
+  always inherit.
 - Single normalizer: all alias joins ride matching.normalize (ADR-0019 rule 1).
 - Lazy alias learning (rule 7): dual-labeled listings emit listing_derived OEM
   aliases at MODEL grain max; house SKUs become source-local aliases.
@@ -500,16 +503,21 @@ _AUTOMATED_METHODS: Final = frozenset(
 )
 
 
-def _stale_prior_version(listing: Listing) -> str | None:
-    """The older matcher_version the listing's accepted state was decided under,
-    when that decision was automated; None when the prior may be inherited.
+# Evidence key of an automated accept's ladder.identity_identifiers list.
+_IDENTIFIERS_KEY: Final = "identity_identifiers"
+
+
+def _automated_origin(listing: Listing) -> ListingResolution | None:
+    """The edge whose automated decision the listing's accepted state rests on;
+    None when that decision was not automated, so the prior always inherits.
 
     The origin is the latest non-error accept edge that is NOT a rung-0
     `source_alias` edge: a rung-0 edge only re-stamps an inherited target, so its
-    own matcher_version says nothing about which rules chose that target (and
-    denorm is only ever set by an accept, so no fresh decision sits between the
-    origin and later rung-0 edges). No origin edge at all — denorm written
-    outside the resolver — is not provably automated and stays inheritable."""
+    own matcher_version and inputs say nothing about which rules chose that
+    target (and denorm is only ever set by an accept, so no fresh decision sits
+    between the origin and later rung-0 edges). No origin edge at all — denorm
+    written outside the resolver — is not provably automated and stays
+    inheritable."""
     origin = cast(
         "ListingResolution | None",
         listing.resolutions.filter(evidence__outcome=ladder.Outcome.ACCEPT.value)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no reverse-FK manager stub
@@ -520,9 +528,47 @@ def _stale_prior_version(listing: Listing) -> str | None:
     )
     if origin is None or origin.method not in _AUTOMATED_METHODS:
         return None
-    if origin.matcher_version == MATCHER_VERSION:
-        return None
-    return origin.matcher_version
+    return origin
+
+
+def _prior_reconsideration(
+    origin: ListingResolution, identifiers: list[str]
+) -> dict[str, object] | None:
+    """Why an automated prior must be re-decided rather than inherited, as the
+    provenance to record on the new edge; None when it may be inherited.
+
+    C.3.5: a MATCHER_VERSION bump is a re-resolution experiment, so an accept
+    decided under older rules is re-decided. Without this, a rule fix (e.g.
+    2026.09.2's ST…NM… no longer implying Exos) could never undo a false merge
+    the old rules made — rung 0 would re-accept it on every re-observation.
+
+    Same version, the accept is only valid for the identifiers it was decided
+    on (round-4 R4-A). Rung 0 reads no candidates, so a title edited from a
+    seeded ST12000NE0008 to an unseeded ST12000NE0009 kept the seeded model,
+    and a family-grain decode of NE0009 edited to Exos' ST12000NM0008 kept
+    IronWolf Pro, both inside one matcher version. Comparing the whole
+    identifier set is the general rule the ladder's prior_model_not_named only
+    approximated: it saw hits naming another model, never a vanished or
+    unseeded identifier nor a family prior. An unchanged set (cosmetic edits
+    included) inherits, so re-polls never flap. An automated edge with no
+    recorded set predates the rule and is re-decided once; the re-decision
+    records the set. Every 2026.09.1 edge is re-decided by the version check
+    first, so only pre-fix 2026.09.2 edges reach that branch."""
+
+    if origin.matcher_version != MATCHER_VERSION:
+        return {"reconsidered_from_matcher_version": origin.matcher_version}
+    recorded = origin.evidence.get(_IDENTIFIERS_KEY)
+    if not isinstance(recorded, list):
+        return {"reconsidered_prior": {"reason": "identifiers_unrecorded"}}
+    prior_identifiers = sorted(str(v) for v in cast("list[object]", recorded))
+    if prior_identifiers != identifiers:
+        return {
+            "reconsidered_prior": {
+                "reason": "identifiers_changed",
+                "prior_identifiers": prior_identifiers,
+            }
+        }
+    return None
 
 
 def _apply_category_gates(
@@ -633,28 +679,31 @@ def _run_ladder(
     # listing re-accepts its prior forever and the catalog seed can never
     # upgrade it. The veto still runs; unchanged outcomes write no edge.
     prior = None if reconsider else _prior_from_listing(listing, spec)
-    # C.3.5: a MATCHER_VERSION bump is a re-resolution experiment, so an
-    # automated accept decided under older rules is re-decided by the full
-    # ladder instead of inherited. Without this, a rule fix (e.g. 2026.09.2's
-    # ST…NM… no longer implying Exos) could never undo a false merge the old
-    # rules made — rung 0 would re-accept it on every re-observation.
-    stale_version = _stale_prior_version(listing) if prior is not None else None
-    if stale_version is not None:
+    alias_hits = _alias_hits(
+        candidates,
+        listing.source_site_id,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
+        spec,
+    )
+    identifiers = ladder.identity_identifiers(candidates, alias_hits, rules.decode)
+    origin = _automated_origin(listing) if prior is not None else None
+    reconsidered = _prior_reconsideration(origin, identifiers) if origin is not None else None
+    if reconsidered is not None:
         prior = None
-        provenance["reconsidered_from_matcher_version"] = stale_version
+        provenance.update(reconsidered)
     verdict = ladder.decide(
         extracted,
         candidates,
         prior,
-        _alias_hits(
-            candidates,
-            listing.source_site_id,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
-            spec,
-        ),
+        alias_hits,
         _first_decode(candidates, rules.decode),
         veto=rules.veto,
         distinct_mpn_guard=rules.distinct_mpn_guard,
     )
+    if verdict.outcome is ladder.Outcome.ACCEPT and verdict.rung != 0:
+        # The other half of _prior_reconsideration's contract: the set this
+        # decision rests on, compared before any later rung-0 inheritance.
+        # Recorded before the category gates, which only ever demote.
+        verdict = replace(verdict, evidence={**verdict.evidence, _IDENTIFIERS_KEY: identifiers})
     verdict = _apply_category_gates(listing, slug, rules, verdict)
     target = verdict.target
     if target is not None:
@@ -881,11 +930,15 @@ def _apply(
         # Non-accept (incl. error) edges never materialize identity rows — this
         # also keeps the CR-001 fallback error-write free of _materialize.
         grain, family, model, variant, on_demand = ResolutionGrain.NONE, None, None, None, False
-    # A version re-decision that lands on the same target still writes an edge:
-    # it records the decision under the current rules, which is what lets the
-    # NEXT re-observation inherit at rung 0 — skipping it would re-run the full
+    # A re-decision (version or identifiers, see _prior_reconsideration) that
+    # lands on the same target still writes an edge: it records the decision
+    # under the current rules and identifiers, which is what lets the NEXT
+    # re-observation inherit at rung 0 — skipping it would re-run the full
     # ladder on every poll, and leave no diffable trace of the re-resolution.
-    reconsidered = "reconsidered_from_matcher_version" in verdict.evidence
+    reconsidered = (
+        "reconsidered_from_matcher_version" in verdict.evidence
+        or "reconsidered_prior" in verdict.evidence
+    )
     if (
         accepted
         and current is not None

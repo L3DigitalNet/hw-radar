@@ -38,4 +38,7 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               "mother board"/"main board" is a CPU bundle.
 #               2026.09.2 also: drive leading-"compatible" masking; a prior is
 #               not inherited when the title's aliases name only other models.
+#               2026.09.2 also: automated priors re-decided when identifiers change;
+#               review-only aliases veto contradicted targets; repair preambles
+#               kept; coordinated Xeon/Core models vetoed; title MPN kind kept.
 MATCHER_VERSION = "2026.09.2"

@@ -367,8 +367,10 @@ def test_review_only_hit_of_another_model_also_blocks_the_prior() -> None:
     [
         # Same model re-observed.
         ("Seagate ST12000NE0008 12TB", [_hit("st12000ne0008", 1, brand="seagate")]),
-        # No alias hit at all: an unseeded token says nothing about the prior.
-        ("Seagate ST12000NE0009 12TB", []),
+        # No alias hit at all says nothing to THIS guard. An edited identifier
+        # (seeded ST12000NE0008 -> unseeded ST12000NE0009) is caught before
+        # the ladder: the resolver discards an automated prior whose
+        # identity_identifiers changed (tests/db/test_resolver_prior_identifiers.py).
         ("Seagate IronWolf Pro 12TB NAS", []),
     ],
 )

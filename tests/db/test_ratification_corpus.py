@@ -127,6 +127,7 @@ REVIEW_REASON_KEYS = (
     "multiple_mpns",
     "conflicting_alias_models",
     "prior_model_not_named",
+    "review_only_alias_conflict",
     "cross_category",
     "acceptance_policy",
     "auto_accept_disabled",

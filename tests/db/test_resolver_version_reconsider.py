@@ -80,7 +80,15 @@ def _family_accept(
         method=method,
         confidence=0.92,
         matcher_version=version,
-        evidence={"outcome": "accept", "rung": 2, "category": "drive"},
+        # Every fixture title carries this one MPN. Recorded so the same-version
+        # case pins version handling alone; an automated edge without it is
+        # re-decided for its identifiers (tests/db/test_resolver_prior_identifiers.py).
+        evidence={
+            "outcome": "accept",
+            "rung": 2,
+            "category": "drive",
+            "identity_identifiers": ["st1000nm0001"],
+        },
     )
     Listing.objects.filter(pk=listing.pk).update(
         resolution_grain=ResolutionGrain.FAMILY,
