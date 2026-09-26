@@ -360,47 +360,132 @@ def _int_pattern(title: str, pattern: re.Pattern[str], scale: int = 1) -> Attrib
     )
 
 
-# A condition word directly after one of these asserts the opposite of the
-# condition ("recertified not new", "never used"), so it is no assertion at
-# all. Kept to unambiguous negators immediately before the word; "not working"
-# is unaffected because that whole phrase is the for-parts pattern and the
-# check looks only at what precedes a match.
-_CONDITION_NEGATOR = re.compile(r"\b(?:not|no longer|never)[ -]$")
+# Explicit negation of a condition phrase (s8 round-3 shared negation design;
+# matching/rules/cpu.py applies the same window rule to vendor-lock phrases):
+#
+# - A condition match is NEGATED when a negator token occurs within the 3
+#   tokens immediately before it. Qualifier tokens ("factory", "a", "the", ...)
+#   do not use up the window, and punctuation, hyphens and slashes separate
+#   tokens without being tokens ("NOT - used", "not a factory-recertified").
+# - The window never reaches back past an earlier condition match or a
+#   negator-owning phrase: a negator scopes over the next assertion only, so in
+#   "NOT FACTORY RECERTIFIED Used" the "not" denies the recertification and
+#   the "used" stays a positive assertion.
+# - A match inside a longer match takes the longer one's polarity: the generic
+#   "recertified" inside a negated "factory recertified" is negated too.
+#   Judged by its own window it would see only "factory" before it and
+#   re-assert the denied recertification (Codex r3 finding 6).
+# - Phrases whose own wording holds the negator ("not working" = for parts,
+#   "no warranty" = the warranty channel) are whole assertions; their negator
+#   negates nothing after them. "not working" is itself a condition match;
+#   _NEGATOR_OWNING_PHRASES lists the ones from other vocabularies.
+#
+# A negated match is not an assertion, and is kept as NEGATIVE evidence
+# (ExtractedAttributes.denied_conditions) distinct from absence: a store's
+# declared condition and an automated variant prior must yield to a listing
+# that denies them, while a title that merely stops naming a condition keeps
+# the omission policy (Codex r3 finding 8).
+#
+# Known cost of a window rule: "no tray used" / "no reserve new" read as
+# denials. The error is conservative: the condition becomes unknown and a
+# prior variant is re-decided at model grain; no condition is ever asserted
+# from a negated phrase.
+_NEGATORS: Final = frozenset({"not", "no", "never", "non", "without", "isnt", "arent", "aint"})
+_WINDOW_QUALIFIERS: Final = frozenset(
+    {
+        "vendor",
+        "psb",
+        "dell",
+        "lenovo",
+        "hp",
+        "cisco",
+        "factory",
+        "manufacturer",
+        "a",
+        "an",
+        "the",
+        "cpu",
+    }
+)
+_NEGATION_WINDOW: Final = 3
+# canonicalize_title turns "isn't" into "isn t"; both spellings are one token.
+_WINDOW_TOKEN = re.compile(r"\b(?:isn|aren|ain) ?'?t\b|[a-z0-9]+")
+_NEGATOR_OWNING_PHRASES = re.compile(r"\bno warranty\b")
 
 
-def _asserted(pattern: re.Pattern[str], title: str) -> re.Match[str] | None:
-    """The first match of `pattern` in `title` that no negator precedes."""
-    for m in pattern.finditer(title):
-        # endpos anchors `$` at the match start: only the words immediately
-        # before this match can negate it, never a negator elsewhere.
-        if _CONDITION_NEGATOR.search(title, 0, m.start()) is None:
-            return m
-    return None
+@dataclass(frozen=True)
+class _ConditionMatch:
+    rank: int  # index into _CONDITIONS: the first-match precedence
+    start: int
+    end: int
+    text: str
+    negated: bool
 
 
-def _condition(title: str) -> tuple[Attribute[str] | None, Attribute[str] | None]:
-    # Polarity must agree with _condition_conflict: if this picked a negated
-    # "recertified" that the collector skips, "not recertified used" on the WD
-    # store would show no conflict and the source fold would add a factory
-    # channel to a used drive.
-    for pattern, value, channel, confidence in _CONDITIONS:
-        m = _asserted(pattern, title)
-        if m:
-            cond = Attribute(
-                value=value, confidence=confidence, layer=_LAYER, source_text=m.group(0)
-            )
-            chan = (
-                Attribute(
-                    value=channel, confidence=confidence, layer=_LAYER, source_text=m.group(0)
-                )
-                if channel
-                else None
-            )
-            return cond, chan
-    return None, None
+def _negated_by_window(text: str) -> bool:
+    budget = _NEGATION_WINDOW
+    for m in reversed(list(_WINDOW_TOKEN.finditer(text))):
+        token = re.sub(r"[ ']", "", m.group(0))
+        if token in _NEGATORS:
+            return True
+        if token in _WINDOW_QUALIFIERS:
+            continue
+        budget -= 1
+        if budget == 0:
+            return False
+    return False
 
 
-def _condition_conflict(title: str) -> Attribute[tuple[str, ...]] | None:
+def _condition_matches(text: str) -> list[_ConditionMatch]:
+    """Every _CONDITIONS match in `text` with its polarity, in text order."""
+    raw = [
+        (rank, m)
+        for rank, (pattern, _value, _channel, _confidence) in enumerate(_CONDITIONS)
+        for m in pattern.finditer(text)
+    ]
+    barriers = [m.span() for _rank, m in raw]
+    barriers += [m.span() for m in _NEGATOR_OWNING_PHRASES.finditer(text)]
+    decided: list[_ConditionMatch] = []
+    # Longest first, so a containing match is decided before its sub-matches.
+    for rank, m in sorted(raw, key=lambda item: item[1].start() - item[1].end()):
+        start, end = m.span()
+        outer = next(
+            (
+                d
+                for d in decided
+                if d.start <= start and end <= d.end and (d.start, d.end) != (start, end)
+            ),
+            None,
+        )
+        if outer is not None:
+            negated = outer.negated
+        else:
+            window_start = max((b_end for _b, b_end in barriers if b_end <= start), default=0)
+            negated = _negated_by_window(text[window_start:start])
+        decided.append(_ConditionMatch(rank, start, end, m.group(0), negated))
+    return sorted(decided, key=lambda d: (d.start, d.rank))
+
+
+def _condition(
+    matches: list[_ConditionMatch],
+) -> tuple[Attribute[str] | None, Attribute[str] | None]:
+    # First-match precedence over POSITIVE matches only: the table order picks
+    # the condition, the earliest asserted match of that entry its source text.
+    asserted = [m for m in matches if not m.negated]
+    if not asserted:
+        return None, None
+    best = min(asserted, key=lambda m: (m.rank, m.start))
+    _pattern, value, channel, confidence = _CONDITIONS[best.rank]
+    cond = Attribute(value=value, confidence=confidence, layer=_LAYER, source_text=best.text)
+    chan = (
+        Attribute(value=channel, confidence=confidence, layer=_LAYER, source_text=best.text)
+        if channel
+        else None
+    )
+    return cond, chan
+
+
+def _condition_conflict(matches: list[_ConditionMatch]) -> Attribute[tuple[str, ...]] | None:
     """Every distinct condition the text asserts, when it asserts more than one.
 
     Informational for ordinary listings: the first-match precedence of
@@ -409,13 +494,11 @@ def _condition_conflict(title: str) -> Attribute[tuple[str, ...]] | None:
     not be folded over a listing that also asserts another.
 
     Only positive assertions count: "recertified not new" clarifies the
-    store's condition rather than contradicting it, and counting the negated
-    "new" sent an agreeing listing to review and dropped its factory variant
-    (Codex r2 finding D)."""
+    store's condition rather than contradicting it (Codex r2 finding D)."""
     found = [
-        (value, m.group(0))
-        for pattern, value, _channel, _confidence in _CONDITIONS
-        if (m := _asserted(pattern, title)) is not None
+        (_CONDITIONS[m.rank][1], m.text)
+        for m in sorted(matches, key=lambda m: m.rank)
+        if not m.negated
     ]
     values = tuple(dict.fromkeys(value for value, _ in found))
     if len(values) < 2:
@@ -425,6 +508,24 @@ def _condition_conflict(title: str) -> Attribute[tuple[str, ...]] | None:
         confidence=0.9,
         layer=_LAYER,
         source_text=", ".join(text for _, text in found),
+    )
+
+
+def _denied_conditions(matches: list[_ConditionMatch]) -> Attribute[tuple[str, ...]] | None:
+    """The conditions the text explicitly denies and nowhere asserts."""
+    asserted = {_CONDITIONS[m.rank][1] for m in matches if not m.negated}
+    denied = [
+        (_CONDITIONS[m.rank][1], m.text)
+        for m in sorted(matches, key=lambda m: m.rank)
+        if m.negated and _CONDITIONS[m.rank][1] not in asserted
+    ]
+    if not denied:
+        return None
+    return Attribute(
+        value=tuple(dict.fromkeys(value for value, _ in denied)),
+        confidence=0.9,
+        layer=_LAYER,
+        source_text=", ".join(dict.fromkeys(text for _, text in denied)),
     )
 
 
@@ -602,6 +703,11 @@ def with_source_offer_terms(extracted: ExtractedAttributes, source_key: str) -> 
     the listing's own "Used" contradicts. Condition unknown keeps a
     condition-restricted watch at `unknown`, and the resolver reviews.
 
+    A title that explicitly DENIES the declared condition ("... NOT
+    RECERTIFIED") gets no fold either: that is negative evidence, not the
+    omission the fold fills in, and folding it re-asserted exactly the
+    recertification the listing denies (Codex r3 finding 8).
+
     The ONE fold both offer-term readers apply, each over the same category
     extraction: the resolver before the ladder (so _materialize and
     _offer_reconsideration see the factory variant) and eligibility's
@@ -613,6 +719,9 @@ def with_source_offer_terms(extracted: ExtractedAttributes, source_key: str) -> 
         return extracted
     if source_offer_conflict(extracted, source_key) is not None:
         return replace(extracted, condition=None, recert_channel=None)
+    denied = extracted.denied_conditions
+    if denied is not None and declared.condition in denied.value:
+        return extracted
     condition, channel = extracted.condition, extracted.recert_channel
     if condition is not None and condition.value != declared.condition:
         return extracted
@@ -641,10 +750,12 @@ def _offer_fields(masked: str) -> ExtractedAttributes:
     # resolver._materialize get_or_creates the ProductVariant from exactly
     # these four, so reading them from a reference span would file the listing
     # under a sellable variant it never offered (review finding F4).
-    condition, recert_channel = _condition(masked)
+    matches = _condition_matches(masked)
+    condition, recert_channel = _condition(matches)
     return ExtractedAttributes(
         condition=condition,
-        condition_conflict=_condition_conflict(masked),
+        condition_conflict=_condition_conflict(matches),
+        denied_conditions=_denied_conditions(matches),
         recert_channel=recert_channel,
         packaging=_first_pattern(masked, _PACKAGING, 0.85),
         warranty_months=_int_pattern(masked, _WARRANTY_YEARS, scale=12),

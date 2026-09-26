@@ -73,6 +73,13 @@ class ExtractedAttributes:
     # two or more (vocab._condition_conflict). `condition` keeps the
     # first-match pick; only source-provenance folding acts on the conflict.
     condition_conflict: Attribute[tuple[str, ...]] | None = None
+    # Conditions the offer text explicitly denies ("NOT RECERTIFIED", "never
+    # used") and nowhere asserts (vocab._denied_conditions). Negative evidence,
+    # deliberately separate from `condition is None` (nothing said): a denial
+    # blocks a source's declared condition (vocab.with_source_offer_terms) and
+    # contradicts a stored variant (resolver._variant_contradictions), while
+    # mere omission does neither.
+    denied_conditions: Attribute[tuple[str, ...]] | None = None
     recert_channel: Attribute[str] | None = None  # factory | seller
     packaging: Attribute[str] | None = None  # retail | bulk
     warranty_months: Attribute[int] | None = None

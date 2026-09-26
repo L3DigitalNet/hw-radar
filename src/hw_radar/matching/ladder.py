@@ -20,8 +20,11 @@ of 2 ...") reviews at every rung too (decide: lot_quantity): a known product
 identity does not make a lot equivalent to a single-unit offer.
 
 The prior passed in is trusted to describe the listing's current identity:
-the resolver discards an automated prior whose identity_identifiers changed
-before calling decide, so rung 0 here only re-runs the vetoes.
+the resolver discards an automated prior whose identity_identifiers changed,
+whose target's brand the listing now contradicts, or whose variant its offer
+terms contradict, before calling decide, so rung 0 here only re-runs the
+vetoes. In particular rung 0 never applies the rung-1 brand gate itself: a
+manual prior must inherit whatever the title's brand says.
 
 Confidence constants are OQ-provisional tunables; ADR-0016 settings-row
 versions arrive with the rung-3/occurrence thresholds at MS-1c."""
