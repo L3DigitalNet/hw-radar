@@ -20,7 +20,11 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from hw_radar.matching.normalize import DRIVE_REFERENCE_PHRASE, mask_reference_spans
+from hw_radar.matching.normalize import (
+    DRIVE_REFERENCE_PHRASE,
+    FOR_PARTS_PREAMBLE_WORDS,
+    mask_reference_spans,
+)
 from hw_radar.matching.types import Attribute, ExtractedAttributes
 
 _LAYER = "vocab"
@@ -54,13 +58,15 @@ _INTERFACES: tuple[tuple[re.Pattern[str], str], ...] = (
 # refurb, NOT manufacturer recert. '(?<!like )new' keeps "like new" unasserted.
 _CONDITIONS: tuple[tuple[re.Pattern[str], str, str | None, float], ...] = (
     (
-        # "spares or repair" is the UK/eBay spelling of for-parts; the leading
-        # "for spares/repair" preamble is exempt from reference masking
-        # (normalize._LEADING_EXCLUSIONS), so it must be caught here or a broken
-        # drive lands on a working-condition variant.
+        # "spares or repair" is the UK/eBay spelling of for-parts. The leading
+        # "for <word>" preamble is exempt from reference masking for exactly
+        # the words in normalize.FOR_PARTS_PREAMBLE_WORDS, so this pattern
+        # reads the same definition: a word exempted there but not asserted
+        # here puts a broken drive on a working-condition variant.
         re.compile(
-            r"\bfor parts\b|\bparts only\b|\bas[- ]is\b|\bnot working\b"
-            r"|\bspares?(?: or | and | ?/ ?| )repairs?\b|\bfor (?:spares|repairs?)\b"
+            r"\bparts only\b|\bas[- ]is\b|\bnot working\b"
+            r"|\bspares?(?: or | and | ?/ ?| )repairs?\b"
+            rf"|\bfor {FOR_PARTS_PREAMBLE_WORDS}\b"
         ),
         "for_parts",
         None,

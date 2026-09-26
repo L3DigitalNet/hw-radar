@@ -571,6 +571,64 @@ def _prior_reconsideration(
     return None
 
 
+# Evidence key of an automated variant-grain accept's asserted variant
+# attributes (_asserted_variant_attributes), written by _apply and read by
+# _variant_reconsideration.
+_VARIANT_ATTRS_KEY: Final = "variant_attributes"
+
+
+def _asserted_variant_attributes(extracted: ExtractedAttributes) -> dict[str, str]:
+    """The ProductVariant sellable-identity fields (the columns of its unique
+    tuple, as _materialize fills them) the listing asserts, by field name.
+
+    Unasserted (None) fields are absent: UNKNOWN is not evidence against any
+    variant, so a title that stops naming its condition never re-decides."""
+    claimed = {
+        "condition": extracted.condition,
+        "packaging": extracted.packaging,
+        "recert_channel": extracted.recert_channel,
+        "warranty_channel": extracted.warranty_channel,
+    }
+    return {name: attr.value for name, attr in claimed.items() if attr is not None}
+
+
+def _variant_reconsideration(
+    origin: ListingResolution, variant_id: int, asserted: dict[str, str]
+) -> dict[str, object] | None:
+    """Why a variant-grain automated prior must be re-decided because the
+    listing now asserts a different sellable identity; None to inherit.
+
+    Rung 0 checks only the model's hard attributes, and an unchanged accept
+    returns before _materialize, so without this a drive listed "New" and
+    edited to "For spares or repair" stayed on the new-condition variant on
+    every poll (round-5 R5-A): identifiers alone cannot see a condition change.
+    Re-deciding lets the ladder rematerialize the variant the listing now
+    asserts, or review.
+
+    No flapping: a difference from the variant's tuple is ignored when the
+    origin decision recorded exactly these asserted attributes, i.e. the ladder
+    already chose this variant knowing them (a variant-grain alias can name a
+    variant whose tuple differs from the title). Without that check such a
+    listing would re-decide and append an edge on every poll. Legacy variant
+    edges without the record re-decide once, only when they contradict."""
+    variant = ProductVariant.objects.get(pk=variant_id)
+    prior_tuple: dict[str, str] = {
+        "condition": variant.condition,
+        "packaging": variant.packaging,
+        "recert_channel": variant.recert_channel,
+        "warranty_channel": variant.warranty_channel,
+    }
+    changed = sorted(name for name, value in asserted.items() if prior_tuple[name] != value)
+    if not changed or origin.evidence.get(_VARIANT_ATTRS_KEY) == asserted:
+        return None
+    return {
+        "reconsidered_prior": {
+            "reason": "variant_attributes_changed",
+            "prior_variant_attributes": {name: prior_tuple[name] for name in changed},
+        }
+    }
+
+
 def _apply_category_gates(
     listing: Listing, slug: str, rules: categories.CategoryRules, verdict: ladder.Verdict
 ) -> ladder.Verdict:
@@ -687,6 +745,18 @@ def _run_ladder(
     identifiers = ladder.identity_identifiers(candidates, alias_hits, rules.decode)
     origin = _automated_origin(listing) if prior is not None else None
     reconsidered = _prior_reconsideration(origin, identifiers) if origin is not None else None
+    if (
+        reconsidered is None
+        and origin is not None
+        and prior is not None
+        and prior.target.grain is Grain.VARIANT
+        and prior.target.variant_id is not None
+    ):
+        # After the identifier check: an identifier change already re-decides,
+        # and its provenance is the more fundamental reason to record.
+        reconsidered = _variant_reconsideration(
+            origin, prior.target.variant_id, _asserted_variant_attributes(extracted)
+        )
     if reconsidered is not None:
         prior = None
         provenance.update(reconsidered)
@@ -930,9 +1000,10 @@ def _apply(
         # Non-accept (incl. error) edges never materialize identity rows — this
         # also keeps the CR-001 fallback error-write free of _materialize.
         grain, family, model, variant, on_demand = ResolutionGrain.NONE, None, None, None, False
-    # A re-decision (version or identifiers, see _prior_reconsideration) that
-    # lands on the same target still writes an edge: it records the decision
-    # under the current rules and identifiers, which is what lets the NEXT
+    # A re-decision (version or identifiers, see _prior_reconsideration;
+    # variant attributes, see _variant_reconsideration) that lands on the same
+    # target still writes an edge: it records the decision under the current
+    # rules, identifiers and asserted attributes, which is what lets the NEXT
     # re-observation inherit at rung 0 — skipping it would re-run the full
     # ladder on every poll, and leave no diffable trace of the re-resolution.
     reconsidered = (
@@ -964,6 +1035,12 @@ def _apply(
         evidence["rung"] = verdict.rung
     if on_demand:
         evidence["variant_on_demand"] = True
+    if accepted and verdict.rung != 0 and grain == ResolutionGrain.VARIANT:
+        # _variant_reconsideration's record: the attributes this variant was
+        # decided on, so the next poll with the same assertions inherits it.
+        # Recorded here, not with the identifiers in _run_ladder, because only
+        # _materialize knows whether a model-grain verdict became a variant.
+        evidence[_VARIANT_ATTRS_KEY] = _asserted_variant_attributes(extracted)
     if is_error and locked.resolution_grain != ResolutionGrain.NONE:  # pyright: ignore[reportUnnecessaryComparison] - basedpyright misreads a TextChoices member's runtime (value, label) tuple as its static type in `if` (not `assert`) context
         evidence["denorm_preserved"] = True
     # CR-002 ordering: demote-old → insert-new → link-old. The one-current

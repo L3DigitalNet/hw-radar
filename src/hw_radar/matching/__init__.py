@@ -41,4 +41,6 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               2026.09.2 also: automated priors re-decided when identifiers change;
 #               review-only aliases veto contradicted targets; repair preambles
 #               kept; coordinated Xeon/Core models vetoed; title MPN kind kept.
+#               2026.09.2 also: plural repair preambles kept; numeric Xeon "or"
+#               alternatives vetoed; variant priors re-decided on changed condition.
 MATCHER_VERSION = "2026.09.2"

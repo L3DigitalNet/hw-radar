@@ -268,15 +268,28 @@ def _epyc_models(identity: str) -> set[str]:
 
 # Xeon shorthand for a second model in a Xeon title: the tier word or the
 # E-series prefix without another 'xeon' ('Gold 6338 / Platinum 8358',
-# 'E5-2680 v4 / E5-2690 v4'), and a bare number continuing a tier name after
-# a slash ('Gold 6338/6348'). Read for the multi-model marker only, never as
-# candidates: without the line word beside them these are not complete
-# processor names, and emitting them would widen what reaches the alias table.
+# 'E5-2680 v4 / E5-2690 v4'), and bare numbers coordinated with a tier model
+# ('Gold 6338/6348', 'Gold 6338 or 8358', 'Gold 6338, 6348 & 8358'). Read for
+# the multi-model marker only, never as candidates: without the line word
+# beside them these are not complete processor names, and emitting them would
+# widen what reaches the alias table.
 _XEON_NAME = re.compile(r"\bxeon\b")
 _XEON_TIER_MODEL = re.compile(
     r"\b(?:platinum|gold|silver|bronze)\s+(?P<num>\d{4}[a-z]{0,2}\+?)(?![a-z0-9])"
 )
-_SLASH_MODEL = re.compile(r"\s*/\s*(?P<num>\d{4}[a-z]{0,2}\+?)(?![a-z0-9])")
+# A bare model number continuing a tier model. The separator set is what the
+# canonical title leaves of a coordination: "/" survives canonicalization,
+# "or"/"and" are words, a raw "," becomes " - " only when a reference phrase
+# is present and is otherwise erased along with "&", leaving bare whitespace
+# ("gold 6338 8358" is how "Gold 6338, 8358" and "Gold 6338 & 8358" arrive).
+# Accepting bare whitespace is why the unit lookahead is load-bearing: without
+# it "Gold 6248 2666 MHz" or "Gold 6338 1000W" would read as two models. A
+# misread here only vetoes (review), never accepts, so the set leans wide
+# (round-5 R4-D residual: "Gold 6338 or 8358" accepted the seeded 6338).
+_COORDINATED_MODEL = re.compile(
+    r"(?:\s*/\s*|\s+-\s+|\s*[,&]\s*|\s+(?:or|and)\s+|\s+)"
+    r"(?P<num>\d{4}(?!\s?(?:ghz|mhz|mt/s|gb|mb|tb|w)(?![a-z]))[a-z]{0,2}\+?)(?![a-z0-9])"
+)
 _XEON_E_MODEL = re.compile(r"\b(?P<num>e[357]-?\s?\d{4}[a-z]{0,2}(?:\s*v\d)?)\b")
 
 
@@ -301,7 +314,7 @@ def _line_models(identity: str) -> set[str]:
         for m in _XEON_TIER_MODEL.finditer(identity):
             models.add(_model_key(m.group("num")))
             pos = m.end()
-            while (more := _SLASH_MODEL.match(identity, pos)) is not None:
+            while (more := _COORDINATED_MODEL.match(identity, pos)) is not None:
                 models.add(_model_key(more.group("num")))
                 pos = more.end()
         models.update(_model_key(m.group("num")) for m in _XEON_E_MODEL.finditer(identity))

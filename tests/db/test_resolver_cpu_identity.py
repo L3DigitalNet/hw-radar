@@ -288,3 +288,24 @@ def test_coordinated_xeon_models_never_accept(site: SourceSite, seeded_cpus: Non
     assert edge.evidence["outcome"] == "review"
     assert edge.evidence["veto"] == ["multi_model"]
     assert listing.product_model is None
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Intel Xeon Gold 6338 or 8358 32-Core LGA4189",
+        "Intel Xeon Gold 6338, 8358 32-Core LGA4189",
+        "Intel Xeon Gold 6338 & 8358 32-Core LGA4189",
+    ],
+)
+def test_numeric_xeon_alternatives_never_accept(
+    site: SourceSite, seeded_cpus: None, title: str
+) -> None:
+    """Round-5 R4-D residual: the bare '8358' after 'or' (or a comma or '&',
+    both canonicalized to a space) emitted nothing, so the seeded Gold 6338
+    aliases were the only hits and the identical socket/cores could not veto."""
+    listing = _cpu_listing(site, "gold-or", title)
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["veto"] == ["multi_model"]
+    assert listing.product_model is None

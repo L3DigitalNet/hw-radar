@@ -19,6 +19,7 @@ from hw_radar.catalog.models import (
     ListingResolution,
     ProductFamily,
     ProductModel,
+    ProductVariant,
     ResolutionGrain,
     ResolutionMethod,
     RetentionClass,
@@ -207,3 +208,106 @@ def test_manual_prior_is_never_redecided(site: SourceSite) -> None:
     edge = _resolve(listing)
     assert edge.method == ResolutionMethod.MANUAL
     assert listing.product_model == model
+
+
+# R5-A: a variant-grain prior is only valid for the variant attributes the
+# listing asserts. "New" materializes the new-condition variant at rung 1.
+_NEW_TITLE = "New Seagate ST12000NE0008 12TB HDD"
+
+
+def test_condition_edit_to_spares_rematerializes_the_variant(site: SourceSite) -> None:
+    # The identifiers stay [st12000ne0008], so R4-A's check kept the prior and
+    # rung 0 re-accepted the new-condition variant forever.
+    listing = _listing(site, "new-spares", _NEW_TITLE)
+    first = _resolve(listing)
+    assert first.evidence["variant_attributes"] == {"condition": "new"}
+    assert listing.product_variant is not None
+    assert listing.product_variant.condition == "new"
+    _retitle(listing, "For spares or repair: Seagate ST12000NE0008 12TB HDD")
+    edge = _resolve(listing)
+    assert edge.evidence["reconsidered_prior"] == {
+        "reason": "variant_attributes_changed",
+        "prior_variant_attributes": {"condition": "new"},
+    }
+    assert edge.evidence["outcome"] == "accept"
+    assert listing.product_variant is not None
+    assert listing.product_variant.condition == "for_parts"
+    assert listing.product_variant.product_model == _model("st12000ne0008")
+    assert edge.evidence["variant_attributes"] == {"condition": "for_parts"}
+    # The re-decision recorded what it decided on, so the next poll inherits.
+    assert _resolve(listing).pk == edge.pk
+    assert _edges(listing) == 2
+
+
+def test_unchanged_and_cosmetic_variant_titles_still_inherit(site: SourceSite) -> None:
+    listing = _listing(site, "new-same", _NEW_TITLE)
+    first = _resolve(listing)
+    assert _resolve(listing).pk == first.pk
+    _retitle(listing, "NEW Seagate IronWolf Pro ST12000NE0008 12TB NAS HDD!")
+    assert _resolve(listing).pk == first.pk
+    assert _edges(listing) == 1
+    assert listing.product_variant is not None
+    assert listing.product_variant.condition == "new"
+
+
+def test_dropped_condition_word_still_inherits(site: SourceSite) -> None:
+    # An unasserted condition is not evidence against the "new" variant.
+    listing = _listing(site, "new-unsaid", _NEW_TITLE)
+    first = _resolve(listing)
+    _retitle(listing, "Seagate ST12000NE0008 12TB HDD")
+    assert _resolve(listing).pk == first.pk
+    assert listing.product_variant is not None
+    assert listing.product_variant.condition == "new"
+
+
+def _variant_edge(listing: Listing, condition: str, evidence: dict[str, object]) -> None:
+    variant = ProductVariant.objects.create(
+        product_model=_model("st12000ne0008"), condition=condition
+    )
+    ListingResolution.objects.create(
+        listing=listing,
+        grain=ResolutionGrain.VARIANT,
+        product_variant=variant,
+        method=ResolutionMethod.EXACT_ALIAS,
+        confidence=0.98,
+        matcher_version=MATCHER_VERSION,
+        evidence={
+            "outcome": "accept",
+            "rung": 1,
+            "category": "drive",
+            "identity_identifiers": ["st12000ne0008"],
+            **evidence,
+        },
+    )
+    Listing.objects.filter(pk=listing.pk).update(
+        resolution_grain=ResolutionGrain.VARIANT,
+        product_variant=variant,
+        resolution_confidence=0.98,
+    )
+
+
+def test_variant_decided_on_the_same_assertions_is_not_redecided(site: SourceSite) -> None:
+    # A variant-grain alias can land a listing on a variant whose tuple differs
+    # from what the title asserts; the origin recorded those assertions, so the
+    # difference was already decided and must not re-decide on every poll.
+    listing = _listing(site, "alias-variant", "Used Seagate ST12000NE0008 12TB HDD")
+    _variant_edge(listing, "new", {"variant_attributes": {"condition": "used"}})
+    edge = _resolve(listing)
+    assert "reconsidered_prior" not in edge.evidence
+    assert _edges(listing) == 1
+    assert listing.product_variant is not None
+    assert listing.product_variant.condition == "new"
+
+
+def test_unrecorded_contradicted_variant_is_redecided_once(site: SourceSite) -> None:
+    listing = _listing(site, "legacy-variant", "Used Seagate ST12000NE0008 12TB HDD")
+    _variant_edge(listing, "new", {})
+    edge = _resolve(listing)
+    assert edge.evidence["reconsidered_prior"] == {
+        "reason": "variant_attributes_changed",
+        "prior_variant_attributes": {"condition": "new"},
+    }
+    assert listing.product_variant is not None
+    assert listing.product_variant.condition == "used"
+    assert _resolve(listing).pk == edge.pk
+    assert _edges(listing) == 2

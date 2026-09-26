@@ -231,6 +231,21 @@ def test_retail_pn_of_another_family_vetoes_the_grammar_family(site: SourceSite)
 def test_repair_preamble_resolves(site: SourceSite) -> None:
     # Round-4 R4-C: "For spares or repair:" names the listed drive's state.
     listing = _listing(site, "for-spares", "For spares or repair: Seagate ST12000NE0008 12TB HDD")
+    # The wording also asserts for_parts, so the accept materializes that
+    # variant: the model-grain denorm (listing.product_model) stays empty.
     edge = _resolve(listing)
     assert edge.evidence["outcome"] == "accept"
-    assert listing.product_model == _model("st12000ne0008")
+    assert listing.product_variant is not None
+    assert listing.product_variant.product_model == _model("st12000ne0008")
+    assert listing.product_variant.condition == "for_parts"
+
+
+def test_plural_repair_preamble_resolves_as_for_parts(site: SourceSite) -> None:
+    # Round-5 R4-C residual: plural "repairs" opened a reference span that the
+    # colon could not end, masking the MPN and the condition with it.
+    listing = _listing(site, "for-repairs", "For repairs: Seagate ST12000NE0008 12TB HDD")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "accept"
+    assert listing.product_variant is not None
+    assert listing.product_variant.product_model == _model("st12000ne0008")
+    assert listing.product_variant.condition == "for_parts"

@@ -86,21 +86,30 @@ _CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of", "fit for", "su
 #       ("For sale: Seagate ST12000NE0008"): a sales preamble whose object is
 #       the listed item itself, and masking it erased the whole identity.
 #       Likewise the repair/spares condition preambles ("For spares or repair:
-#       Seagate ST12000NE0008", "For parts or repair", "For repair"): they
+#       Seagate ST12000NE0008", "For repairs:", "For parts or repair"): they
 #       say what state the listed drive is in, and the colon after them is
 #       noise, not a clause boundary, so the span ran on through the MPN
-#       (round-4 R4-C). The exclusion is the word after "for" only, so "FOR
-#       Seagate Exos ..." still masks.
+#       (round-4 R4-C; plural "repairs" in round 5). The excluded words are
+#       FOR_PARTS_PREAMBLE_WORDS, shared with the for_parts condition. The
+#       exclusion is the word after "for" only, so "FOR Seagate Exos ..."
+#       still masks.
 #   "compatible" — drive: "Compatible Seagate ST12000NE0008 12TB" and
 #       "Compatible WD Ultrastar DC HC560 0F38785" (MS-1e ebay-0388) sell a
 #       look-alike of the cited drive. Mid-title it describes the drive's own
 #       use ("Seagate ST12000NE0008 12TB NAS compatible") and stays unmasked;
 #       "compatible with" is a shared phrase and masks anywhere.
 _CATEGORY_LEADING_REFERENCE_WORDS: tuple[str, ...] = ("for", "compatible")
+# The words after "for" that make it a condition preamble ("for parts", "for
+# spares", "for repairs"), as a regex alternation. ONE definition read by both
+# ends of a contract: the leading-"for" exclusion below, and vocab's for_parts
+# condition pattern. Two copies drifted in round 4 (vocab accepted "repairs",
+# the exclusion only "repair"), so "For repairs:" masked the whole identity,
+# condition included, and the drive read as unresolved instead of for_parts.
+FOR_PARTS_PREAMBLE_WORDS = r"(?:parts|spares?|repairs?)"
 # Per-word negative lookaheads: what may NOT follow a leading word for it to
 # open a span. Keyed per word because these are exceptions to "for" only;
 # sharing them would silently narrow every other leading word.
-_LEADING_EXCLUSIONS: dict[str, str] = {"for": r"(?!\s+(?:parts|sale|spares|repair)\b)"}
+_LEADING_EXCLUSIONS: dict[str, str] = {"for": rf"(?!\s+(?:sale|{FOR_PARTS_PREAMBLE_WORDS})\b)"}
 
 # Non-ASCII reference phrases, folded to their registered ASCII form BEFORE
 # noise stripping, which would otherwise erase them and hand the cited
