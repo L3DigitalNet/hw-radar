@@ -207,6 +207,15 @@ def _cpu_hard(spec: CpuSpec) -> cpu.CpuHard:
     return cpu.CpuHard(socket=cpu.socket_key(spec.socket) or None, cores=spec.cores)
 
 
+def _cpu_model_hard(spec: CpuSpec) -> cpu.CpuHard:
+    """A model-grain CPU target also carries its model key for the `model`
+    veto (cpu.veto). Never the family agreement set: a family has no single
+    model, and a one-model family would otherwise veto its unseeded siblings.
+    `spec.product_model` is the model the reader just came from (Django
+    caches the reverse one-to-one's owner), so this adds no query."""
+    return replace(_cpu_hard(spec), model=cpu.model_key(spec.product_model.model_number))
+
+
 def _agreed[P: ladder.CategoryHardAttrs](payloads: list[P]) -> P | None:
     """The C.3.2 agreement set for a category payload: each field keeps its value
     only where every spec in the family agrees; disagreeing fields become None."""
@@ -225,11 +234,17 @@ def _agreed[P: ladder.CategoryHardAttrs](payloads: list[P]) -> P | None:
 
 
 def _satellite_reader[S: (GpuSpec, RamSpec, CpuSpec)](
-    satellite: type[S], accessor: str, to_hard: Callable[[S], ladder.CategoryHardAttrs]
+    satellite: type[S],
+    accessor: str,
+    to_hard: Callable[[S], ladder.CategoryHardAttrs],
+    model_to_hard: Callable[[S], ladder.CategoryHardAttrs] | None = None,
 ) -> _SpecReader:
     """Spec reader for a first-class satellite: the typed payload rides on
     `HardAttrs.category`, and the drive fields stay None so drive's
-    `contradictions` could never read them even if misrouted."""
+    `contradictions` could never read them even if misrouted. `model_to_hard`,
+    when given, replaces `to_hard` for a model-grain target only (fields that
+    exist per model but have no family agreement meaning)."""
+    for_model = model_to_hard or to_hard
 
     def model_attrs(model: ProductModel | None) -> ladder.HardAttrs:
         if model is None:
@@ -238,7 +253,7 @@ def _satellite_reader[S: (GpuSpec, RamSpec, CpuSpec)](
             spec = cast("S", getattr(model, accessor))
         except satellite.DoesNotExist:  # pyright: ignore[reportAttributeAccessIssue] - django-types has no per-model DoesNotExist on a TypeVar-bound class
             return ladder.HardAttrs()
-        return ladder.HardAttrs(category=to_hard(spec))
+        return ladder.HardAttrs(category=for_model(spec))
 
     def family_attrs(family_id: int | None) -> ladder.HardAttrs:
         if family_id is None:
@@ -265,7 +280,7 @@ _SPEC_READERS: Final[dict[str, _SpecReader]] = {
     ),
     gpu.SLUG: _satellite_reader(GpuSpec, "gpu_spec", _gpu_hard),
     ram.SLUG: _satellite_reader(RamSpec, "ram_spec", _ram_hard),
-    cpu.SLUG: _satellite_reader(CpuSpec, "cpu_spec", _cpu_hard),
+    cpu.SLUG: _satellite_reader(CpuSpec, "cpu_spec", _cpu_hard, _cpu_model_hard),
     **dict.fromkeys(basic.BASIC_CATEGORIES, _NO_SPEC),
 }
 
