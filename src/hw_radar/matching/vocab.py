@@ -24,6 +24,7 @@ from typing import Final
 from hw_radar.matching.normalize import (
     DRIVE_REFERENCE_PHRASE,
     FOR_PARTS_PREAMBLE_WORDS,
+    NEGATOR_OWNING_PHRASE,
     mask_reference_spans,
 )
 from hw_radar.matching.types import Attribute, ExtractedAttributes
@@ -376,20 +377,23 @@ def _int_pattern(title: str, pattern: re.Pattern[str], scale: int = 1) -> Attrib
 #   Judged by its own window it would see only "factory" before it and
 #   re-assert the denied recertification (Codex r3 finding 6).
 # - Phrases whose own wording holds the negator ("not working" = for parts,
-#   "no warranty" = the warranty channel) are whole assertions; their negator
-#   negates nothing after them. "not working" is itself a condition match;
-#   _NEGATOR_OWNING_PHRASES lists the ones from other vocabularies.
+#   "no warranty" = the warranty channel, "no vendor lock" = unlocked, "no
+#   tray" = packaging boilerplate) are whole assertions; their negator negates
+#   nothing after them. They come from normalize.NEGATOR_OWNING_PHRASE, the one
+#   registry the CPU lock reader stops at too.
 #
 # A negated match is not an assertion, and is kept as NEGATIVE evidence
-# (ExtractedAttributes.denied_conditions) distinct from absence: a store's
+# (ExtractedAttributes.denied_conditions, and denied_recert_channels for the
+# channel a negated channel phrase names) distinct from absence: a store's
 # declared condition and an automated variant prior must yield to a listing
 # that denies them, while a title that merely stops naming a condition keeps
 # the omission policy (Codex r3 finding 8).
 #
-# Known cost of a window rule: "no tray used" / "no reserve new" read as
-# denials. The error is conservative: the condition becomes unknown and a
-# prior variant is re-decided at model grain; no condition is ever asserted
-# from a negated phrase.
+# Known cost of a window rule: boilerplate outside the registry ("no screws
+# used") reads as a denial. The error is conservative: the condition becomes
+# unknown, a prior variant is re-decided at model grain, and the source fold
+# declines (with_source_offer_terms); no condition is ever asserted from a
+# negated phrase.
 _NEGATORS: Final = frozenset({"not", "no", "never", "non", "without", "isnt", "arent", "aint"})
 _WINDOW_QUALIFIERS: Final = frozenset(
     {
@@ -411,7 +415,6 @@ _WINDOW_QUALIFIERS: Final = frozenset(
 _NEGATION_WINDOW: Final = 3
 # canonicalize_title turns "isn't" into "isn t"; both spellings are one token.
 _WINDOW_TOKEN = re.compile(r"\b(?:isn|aren|ain) ?'?t\b|[a-z0-9]+")
-_NEGATOR_OWNING_PHRASES = re.compile(r"\bno warranty\b")
 
 
 @dataclass(frozen=True)
@@ -445,7 +448,7 @@ def _condition_matches(text: str) -> list[_ConditionMatch]:
         for m in pattern.finditer(text)
     ]
     barriers = [m.span() for _rank, m in raw]
-    barriers += [m.span() for m in _NEGATOR_OWNING_PHRASES.finditer(text)]
+    barriers += [m.span() for m in NEGATOR_OWNING_PHRASE.finditer(text)]
     decided: list[_ConditionMatch] = []
     # Longest first, so a containing match is decided before its sub-matches.
     for rank, m in sorted(raw, key=lambda item: item[1].start() - item[1].end()):
@@ -524,6 +527,33 @@ def _denied_conditions(matches: list[_ConditionMatch]) -> Attribute[tuple[str, .
         return None
     return Attribute(
         value=tuple(dict.fromkeys(value for value, _ in denied)),
+        confidence=0.9,
+        layer=_LAYER,
+        source_text=", ".join(dict.fromkeys(text for _, text in denied)),
+    )
+
+
+def _denied_recert_channels(
+    matches: list[_ConditionMatch],
+) -> Attribute[tuple[str, ...]] | None:
+    """The recertification channels a negated channel phrase names ("NOT
+    Factory Recertified") and no asserted phrase names.
+
+    Kept apart from _denied_conditions: "Recertified NOT Factory Recertified"
+    asserts the generic condition, so no CONDITION is denied, yet the listing
+    explicitly withdraws factory provenance. Folding the denial into the
+    condition lost it, and a stored factory variant survived every normal poll
+    while fresh resolution gave an unknown channel (Codex s8 r4 finding 6)."""
+    asserted = {_CONDITIONS[m.rank][2] for m in matches if not m.negated}
+    denied = [
+        (channel, m.text)
+        for m in sorted(matches, key=lambda m: m.rank)
+        if m.negated and (channel := _CONDITIONS[m.rank][2]) is not None and channel not in asserted
+    ]
+    if not denied:
+        return None
+    return Attribute(
+        value=tuple(dict.fromkeys(channel for channel, _ in denied)),
         confidence=0.9,
         layer=_LAYER,
         source_text=", ".join(dict.fromkeys(text for _, text in denied)),
@@ -704,10 +734,18 @@ def with_source_offer_terms(extracted: ExtractedAttributes, source_key: str) -> 
     the listing's own "Used" contradicts. Condition unknown keeps a
     condition-restricted watch at `unknown`, and the resolver reviews.
 
-    A title that explicitly DENIES the declared condition ("... NOT
-    RECERTIFIED") gets no fold either: that is negative evidence, not the
-    omission the fold fills in, and folding it re-asserted exactly the
-    recertification the listing denies (Codex r3 finding 8).
+    A title that states no condition fills it from the store only when it
+    also DENIES none: a negated condition is negative evidence, not the
+    omission the fold fills in. Folding over "... NOT RECERTIFIED"
+    re-asserted exactly the recertification the listing denies (Codex r3
+    finding 8), and folding over a window-suppressed reading ("... No Screws
+    Used" reads as a denied used) turned a used drive into a factory recert
+    (Codex s8 r4 finding 4). Any denied condition therefore blocks the
+    condition fill, whichever condition it is.
+
+    A title that denies the declared CHANNEL ("Recertified NOT Factory
+    Recertified") gets no fold at all: its own recertified condition stands,
+    with no channel (Codex s8 r4 finding 6).
 
     The ONE fold both offer-term readers apply, each over the same category
     extraction: the resolver before the ladder (so _materialize and
@@ -720,10 +758,12 @@ def with_source_offer_terms(extracted: ExtractedAttributes, source_key: str) -> 
         return extracted
     if source_offer_conflict(extracted, source_key) is not None:
         return replace(extracted, condition=None, recert_channel=None)
-    denied = extracted.denied_conditions
-    if denied is not None and declared.condition in denied.value:
+    denied_channels = extracted.denied_recert_channels
+    if denied_channels is not None and declared.recert_channel in denied_channels.value:
         return extracted
     condition, channel = extracted.condition, extracted.recert_channel
+    if condition is None and extracted.denied_conditions is not None:
+        return extracted
     if condition is not None and condition.value != declared.condition:
         return extracted
     if channel is not None and channel.value != declared.recert_channel:
@@ -757,6 +797,7 @@ def _offer_fields(masked: str) -> ExtractedAttributes:
         condition=condition,
         condition_conflict=_condition_conflict(matches),
         denied_conditions=_denied_conditions(matches),
+        denied_recert_channels=_denied_recert_channels(matches),
         recert_channel=recert_channel,
         packaging=_first_pattern(masked, _PACKAGING, 0.85),
         warranty_months=_int_pattern(masked, _WARRANTY_YEARS, scale=12),

@@ -720,24 +720,32 @@ def _asserted_variant_attributes(extracted: ExtractedAttributes) -> dict[str, st
     return {name: attr.value for name, attr in claimed.items() if attr is not None}
 
 
-def _denied_conditions(extracted: ExtractedAttributes) -> frozenset[str]:
-    denied = extracted.denied_conditions
-    return frozenset() if denied is None else frozenset(denied.value)
+def _denied_variant_attributes(extracted: ExtractedAttributes) -> dict[str, frozenset[str]]:
+    """The variant tuple values the listing explicitly denies, by field name:
+    conditions and recertification channels (vocab's negative evidence)."""
+    denied = {
+        "condition": extracted.denied_conditions,
+        "recert_channel": extracted.denied_recert_channels,
+    }
+    return {name: frozenset(attr.value) for name, attr in denied.items() if attr is not None}
 
 
 def _variant_contradictions(
-    variant_id: int, asserted: dict[str, str], denied_conditions: frozenset[str]
+    variant_id: int, asserted: dict[str, str], denied: dict[str, frozenset[str]]
 ) -> dict[str, str]:
     """The variant's tuple fields the listing contradicts, with the variant's
-    value: an asserted field the tuple does not equal, or a condition the
-    listing explicitly denies. A variant field left "unknown" counts against
-    an assertion (a listing that asserts a factory channel is not an
-    unknown-channel offer) but is never denied.
+    value: an asserted field the tuple does not equal, or a condition or
+    recertification channel the listing explicitly denies. A variant field
+    left "unknown" counts against an assertion (a listing that asserts a
+    factory channel is not an unknown-channel offer) but is never denied.
 
     The denial is what lets "Used ..." edited to "never used ..." leave the
     used variant: the edit asserts no condition, so comparing assertions alone
     found nothing and rung 0 kept the used variant forever (Codex r3 finding
-    8). A condition merely no longer named is still no contradiction."""
+    8). Likewise "Recertified NOT Factory Recertified" asserts the stored
+    factory variant's condition and no channel, so only the denied channel
+    can withdraw it (Codex s8 r4 finding 6). A value merely no longer named is
+    still no contradiction."""
     variant = ProductVariant.objects.get(pk=variant_id)
     tuple_: dict[str, str] = {
         "condition": variant.condition,
@@ -748,8 +756,9 @@ def _variant_contradictions(
     contradicted = {
         name: tuple_[name] for name, value in sorted(asserted.items()) if tuple_[name] != value
     }
-    if variant.condition in denied_conditions:
-        contradicted["condition"] = variant.condition
+    for name, values in denied.items():
+        if tuple_[name] in values:
+            contradicted[name] = tuple_[name]
     return dict(sorted(contradicted.items()))
 
 
@@ -774,7 +783,7 @@ def _offer_reconsideration(
     asserts, or review.
 
     Variant prior: re-decided whenever an asserted field differs from its
-    tuple, or the listing explicitly denies its condition
+    tuple, or the listing explicitly denies its condition or channel
     (_variant_contradictions). There is deliberately no "same recorded
     assertions" exception: it froze a variant-alias accept whose tuple
     contradicted the listing (s8 finding 2). No flapping follows, because no accept can now record such a
@@ -790,7 +799,7 @@ def _offer_reconsideration(
     target = prior.target
     if target.grain is Grain.VARIANT and target.variant_id is not None:
         contradicted = _variant_contradictions(
-            target.variant_id, asserted, _denied_conditions(extracted)
+            target.variant_id, asserted, _denied_variant_attributes(extracted)
         )
         if not contradicted:
             return None
@@ -1005,7 +1014,7 @@ def _offer_contradiction_review(
         contradicted = _variant_contradictions(
             target.variant_id,
             _asserted_variant_attributes(extracted),
-            _denied_conditions(extracted),
+            _denied_variant_attributes(extracted),
         )
         if contradicted:
             return _review(verdict, variant_contradicted=contradicted)

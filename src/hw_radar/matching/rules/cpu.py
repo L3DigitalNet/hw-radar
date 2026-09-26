@@ -90,6 +90,9 @@ from typing import Final
 from hw_radar.matching import vocab
 from hw_radar.matching.ladder import CategoryHardAttrs, HardAttrs
 from hw_radar.matching.normalize import (
+    LOCK_OEMS,
+    NEGATED_LOCK_PHRASE,
+    NEGATOR_OWNING_PHRASE,
     canonicalize_title,
     mask_reference_spans,
     reference_phrase_pattern,
@@ -315,16 +318,16 @@ VENDOR_UNLOCKED: Final = "unlocked"
 #     enclosing match's verdict and can never re-assert a denied or claimed
 #     phrase.
 # A window stops at an earlier assertion, so the negator claimed by 'no
-# vendor lock' does not also negate a following 'Unlocked'. A bare 'unlock'
-# (_UNLOCK_STEM) is never a reading ('unlock code'), but negated ('without
-# unlock', 'no unlock') it is a denial, so it still vetoes an 'Unlocked'
+# vendor lock' does not also negate a following 'Unlocked', and at every
+# negator-owning phrase of the registry shared with vocab
+# (normalize.NEGATOR_OWNING_PHRASE: 'No Warranty', 'No Reserve', ...). A bare
+# 'unlock' (_UNLOCK_STEM) is never a reading ('unlock code'), but negated
+# ('without unlock', 'no unlock') it is a denial, so it still vetoes an 'Unlocked'
 # elsewhere in the title. Typos ('unclocked') are deliberately absent, and
 # hyphens and spaces are interchangeable separators ('no-vendor-lock',
 # 'psb-locked'). The watch clause treats unknown as not satisfying an unlocked requirement, so a
 # missed unlocked costs a review while a misread one makes a locked CPU
 # eligible: every doubtful shape resolves to unknown.
-_LOCK_OEMS = r"(?:dell|lenovo|hpe?|cisco)"
-_LOCK_QUALIFIER = rf"(?:(?:vendor|psb|{_LOCK_OEMS})[-\s]+)"
 # The shared reference phrases plus lock-local ones. The lock-local phrases
 # are registered in normalize._CATEGORY_REFERENCE_PHRASES (reference_phrase_
 # pattern enforces it) so canonicalize_title keeps their clause punctuation
@@ -346,18 +349,15 @@ _NEGATION_WINDOW: Final = 3
 # One token per contraction, exactly as vocab's condition window reads it, so
 # "isn't X Y unlocked" spends the same window in both readers.
 _WINDOW_TOKEN = re.compile(r"\b(?:isn|aren|ain) ?'?t\b|[a-z0-9]+")
-_UNLOCK_PHRASES = re.compile(
-    r"\bno[-\s]+(?:(?:vendor|psb)[-\s]+)?lock(?:ed)?\b"
-    rf"|\b(?:not|isn\s?t)[-\s]+{_LOCK_QUALIFIER}?locked\b"
-    r"|\bnon[-\s]?(?:(?:vendor|psb)[-\s]+)?locked\b"
-)
+# Shared with vocab, which must stop its condition window at these too.
+_UNLOCK_PHRASES = NEGATED_LOCK_PHRASE
 _UNLOCK_WORD = re.compile(r"\bun-?locked\b")
 _UNLOCK_STEM = re.compile(r"\bun-?lock\b")
 # The bare word covers 'Dell Locked', 'vendor-locked', 'PSB locked', 'locked
 # to <vendor>' and the emphasized '(*locked*)'. '<OEM> only' ('LENOVO ONLY') is
 # an exclusivity claim, which for a CPU means it only boots in that OEM's
 # boards: a vendor lock stated in other words.
-_LOCK_WORD = re.compile(rf"\blocked\b|\b(?:vendor|psb)[-\s]lock\b|\b{_LOCK_OEMS}\s+only\b")
+_LOCK_WORD = re.compile(rf"\blocked\b|\b(?:vendor|psb)[-\s]lock\b|\b{LOCK_OEMS}\s+only\b")
 
 
 def socket_key(value: str) -> str:
@@ -545,7 +545,11 @@ def _lock_wording(text: str) -> _LockWording:
     for pattern, unlock, reads in scans:
         found += [(m, unlock, reads) for m in pattern.finditer(rest)]
         rest = _blank(pattern, rest)
+    # Barriers: every earlier assertion, and every negator-owning phrase of
+    # the shared registry, whose negator is its own ("Unlocked No Warranty
+    # Dell Locked" keeps the lock standing against the unlock).
     spans = [f[0].span() for f in found]
+    spans += [m.span() for m in NEGATOR_OWNING_PHRASE.finditer(text)]
     first: dict[tuple[bool, bool], re.Match[str]] = {}
     for m, unlock, reads in sorted(found, key=lambda f: f[0].start()):
         denied = _negated(text, m.start(), [s for s in spans if s[1] <= m.start()])

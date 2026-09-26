@@ -80,6 +80,13 @@ class ExtractedAttributes:
     # contradicts a stored variant (resolver._variant_contradictions), while
     # mere omission does neither.
     denied_conditions: Attribute[tuple[str, ...]] | None = None
+    # Recertification channels ("factory", "seller") a negated channel phrase
+    # names and no asserted phrase does (vocab._denied_recert_channels). Its
+    # own field because the generic condition can still stand ("Recertified
+    # NOT Factory Recertified"): a denied channel blocks the source fold's
+    # channel and contradicts a stored variant carrying it
+    # (resolver._variant_contradictions).
+    denied_recert_channels: Attribute[tuple[str, ...]] | None = None
     recert_channel: Attribute[str] | None = None  # factory | seller
     packaging: Attribute[str] | None = None  # retail | bulk
     warranty_months: Attribute[int] | None = None
