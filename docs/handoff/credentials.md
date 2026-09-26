@@ -17,8 +17,11 @@ Never store credential values in this repository.
 - `HW_RADAR_DB_PORT`
 - `HW_RADAR_KUMA_PUSH_URL`
 - `EBAY_API_BASE` (optional endpoint override)
-- `EBAY_CLIENT_ID` — OpenBao `secret/api-keys/commerce/ebay`
-- `EBAY_CLIENT_SECRET` — OpenBao `secret/api-keys/commerce/ebay`
+- `EBAY_CLIENT_ID` / `EBAY_CLIENT_SECRET` — eBay Developer application keys. Workstation OpenBao
+  `secret/api-keys/commerce/ebay`, fields `username` (client ID) and `password` (client secret):
+  the record is login-shaped but holds the API keys. Production: the CT's bao-agent renders both
+  from the service-store record `services/apps/hw-radar/config`, fields `ebay_client_id` and
+  `ebay_client_secret` (added 2026-09-26 for eBay x CPU; template in the private homelab repo).
 - `HW_RADAR_APIFY_TOKEN` — OpenBao `secret/apps/hw-radar/apify`. Runtime, **scoped** token,
   created by the owner 2026-09-25. It needs **Run** and **Read** on the Hardware Radar Actor:
   Read covers `GET /v2/actor-runs/{id}` polls and the `GET /v2/actor-builds/{id}` build reads
