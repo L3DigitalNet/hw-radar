@@ -12,17 +12,32 @@ Two distinct jobs live here:
    each writes a temporary corpus with a known defect and asserts the composite
    refuses it. They run through the same load → evaluate → report path as the real
    gate, so a regression in that path breaks them too.
+
+Two catalogs, deliberately (owner decision 2026-09-26, ledger L6). The composite
+gate and the opt-in measurement evaluate against `production_catalog`: a clean
+migrated DB plus `import_refdata` over the committed seeds, exactly what
+production runs. The hand-built `seeded_catalog` stays for the harness-mechanics
+and generated-defect cases only — it once gave the opposite verdict from
+production refdata on the real draft corpus, so it is never authoritative for
+ratification. `_composite_run` re-checks the catalog before evaluating and a
+structural test pins which fixture the composite paths request, so pointing the
+gate back at a fixture fails a test.
 """
 
 from __future__ import annotations
 
+import inspect
+import io
 import json
+import os
 from collections.abc import Sequence
+from dataclasses import asdict
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import pytest
+from django.core.management import call_command
 from django.db import transaction
 
 from hw_radar.catalog.models import (
@@ -45,6 +60,7 @@ from hw_radar.matching.eval.corpus import (
     load_corpus,
     load_meta,
     select_audit_sample,
+    validate_declared_sources,
 )
 from hw_radar.matching.eval.evaluate import (
     Prediction,
@@ -52,6 +68,7 @@ from hw_radar.matching.eval.evaluate import (
     evaluate_corpus,
     prediction_matches,
 )
+from hw_radar.matching.eval.refdata_pin import drive_seed_digest
 from hw_radar.matching.eval.report import (
     EvalReport,
     Rung0Status,
@@ -62,6 +79,7 @@ from hw_radar.matching.eval.report import (
 from hw_radar.matching.ladder import Outcome
 from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.types import Grain
+from hw_radar.refdata.loader import load_seed_documents
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "matching_corpus"
 SYNTHETIC_JSONL = FIXTURE_DIR / "synthetic.jsonl"
@@ -71,7 +89,18 @@ SYNTHETIC_META = FIXTURE_DIR / "synthetic.meta.json"
 CORPUS_JSONL = FIXTURE_DIR / "corpus.jsonl"
 CORPUS_META = FIXTURE_DIR / "corpus.meta.json"
 
-ALL_SOURCES = ("serverpartdeals", "goharddrive", "wd-recertified", "seagate-recertified", "ebay")
+# The currently admissible sources (OQ32); generated corpora declare these.
+ADMISSIBLE_SOURCES = ("ebay", "goharddrive", "wd-recertified")
+
+# Identity token for the hand-built `seeded_catalog`, which has no seed files to
+# digest. All zeros is not the refdata_pin digest of any real seed set, so a
+# corpus pinned to it can never pass the composite gate, which pins against
+# drive_seed_digest() of the production seeds.
+FIXTURE_CATALOG_DIGEST = "0" * 64
+
+# Opt-in measurement (test_ms1e_corpus_measurement).
+MEASUREMENT_CORPUS_ENV = "HW_RADAR_MS1E_CORPUS"
+MEASUREMENT_REPORT_ENV = "HW_RADAR_MS1E_REPORT"
 
 # One resolvable listing shape reused for the generated gate cases: it hits the
 # seeded ST16000NM001G alias at rung 1 and carries a factory-recert condition, so
@@ -191,8 +220,92 @@ def seeded_catalog(db: None) -> None:
 def _evaluate(
     entries: Sequence[CorpusEntry], meta: CorpusMeta
 ) -> tuple[list[Prediction], EvalReport]:
+    """Harness run against `seeded_catalog` — never the composite gate's path."""
     predictions = evaluate_corpus(entries, meta)
-    return predictions, build_report(entries, predictions, meta)
+    return predictions, build_report(
+        entries, predictions, meta, evaluated_refdata_drive_digest=FIXTURE_CATALOG_DIGEST
+    )
+
+
+@pytest.fixture
+def production_catalog(db: None) -> str:
+    """The composite gate's catalog: the clean migrated test DB plus the canonical
+    production import (`import_refdata` with no `--seed-dir`, i.e. the committed
+    seeds). Returns the refdata_pin digest of the drive seeds it imported."""
+    call_command("import_refdata", stdout=io.StringIO())
+    return drive_seed_digest()
+
+
+CatalogRows = tuple[set[tuple[str, str]], set[tuple[str, str, str, str]]]
+
+
+def _seed_derived_catalog() -> CatalogRows:
+    """(models, aliases) the committed seeds define, read through the same loader
+    `import_refdata` uses — the expected catalog, independent of the DB."""
+    models: set[tuple[str, str]] = set()
+    aliases: set[tuple[str, str, str, str]] = set()
+    for doc in load_seed_documents():
+        for model in doc.models:
+            key = (doc.manufacturer_key, normalize_alias_text(model.model_number))
+            models.add(key)
+            aliases.update((alias.alias_type, alias.normalized, *key) for alias in model.aliases)
+    return models, aliases
+
+
+def _db_catalog() -> CatalogRows:
+    models = {
+        (str(maker), str(number))
+        for maker, number in ProductModel.objects.values_list(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType] - django-types leaves values_list's element type Unknown
+            "manufacturer__normalized_name", "normalized_model_number"
+        )
+    }
+    aliases = {
+        (str(kind), str(text), str(maker), str(number))
+        for kind, text, maker, number in ProductAlias.objects.values_list(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType] - django-types leaves values_list's element type Unknown
+            "alias_type",
+            "normalized_alias_text",
+            "product_model__manufacturer__normalized_name",
+            "product_model__normalized_model_number",
+        )
+    }
+    return models, aliases
+
+
+def _assert_catalog_is_production_refdata() -> None:
+    """Refuse to ratify against anything but the production import.
+
+    Runs before evaluation, while the catalog is still pristine: the resolver
+    itself adds rows (rung-2 provisional families, variants), so the comparison
+    is only meaningful before the first entry resolves. Any extra fixture row —
+    e.g. `seeded_catalog` layered on top — or a missing seed row fails here.
+    """
+    expected_models, expected_aliases = _seed_derived_catalog()
+    actual_models, actual_aliases = _db_catalog()
+    assert actual_models == expected_models, (
+        f"gate catalog models diverge from the committed seeds: "
+        f"extra={sorted(actual_models - expected_models)} "
+        f"missing={sorted(expected_models - actual_models)}"
+    )
+    assert actual_aliases == expected_aliases, (
+        f"gate catalog aliases diverge from the committed seeds: "
+        f"extra={sorted(actual_aliases - expected_aliases)} "
+        f"missing={sorted(expected_aliases - actual_aliases)}"
+    )
+
+
+def _composite_run(
+    entries: Sequence[CorpusEntry], meta: CorpusMeta
+) -> tuple[list[Prediction], EvalReport]:
+    """THE composite-gate evaluation path, shared by the gate and the opt-in
+    measurement so the two can never measure different things. Callers must
+    request `production_catalog` (pinned by a structural test below)."""
+    _assert_catalog_is_production_refdata()
+    # Before any DB write: an undeclared source is a manifest defect, not a result.
+    validate_declared_sources(entries, meta)
+    predictions = evaluate_corpus(entries, meta)
+    return predictions, build_report(
+        entries, predictions, meta, evaluated_refdata_drive_digest=drive_seed_digest()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -213,7 +326,8 @@ def test_synthetic_fixture_resolves_exactly_as_labeled(seeded_catalog: None) -> 
         if not prediction_matches(prediction, entry.label)
     ]
     assert mismatched == []
-    assert report.family_floor_met is True
+    # The fixture predates OQ32's retirements and declares all five sources.
+    assert report.source_floor.retired_declared == ("seagate-recertified", "serverpartdeals")
     assert report.audit_gate is Verdict.PASS
 
 
@@ -322,6 +436,7 @@ def _write_corpus(
     *,
     corpus_version: str = "generated-v1",
     audit_rollup: dict[str, int] | None = None,
+    ratification_sources: Sequence[str] = ADMISSIBLE_SOURCES,
 ) -> tuple[Path, Path]:
     counts: dict[str, int] = {}
     rollup: dict[str, int] = {}
@@ -342,6 +457,8 @@ def _write_corpus(
                 "source_counts": counts,
                 "matcher_version": "2026.07.3",
                 "audit_rollup": audit_rollup if audit_rollup is not None else rollup,
+                "ratification_sources": list(ratification_sources),
+                "refdata_drive_digest": FIXTURE_CATALOG_DIGEST,
             }
         ),
         encoding="utf-8",
@@ -379,7 +496,7 @@ def _generated_entry(
 
 
 def _generated_corpus(
-    count: int, *, sources: tuple[str, ...] = ALL_SOURCES, wrong: int = 0
+    count: int, *, sources: tuple[str, ...] = ADMISSIBLE_SOURCES, wrong: int = 0
 ) -> list[dict[str, Any]]:
     return [
         _generated_entry(
@@ -429,14 +546,14 @@ def test_generated_corpus_below_precision_fails(seeded_catalog: None, tmp_path: 
 def test_generated_corpus_missing_a_source_fails_despite_passing_precision(
     seeded_catalog: None, tmp_path: Path
 ) -> None:
-    """SA-NEW-002: one source stuck below family grain is a catalog/extraction gap
-    that a precision PASS would otherwise hide."""
+    """SA-NEW-002 / OQ32: a declared source with no ratified accept is a
+    catalog/extraction gap that a precision PASS would otherwise hide."""
     jsonl, meta_path = _write_corpus(
-        tmp_path, _generated_corpus(PASSING_COUNT, sources=ALL_SOURCES[:4])
+        tmp_path, _generated_corpus(PASSING_COUNT, sources=ADMISSIBLE_SOURCES[:2])
     )
     _, report = _evaluate(load_corpus(jsonl), load_meta(meta_path))
     assert report.precision_verdict is Verdict.PASS
-    assert report.per_source_family_floor["ebay"] is False
+    assert report.per_source_family_floor["wd-recertified"] is False
     assert ms1_ratification_gate(report, Rung0Status.PASS) is Verdict.FAIL
 
 
@@ -524,22 +641,133 @@ def test_composite_gate_folds_in_the_rung0_suite_result(
 # ---------------------------------------------------------------------------
 
 
-def test_ms1_ratification_gate(seeded_catalog: None) -> None:
+def test_ms1_ratification_gate(production_catalog: str) -> None:
     """THE ratification gate (design §6 step 4).
 
     Skips only while the corpus is genuinely absent — the live harvest, labeling,
     and owner audit are the deferred owner-in-the-loop step (E-1). Once
-    `corpus.jsonl` exists this test evaluates it and asserts the corpus side of the
-    composite; it never degrades a present-but-weak corpus into a skip (SA-005).
-    The rung-0 half of the composite is the separate regression suite, run
-    alongside this one per the §6 runbook.
+    `corpus.jsonl` exists this test evaluates it through `_composite_run` against
+    the production refdata import and asserts the corpus side of the composite;
+    it never degrades a present-but-weak corpus into a skip (SA-005). The rung-0
+    half of the composite is the separate regression suite, run alongside this
+    one per the §6 runbook.
     """
     if not CORPUS_JSONL.exists():
         pytest.skip("corpus not yet harvested")
     entries = load_corpus(CORPUS_JSONL)
     meta = load_meta(CORPUS_META)
-    _, report = _evaluate(entries, meta)
+    _, report = _composite_run(entries, meta)
     assert report.precision_verdict is Verdict.PASS, report
-    assert report.family_floor_met, report.per_source_family_floor
+    assert report.refdata_pinned, (
+        f"corpus pins refdata {report.declared_refdata_drive_digest}, "
+        f"evaluated against {production_catalog}"
+    )
+    assert report.family_floor_met, report.source_floor
     assert report.audit_gate is Verdict.PASS, report.audit
     assert report.corpus_gate is Verdict.PASS, report
+
+
+def _report_payload(
+    entries: Sequence[CorpusEntry], predictions: Sequence[Prediction], report: EvalReport
+) -> dict[str, Any]:
+    by_id = {entry.id: entry for entry in entries}
+    return {
+        "report": asdict(report),
+        # Derived verdicts are properties, which asdict does not carry.
+        "verdicts": {
+            "precision_verdict": report.precision_verdict,
+            "family_floor_met": report.family_floor_met,
+            "per_source_family_floor": dict(report.per_source_family_floor),
+            "enough_sources": report.source_floor.enough_sources,
+            "retired_declared": report.source_floor.retired_declared,
+            "refdata_pinned": report.refdata_pinned,
+            "audit_gate": report.audit_gate,
+            "corpus_gate": report.corpus_gate,
+            "composite_rung0_not_run": ms1_ratification_gate(report, Rung0Status.NOT_RUN),
+        },
+        "predictions": [
+            {
+                **asdict(prediction),
+                "label_grain": by_id[prediction.entry_id].label.expected_grain,
+                "label_audit_status": by_id[prediction.entry_id].label.audit_status,
+                "matches_label": prediction_matches(prediction, by_id[prediction.entry_id].label),
+            }
+            for prediction in predictions
+        ],
+    }
+
+
+def test_ms1e_corpus_measurement(production_catalog: str) -> None:
+    """Opt-in measurement of an arbitrary corpus through the EXACT composite path.
+
+    Skipped unless `HW_RADAR_MS1E_CORPUS` names a corpus `.jsonl`; its manifest is
+    read from the sibling `.meta.json` (`x.jsonl` → `x.meta.json`). The full
+    EvalReport, the derived verdicts, and every per-entry prediction are written
+    as JSON to `HW_RADAR_MS1E_REPORT`, and the verdicts are printed (run with -s).
+    It never asserts PASS — a measurement of a draft corpus is expected to fail
+    the gate — so it only fails on a harness error or a missing report path. The
+    composite printed here has the rung-0 suite NOT_RUN, so it can be at best
+    INCOMPLETE; run tests/db/test_rung0_regression.py for that half.
+
+        HW_RADAR_MS1E_CORPUS=/tmp/probe/corpus.jsonl \\
+        HW_RADAR_MS1E_REPORT=/tmp/probe/report.json \\
+        uv run pytest tests/db/test_ratification_corpus.py -k measurement -s
+    """
+    corpus_path = os.environ.get(MEASUREMENT_CORPUS_ENV)
+    if not corpus_path:
+        pytest.skip(f"{MEASUREMENT_CORPUS_ENV} not set")
+    report_path = os.environ.get(MEASUREMENT_REPORT_ENV)
+    if not report_path:
+        pytest.fail(f"{MEASUREMENT_REPORT_ENV} must name the JSON report output path")
+    jsonl = Path(corpus_path)
+    entries = load_corpus(jsonl)
+    meta = load_meta(jsonl.with_suffix(".meta.json"))
+    predictions, report = _composite_run(entries, meta)
+    payload = _report_payload(entries, predictions, report)
+    payload["evaluated_against"] = production_catalog
+    Path(report_path).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    print(
+        json.dumps(
+            payload["verdicts"]
+            | {
+                "auto_accepts": report.auto_accepts,
+                "correct_auto_accepts": report.correct_auto_accepts,
+                "precision": report.precision,
+            },
+            indent=2,
+            default=str,
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# The gate's catalog is the production import, and only that
+# ---------------------------------------------------------------------------
+
+
+def test_production_catalog_is_exactly_the_committed_seed_import(production_catalog: str) -> None:
+    models, aliases = _seed_derived_catalog()
+    assert models, "the committed seeds define no models"
+    assert _db_catalog() == (models, aliases)
+    assert production_catalog == drive_seed_digest()
+
+
+def test_the_catalog_guard_refuses_a_fixture_row_on_top_of_refdata(
+    production_catalog: str,
+) -> None:
+    """The divergence the owner decision closed: any hand-seeded row beside the
+    production import (here the `seeded_catalog` HGST model) must stop the run."""
+    _seed_model("hgst", "HGST", "HUS724040ALS640", capacity_tb="4", interface="SAS 6Gb/s")
+    with pytest.raises(AssertionError, match="HUS724040ALS640".lower()):
+        _composite_run([], load_meta(SYNTHETIC_META))
+
+
+@pytest.mark.parametrize("gate", [test_ms1_ratification_gate, test_ms1e_corpus_measurement])
+def test_composite_paths_request_the_production_catalog(gate: object) -> None:
+    """Structural pin: a future edit pointing the gate at a test fixture fails here
+    even while the committed corpus is absent and the gate itself skips."""
+    assert callable(gate)
+    parameters = inspect.signature(gate).parameters
+    assert "production_catalog" in parameters
+    assert "seeded_catalog" not in parameters
+    assert "_composite_run" in inspect.getsource(gate)

@@ -13,13 +13,14 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pytest
 
 from hw_radar.matching.eval.corpus import (
     AuditStatus,
     CorpusEntry,
+    CorpusFormatError,
     CorpusMeta,
     load_corpus,
     load_meta,
@@ -28,11 +29,15 @@ from hw_radar.matching.eval.corpus import (
 from hw_radar.matching.eval.evaluate import Prediction, prediction_matches
 from hw_radar.matching.eval.report import (
     MIN_AUTO_ACCEPTS,
+    MIN_RATIFICATION_SOURCES,
+    PASS_PRECISION_DENOMINATOR,
+    PASS_PRECISION_NUMERATOR,
     EvalReport,
     Rung0Status,
     Verdict,
     build_report,
     ms1_ratification_gate,
+    retired_source_keys,
 )
 from hw_radar.matching.ladder import Outcome
 from hw_radar.matching.types import Grain
@@ -42,6 +47,13 @@ SYNTHETIC_JSONL = FIXTURE_DIR / "synthetic.jsonl"
 SYNTHETIC_META = FIXTURE_DIR / "synthetic.meta.json"
 
 ALL_SOURCES = ("serverpartdeals", "goharddrive", "wd-recertified", "seagate-recertified", "ebay")
+# The three currently admissible sources (OQ32): ServerPartDeals and Seagate are
+# retired, so a passing synthetic corpus is built from exactly these.
+ADMISSIBLE_SOURCES = ("ebay", "goharddrive", "wd-recertified")
+# Stand-in catalog identity for predictions constructed without any catalog: the
+# harness math only needs the evaluated and declared digests to agree or differ.
+FAKE_DIGEST = "a" * 64
+OTHER_DIGEST = "b" * 64
 
 RECERT = {
     "condition": "recertified",
@@ -131,15 +143,22 @@ def make_meta(
     *,
     corpus_version: str = "v1",
     audit_rollup: dict[str, int] | None = None,
+    declared: tuple[str, ...] | Literal["from_entries"] | None = "from_entries",
+    refdata_drive_digest: str | None = FAKE_DIGEST,
 ) -> CorpusMeta:
+    """Manifest for `entries`; by default it declares exactly the sources present
+    (a test-helper convenience — production has no default declared set)."""
     counts: dict[str, int] = {}
     rollup: dict[str, int] = {}
     for entry in entries:
         counts[entry.source] = counts.get(entry.source, 0) + 1
         status = str(entry.label.audit_status)
         rollup[status] = rollup.get(status, 0) + 1
+    sources = sorted(counts) if declared == "from_entries" else declared
     return CorpusMeta.model_validate(
         {
+            "ratification_sources": sources,
+            "refdata_drive_digest": refdata_drive_digest,
             "corpus_version": corpus_version,
             "harvested_from": "2026-07-01",
             "harvested_to": "2026-07-02",
@@ -152,7 +171,7 @@ def make_meta(
 
 
 def build_corpus(
-    accepts: int, *, wrong: int = 0, sources: tuple[str, ...] = ALL_SOURCES
+    accepts: int, *, wrong: int = 0, sources: tuple[str, ...] = ADMISSIBLE_SOURCES
 ) -> tuple[list[CorpusEntry], list[Prediction]]:
     """A corpus of `accepts` rung-1 auto-accepts, `wrong` of them mispredicted,
     spread round-robin over `sources`."""
@@ -163,8 +182,15 @@ def build_corpus(
     return entries, predictions
 
 
-def report_for(entries: list[CorpusEntry], predictions: list[Prediction]) -> EvalReport:
-    return build_report(entries, predictions, make_meta(entries))
+def report_for(
+    entries: list[CorpusEntry], predictions: list[Prediction], meta: CorpusMeta | None = None
+) -> EvalReport:
+    return build_report(
+        entries,
+        predictions,
+        meta if meta is not None else make_meta(entries),
+        evaluated_refdata_drive_digest=FAKE_DIGEST,
+    )
 
 
 def test_precision_is_correct_auto_accepts_over_auto_accepts() -> None:
@@ -197,7 +223,7 @@ def test_below_the_denominator_floor_is_insufficient_never_pass() -> None:
 
 
 def test_an_empty_corpus_is_insufficient_not_a_division_error() -> None:
-    report = build_report([], [], make_meta([]))
+    report = report_for([], [], make_meta([]))
     assert report.precision is None
     assert report.precision_verdict is Verdict.INSUFFICIENT_CORPUS
 
@@ -252,18 +278,18 @@ def test_a_source_stuck_at_grain_none_misses_the_family_floor() -> None:
     assert report.family_floor_met is False
 
 
-def test_a_source_absent_from_the_corpus_misses_the_floor() -> None:
-    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS, sources=ALL_SOURCES[:4])
-    report = report_for(entries, predictions)
-    assert report.per_source_family_floor["ebay"] is False
-    assert report.per_source_coverage["ebay"] == 0.0
+def test_a_declared_source_absent_from_the_corpus_misses_the_floor() -> None:
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS, sources=ADMISSIBLE_SOURCES[:2])
+    report = report_for(entries, predictions, make_meta(entries, declared=ADMISSIBLE_SOURCES))
+    assert report.per_source_family_floor["wd-recertified"] is False
+    assert report.per_source_coverage["wd-recertified"] == 0.0
     assert report.family_floor_met is False
 
 
 def test_floor_miss_fails_the_composite_despite_a_precision_pass() -> None:
     """SA-NEW-002: precision must never masquerade as MS-1 readiness."""
-    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS, sources=ALL_SOURCES[:4])
-    report = report_for(entries, predictions)
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS, sources=ADMISSIBLE_SOURCES[:2])
+    report = report_for(entries, predictions, make_meta(entries, declared=ADMISSIBLE_SOURCES))
     assert report.precision_verdict is Verdict.PASS
     assert report.audit_gate is Verdict.PASS
     assert report.corpus_gate is Verdict.FAIL
@@ -355,7 +381,7 @@ def test_variant_identity_is_compared_not_collapsed_to_the_model() -> None:
     ]
     assert not prediction_matches(swapped[0], recert.label)
     assert not prediction_matches(swapped[1], brand_new.label)
-    report = build_report([recert, brand_new], swapped, make_meta([recert, brand_new]))
+    report = report_for([recert, brand_new], swapped, make_meta([recert, brand_new]))
     assert report.correct_auto_accepts == 0
 
 
@@ -421,7 +447,7 @@ def test_one_unaudited_entry_inside_the_sample_fails_the_gate() -> None:
         for entry in entries
     ]
     predictions = [make_prediction(entry) for entry in downgraded]
-    report = build_report(downgraded, predictions, make_meta(downgraded))
+    report = report_for(downgraded, predictions, make_meta(downgraded))
     assert report.audit.unaudited_sample_ids == (sample[0],)
     assert report.audit_gate is Verdict.FAIL
 
@@ -438,7 +464,7 @@ def test_audit_outside_the_sample_does_not_substitute_for_it() -> None:
         for entry in entries
     ]
     predictions = [make_prediction(entry) for entry in flipped]
-    report = build_report(flipped, predictions, make_meta(flipped))
+    report = report_for(flipped, predictions, make_meta(flipped))
     assert set(report.audit.unaudited_sample_ids) == sample
     assert report.audit_gate is Verdict.FAIL
 
@@ -447,7 +473,7 @@ def test_a_stale_manifest_rollup_fails_the_audit_gate() -> None:
     entries = [make_entry(f"d-{n}") for n in range(10)]
     predictions = [make_prediction(entry) for entry in entries]
     stale = make_meta(entries, audit_rollup={"owner_confirmed": 9, "claude_draft": 1})
-    report = build_report(entries, predictions, stale)
+    report = report_for(entries, predictions, stale)
     assert report.audit.rollup_consistent is False
     assert report.audit_gate is Verdict.FAIL
 
@@ -455,13 +481,13 @@ def test_a_stale_manifest_rollup_fails_the_audit_gate() -> None:
 def test_report_is_deterministic_for_identical_input() -> None:
     entries, predictions = build_corpus(MIN_AUTO_ACCEPTS)
     meta = make_meta(entries)
-    assert build_report(entries, predictions, meta) == build_report(entries, predictions, meta)
+    assert report_for(entries, predictions, meta) == report_for(entries, predictions, meta)
 
 
 def test_predictions_and_entries_must_correspond_one_to_one() -> None:
     entries, predictions = build_corpus(3)
     with pytest.raises(ValueError, match="one-to-one"):
-        build_report(entries, predictions[:-1], make_meta(entries))
+        report_for(entries, predictions[:-1], make_meta(entries))
 
 
 def test_synthetic_fixture_reports_insufficient_corpus() -> None:
@@ -470,9 +496,13 @@ def test_synthetic_fixture_reports_insufficient_corpus() -> None:
     entries = load_corpus(SYNTHETIC_JSONL)
     meta = load_meta(SYNTHETIC_META)
     predictions = [make_prediction(entry) for entry in entries]
-    report = build_report(entries, predictions, meta)
+    report = report_for(entries, predictions, meta)
     assert report.precision_verdict is Verdict.INSUFFICIENT_CORPUS
-    assert report.family_floor_met is True  # all five sources resolve in the fixture
+    # The fixture declares all five historical sources, two of them now retired,
+    # and carries only two owner-ratified entries — it can never meet OQ32.
+    assert report.source_floor.retired_declared == ("seagate-recertified", "serverpartdeals")
+    assert report.family_floor_met is False
+    assert report.refdata_pinned is False  # labeled against seeded_catalog, not refdata
     assert report.oem_dual_label_rate == pytest.approx(0.25)
     assert report.audit_gate is Verdict.PASS
     assert ms1_ratification_gate(report, Rung0Status.PASS) is Verdict.FAIL
@@ -485,3 +515,191 @@ def test_synthetic_fixture_audit_sample_is_the_owner_confirmed_pair() -> None:
         entry.id for entry in entries if entry.label.audit_status is not AuditStatus.CLAUDE_DRAFT
     }
     assert set(select_audit_sample((e.id for e in entries), meta.corpus_version)) == audited
+
+
+# ---------------------------------------------------------------------------
+# OQ32: the metadata-declared source floor, and the refdata pin
+# ---------------------------------------------------------------------------
+
+
+def _degrade_source(
+    entries: list[CorpusEntry],
+    predictions: list[Prediction],
+    source: str,
+    how: str,
+) -> tuple[list[CorpusEntry], list[Prediction]]:
+    """Rewrite every entry of `source` so it is no longer floor evidence in exactly
+    one way, leaving precision and every other source untouched."""
+    out_entries: list[CorpusEntry] = []
+    out_predictions: list[Prediction] = []
+    for entry, prediction in zip(entries, predictions, strict=True):
+        if entry.source != source:
+            out_entries.append(entry)
+            out_predictions.append(prediction)
+            continue
+        if how == "incorrect":
+            # Owner-corrected so the audit gate stays green: only correctness moves.
+            entry = make_entry(entry.id, source, audit_status="owner_corrected")
+            prediction = make_prediction(entry, correct=False)
+        elif how == "draft":
+            entry = make_entry(entry.id, source, audit_status="claude_draft")
+            prediction = make_prediction(entry)
+        elif how == "not_auto_accept":
+            prediction = make_prediction(entry, outcome=Outcome.REVIEW)
+        elif how == "none_grain_label":
+            entry = make_entry(
+                entry.id,
+                source,
+                grain="none",
+                manufacturer_key=None,
+                family=None,
+                model_number=None,
+            )
+            prediction = make_prediction(entry, outcome=Outcome.ACCEPT, rung=1)
+        else:
+            raise AssertionError(how)
+        out_entries.append(entry)
+        out_predictions.append(prediction)
+    return out_entries, out_predictions
+
+
+def test_three_declared_sources_each_with_a_ratified_accept_meet_the_floor() -> None:
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS)
+    report = report_for(entries, predictions)
+    assert report.source_floor.declared == ADMISSIBLE_SOURCES
+    assert report.per_source_family_floor == dict.fromkeys(ADMISSIBLE_SOURCES, True)
+    assert report.family_floor_met is True
+    assert report.corpus_gate is Verdict.PASS
+    assert ms1_ratification_gate(report, Rung0Status.PASS) is Verdict.PASS
+
+
+def test_only_two_declared_sources_fail_the_floor() -> None:
+    """Both declared sources are individually perfect; the count alone fails."""
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS, sources=ADMISSIBLE_SOURCES[:2])
+    report = report_for(entries, predictions)
+    assert all(report.per_source_family_floor.values())
+    assert report.source_floor.enough_sources is False
+    assert report.family_floor_met is False
+    assert ms1_ratification_gate(report, Rung0Status.PASS) is Verdict.FAIL
+
+
+def test_the_source_minimum_is_three() -> None:
+    assert MIN_RATIFICATION_SOURCES == 3
+
+
+@pytest.mark.parametrize("how", ["incorrect", "not_auto_accept", "none_grain_label"])
+def test_a_declared_source_without_a_correct_family_or_better_accept_fails(how: str) -> None:
+    """The pre-OQ32 floor checked only the predicted grain, so a source whose every
+    accept was wrong still passed it; correctness is now part of the floor."""
+    entries, predictions = _degrade_source(*build_corpus(MIN_AUTO_ACCEPTS * 2), "goharddrive", how)
+    report = report_for(entries, predictions)
+    assert report.per_source_family_floor["goharddrive"] is False
+    assert report.per_source_family_floor["ebay"] is True
+    assert report.family_floor_met is False
+    assert ms1_ratification_gate(report, Rung0Status.PASS) is Verdict.FAIL
+
+
+def test_a_correct_claude_draft_accept_does_not_satisfy_the_floor() -> None:
+    entries, predictions = _degrade_source(
+        *build_corpus(MIN_AUTO_ACCEPTS), "wd-recertified", "draft"
+    )
+    report = report_for(entries, predictions)
+    # The source is present and every one of its accepts is correct ...
+    assert any(entry.source == "wd-recertified" for entry in entries)
+    assert all(prediction_matches(p, e.label) for p, e in zip(predictions, entries, strict=True))
+    assert report.source_floor.per_source["wd-recertified"].qualifying_ids == ()
+    assert report.per_source_family_floor["wd-recertified"] is False  # ... but unratified
+
+
+def test_an_owner_corrected_accept_satisfies_the_floor() -> None:
+    corrected = make_entry("corrected", "ebay", audit_status="owner_corrected")
+    report = report_for([corrected], [make_prediction(corrected)])
+    assert report.source_floor.per_source["ebay"].qualifying_ids == ("corrected",)
+
+
+def test_retired_sources_absent_and_undeclared_cause_no_failure() -> None:
+    """Dropping ServerPartDeals/Seagate from a corpus is the normal post-OQ32 shape,
+    not a floor gap (the pre-OQ32 floor failed every such corpus)."""
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS)
+    assert not {entry.source for entry in entries} & retired_source_keys()
+    report = report_for(entries, predictions)
+    assert "serverpartdeals" not in report.per_source_family_floor
+    assert "seagate-recertified" not in report.per_source_family_floor
+    assert report.family_floor_met is True
+
+
+@pytest.mark.parametrize("retired", ["serverpartdeals", "seagate-recertified"])
+def test_a_declared_retired_source_fails_the_floor(retired: str) -> None:
+    """Even with a perfect ratified accept, a retired source cannot count."""
+    sources = (*ADMISSIBLE_SOURCES, retired)
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS, sources=sources)
+    report = report_for(entries, predictions)
+    floor = report.source_floor.per_source[retired]
+    assert floor.qualifying_ids
+    assert floor.retired is True
+    assert report.source_floor.retired_declared == (retired,)
+    assert report.family_floor_met is False
+    assert ms1_ratification_gate(report, Rung0Status.PASS) is Verdict.FAIL
+
+
+def test_the_retired_set_is_serverpartdeals_and_seagate() -> None:
+    assert retired_source_keys() == frozenset({"serverpartdeals", "seagate-recertified"})
+
+
+def test_an_undeclared_source_in_the_corpus_is_a_format_error() -> None:
+    """Never silently counted, never silently dropped: the report refuses to build."""
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS)
+    meta = make_meta(entries, declared=("ebay", "wd-recertified"))
+    with pytest.raises(CorpusFormatError, match="goharddrive"):
+        report_for(entries, predictions, meta)
+
+
+def test_the_declared_set_comes_only_from_the_manifest() -> None:
+    """Identical entries and predictions: only the manifest changes, and the
+    reported declared set and verdict follow it. With no declaration there is no
+    fallback set."""
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS)
+    wider = make_meta(entries, declared=(*ADMISSIBLE_SOURCES, "ebay"))  # duplicate folds
+    undeclared = make_meta(entries, declared=None)
+    assert report_for(entries, predictions, wider).source_floor.declared == ADMISSIBLE_SOURCES
+    report = report_for(entries, predictions, undeclared)
+    assert undeclared.ratification_sources is None
+    assert report.source_floor.declared == ()
+    assert report.per_source_family_floor == {}
+    assert report.family_floor_met is False
+    assert CorpusMeta.model_fields["ratification_sources"].default is None
+
+
+def test_audit_rollup_drift_fails_an_otherwise_passing_composite() -> None:
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS)
+    drifted = make_meta(
+        entries, audit_rollup={"owner_confirmed": MIN_AUTO_ACCEPTS - 1, "owner_corrected": 1}
+    )
+    report = report_for(entries, predictions, drifted)
+    assert report.family_floor_met is True
+    assert report.precision_verdict is Verdict.PASS
+    assert report.audit_gate is Verdict.FAIL
+    assert ms1_ratification_gate(report, Rung0Status.PASS) is Verdict.FAIL
+
+
+def test_quality_thresholds_are_unchanged_by_oq32() -> None:
+    """OQ32 replaced the source floor only; the denominator and precision bar stay."""
+    assert MIN_AUTO_ACCEPTS == 100
+    assert (PASS_PRECISION_NUMERATOR, PASS_PRECISION_DENOMINATOR) == (995, 1000)
+
+
+@pytest.mark.parametrize(
+    ("declared", "evaluated"),
+    [(None, FAKE_DIGEST), (OTHER_DIGEST, FAKE_DIGEST), (FAKE_DIGEST, None)],
+)
+def test_an_unpinned_or_mismatched_catalog_fails_the_corpus_gate(
+    declared: str | None, evaluated: str | None
+) -> None:
+    """A ratification is only valid for the catalog it was evaluated against."""
+    entries, predictions = build_corpus(MIN_AUTO_ACCEPTS)
+    meta = make_meta(entries, refdata_drive_digest=declared)
+    report = build_report(entries, predictions, meta, evaluated_refdata_drive_digest=evaluated)
+    assert report.refdata_pinned is False
+    assert report.family_floor_met is True
+    assert report.corpus_gate is Verdict.FAIL
+    assert ms1_ratification_gate(report, Rung0Status.PASS) is Verdict.FAIL
