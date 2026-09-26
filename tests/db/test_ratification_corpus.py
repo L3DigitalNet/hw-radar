@@ -126,6 +126,7 @@ REVIEW_REASON_KEYS = (
     "family_contradicts_decode",
     "multiple_mpns",
     "conflicting_alias_models",
+    "prior_model_not_named",
     "cross_category",
     "acceptance_policy",
     "auto_accept_disabled",

@@ -11,7 +11,9 @@ grammar decode whose vendor contradicts it never attaches at rung 2. A title
 that names a sibling product line of the target's family (IronWolf Pro vs an
 IronWolf decode) is the same kind of conflict and reviews at every rung.
 So does a listing whose identifiers hit aliases of two different catalog
-models (decide: conflicting_alias_models), inherited priors included.
+models (decide: conflicting_alias_models), inherited priors included, and a
+re-observed listing whose aliases now name only models other than the one its
+prior inherited (decide: prior_model_not_named).
 
 Confidence constants are OQ-provisional tunables; ADR-0016 settings-row
 versions arrive with the rung-3/occurrence thresholds at MS-1c."""
@@ -278,6 +280,37 @@ def conflicting_alias_models(alias_hits: Sequence[AliasHit]) -> list[str]:
     return sorted(models_by_identifier)
 
 
+def prior_model_not_named(
+    prior: PriorResolution | None, alias_hits: Sequence[AliasHit]
+) -> dict[str, object] | None:
+    """The conflict when the listing's alias hits name only models other than
+    the prior's, else None.
+
+    Only a model- or variant-grain prior names a model; a family-grain prior
+    cannot be contradicted this way. Only model-carrying hits count, review-only
+    ones included: a retail PN cannot ground an accept but still says which
+    model the title names. No model hit at all (unseeded tokens, a bare family
+    name) says nothing, and one hit on the prior's model (the same MPN, or an
+    OEM PN fanning out to it among others) keeps the prior. The returned ids
+    and identifiers are the review queue's evidence of what the title names."""
+
+    if prior is None or prior.target.model_id is None:
+        return None
+    model_ids: set[int] = set()
+    identifiers: set[str] = set()
+    for hit in alias_hits:
+        if hit.target.model_id is not None:
+            model_ids.add(hit.target.model_id)
+            identifiers.add(hit.candidate_normalized)
+    if not model_ids or prior.target.model_id in model_ids:
+        return None
+    return {
+        "prior_model_id": prior.target.model_id,
+        "alias_model_ids": sorted(model_ids),
+        "identifiers": sorted(identifiers),
+    }
+
+
 def decide(
     extracted: ExtractedAttributes,
     candidates: Sequence[MpnCandidate],
@@ -305,7 +338,13 @@ def decide(
     because rung 0 reads no candidates at all: a prior accepted under one
     title would otherwise be inherited after the title started naming a
     second model by an identifier the category's own markers do not see (an
-    AMD OPN pair; a WD retail PN)."""
+    AMD OPN pair; a WD retail PN).
+
+    For the same reason a rung-0 ACCEPT becomes REVIEW when the listing's
+    alias hits name only models other than the prior's
+    (prior_model_not_named): a title edited from "EPYC 7763" to "EPYC 7742"
+    has one identifier, so nothing conflicts among the current hits, and the
+    two parts share every veto field."""
 
     grounding = [h for h in alias_hits if not h.candidate_review_only]
     verdict = _decide(extracted, candidates, prior, grounding, decoded, veto=veto)
@@ -315,6 +354,12 @@ def decide(
     conflicting = conflicting_alias_models(alias_hits)
     if conflicting:
         ambiguity["conflicting_alias_models"] = conflicting
+    if verdict.rung == 0:
+        # The prior is only ever inherited at rung 0; a rung-1/2 accept already
+        # chose its target from these very hits.
+        superseded = prior_model_not_named(prior, alias_hits)
+        if superseded is not None:
+            ambiguity["prior_model_not_named"] = superseded
     if distinct_mpn_guard:
         mpns = distinct_mpns(candidates, alias_hits)
         if mpns:

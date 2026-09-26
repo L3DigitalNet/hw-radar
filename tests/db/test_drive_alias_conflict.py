@@ -139,3 +139,58 @@ def test_leading_for_compatible_part_stays_unresolved(site: SourceSite) -> None:
     )
     _resolve(listing)
     assert listing.product_model is None
+
+
+def test_leading_compatible_part_stays_unresolved(site: SourceSite) -> None:
+    # Round-3 tail T1: a first-token "Compatible" sells a look-alike of the
+    # cited drive, like a leading "FOR"; before it was masked the cited
+    # ST12000NE0008 exact alias accepted.
+    listing = _listing(site, "compat-lead", "Compatible Seagate ST12000NE0008 12TB")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] != "accept"
+    assert listing.product_model is None
+
+
+def test_mid_title_compatible_still_resolves(site: SourceSite) -> None:
+    listing = _listing(site, "compat-mid", "Seagate ST12000NE0008 12TB NAS compatible")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "accept"
+    assert listing.product_model == _model("st12000ne0008")
+
+
+def test_reobserved_title_naming_another_model_does_not_inherit(site: SourceSite) -> None:
+    # Round-3 tail T2: one identifier, one other catalog model. Nothing
+    # conflicts among the CURRENT identifiers, so conflicting_alias_models is
+    # silent; rung 0 must still refuse to keep the ST12000NE0008 prior once
+    # the title names only ST12000NM0008 (same capacity and interface, so no
+    # hard-attribute veto fires either).
+    listing = _listing(site, "ne-then-nm", "Seagate ST12000NE0008 12TB")
+    assert _resolve(listing).evidence["outcome"] == "accept"
+    prior_model = _model("st12000ne0008")
+    assert listing.product_model == prior_model
+    Listing.objects.filter(pk=listing.pk).update(title_raw="Seagate ST12000NM0008 12TB")
+    listing.refresh_from_db()
+    _observe(listing, attrs={}, observed_at=_OBSERVED_AT + timedelta(hours=1))
+    edge = _resolve(listing)
+    assert edge.evidence["rung"] == 0
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["prior_model_not_named"] == {
+        "prior_model_id": prior_model.pk,
+        "alias_model_ids": [_model("st12000nm0008").pk],
+        "identifiers": ["st12000nm0008"],
+    }
+    assert listing.product_model is None
+
+
+def test_reobserved_same_model_still_inherits(site: SourceSite) -> None:
+    listing = _listing(site, "ne-twice", "Seagate ST12000NE0008 12TB")
+    assert _resolve(listing).evidence["outcome"] == "accept"
+    Listing.objects.filter(pk=listing.pk).update(
+        title_raw="Seagate IronWolf Pro ST12000NE0008 12TB"
+    )
+    listing.refresh_from_db()
+    _observe(listing, attrs={}, observed_at=_OBSERVED_AT + timedelta(hours=1))
+    # An unchanged accept writes no new edge, so the current edge is still
+    # the rung-1 original; the kept denorm is the observable inheritance.
+    assert _resolve(listing).evidence["outcome"] == "accept"
+    assert listing.product_model == _model("st12000ne0008")

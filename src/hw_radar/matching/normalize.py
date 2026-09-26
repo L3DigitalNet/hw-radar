@@ -47,7 +47,8 @@ _BOILERPLATE = re.compile(
 # 'replacement' ("EMC 005049070 replacement drive" is the drive itself), bare
 # 'compatible' / 'for' / 'fits' / 'works with' (routinely describe the listed
 # drive's own use: "NAS drive for Synology"). The drive layers mask bare 'for'
-# only as the title's first token (_CATEGORY_LEADING_REFERENCE_WORDS).
+# and 'compatible' only as the title's first token
+# (_CATEGORY_LEADING_REFERENCE_WORDS).
 _REFERENCE_PHRASES: tuple[str, ...] = (
     "comparable to",
     "compatible with",
@@ -84,8 +85,16 @@ _CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of", "fit for", "su
 #       _CONDITIONS), never a reference, so it is excluded. So is "for sale"
 #       ("For sale: Seagate ST12000NE0008"): a sales preamble whose object is
 #       the listed item itself, and masking it erased the whole identity.
-_CATEGORY_LEADING_REFERENCE_WORDS: tuple[str, ...] = ("for",)
-_LEADING_EXCLUSIONS = r"(?!\s+(?:parts|sale)\b)"
+#   "compatible" — drive: "Compatible Seagate ST12000NE0008 12TB" and
+#       "Compatible WD Ultrastar DC HC560 0F38785" (MS-1e ebay-0388) sell a
+#       look-alike of the cited drive. Mid-title it describes the drive's own
+#       use ("Seagate ST12000NE0008 12TB NAS compatible") and stays unmasked;
+#       "compatible with" is a shared phrase and masks anywhere.
+_CATEGORY_LEADING_REFERENCE_WORDS: tuple[str, ...] = ("for", "compatible")
+# Per-word negative lookaheads: what may NOT follow a leading word for it to
+# open a span. Keyed per word because "parts"/"sale" are exceptions to "for"
+# only; sharing them would silently narrow every other leading word.
+_LEADING_EXCLUSIONS: dict[str, str] = {"for": r"(?!\s+(?:parts|sale)\b)"}
 
 # Non-ASCII reference phrases, folded to their registered ASCII form BEFORE
 # noise stripping, which would otherwise erase them and hand the cited
@@ -101,8 +110,8 @@ def _phrase_pattern(phrases: tuple[str, ...], leading: tuple[str, ...] = ()) -> 
         # `^` without MULTILINE matches only at index 0 even when
         # mask_reference_spans resumes the search at a later `pos`, so a
         # leading word can open at most the first span.
-        words = "|".join(re.escape(w) for w in leading)
-        pattern = rf"^(?:{words})\b{_LEADING_EXCLUSIONS}|{pattern}"
+        words = "|".join(rf"{re.escape(w)}\b{_LEADING_EXCLUSIONS.get(w, '')}" for w in leading)
+        pattern = rf"^(?:{words})|{pattern}"
     return re.compile(pattern)
 
 
@@ -130,7 +139,9 @@ def reference_phrase_pattern(*extra: str, leading: tuple[str, ...] = ()) -> re.P
 _REFERENCE_PHRASE = reference_phrase_pattern()
 # The drive identity layers' set (mpn.extract_candidates, vocab.extract): the
 # shared phrases plus the drive-local ones registered above.
-DRIVE_REFERENCE_PHRASE = reference_phrase_pattern("fit for", "suitable for", leading=("for",))
+DRIVE_REFERENCE_PHRASE = reference_phrase_pattern(
+    "fit for", "suitable for", leading=("for", "compatible")
+)
 # The canonicalization trigger: every phrase ANY category masks.
 _ANY_REFERENCE_PHRASE = _phrase_pattern(
     (*_REFERENCE_PHRASES, *_CATEGORY_REFERENCE_PHRASES), _CATEGORY_LEADING_REFERENCE_WORDS

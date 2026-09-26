@@ -287,3 +287,116 @@ def test_spaced_board_spelling_is_a_bundle(title: str) -> None:
     assert isinstance(payload, cpu.CpuAttributes)
     assert payload.bundle is not None
     assert "bundle" in cpu.veto(cpu.extract(canonicalize_title(title)), ladder.HardAttrs())
+
+
+# Round-3 tail T1: a leading bare "compatible" opens a reference span.
+
+
+@pytest.mark.parametrize(
+    ("title", "cited"),
+    [
+        ("Compatible Seagate ST12000NE0008 12TB", "st12000ne0008"),
+        ("COMPATIBLE WD Ultrastar DC HC560 WUH722020BLE6L4 20TB", "wuh722020ble6l4"),
+    ],
+)
+def test_leading_compatible_masks_the_cited_drive(title: str, cited: str) -> None:
+    canonical = canonicalize_title(title)
+    assert cited not in _mpns(canonical)
+    assert vocab.extract(canonical).brand is None
+    assert _drive_decide(title, []).outcome is ladder.Outcome.NONE
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Mid-title bare "compatible" describes the drive's own use.
+        "Seagate ST12000NE0008 12TB NAS compatible",
+        "Seagate NAS compatible ST12000NE0008 12TB",
+        # Only the whole first token: "compatibles" is not the word.
+        "Compatibles Seagate ST12000NE0008 12TB",
+    ],
+)
+def test_non_leading_compatible_keeps_identity(title: str) -> None:
+    assert "st12000ne0008" in _mpns(canonicalize_title(title))
+
+
+def test_leading_compatible_never_masks_the_seller_condition_label() -> None:
+    canonical = canonicalize_listing_text("Compatible Seagate ST12000NE0008", "New")
+    assert mask_reference_spans(canonical, DRIVE_REFERENCE_PHRASE).endswith(" - new")
+
+
+def test_cpu_masking_does_not_take_leading_compatible() -> None:
+    canonical = canonicalize_title("Compatible AMD EPYC 7763 64-core")
+    assert cpu._identity_text(canonical) == canonical  # pyright: ignore[reportPrivateUsage]
+
+
+# Round-3 tail T2: an inherited prior whose model the title no longer names.
+
+
+def test_prior_is_not_inherited_when_hits_name_only_another_model() -> None:
+    verdict = _drive_decide(
+        "Seagate ST12000NM0008 12TB", [_hit("st12000nm0008", 2, brand="seagate")], prior=_prior(1)
+    )
+    assert verdict.outcome is ladder.Outcome.REVIEW
+    assert verdict.rung == 0
+    assert verdict.evidence["prior_model_not_named"] == {
+        "prior_model_id": 1,
+        "alias_model_ids": [2],
+        "identifiers": ["st12000nm0008"],
+    }
+
+
+def test_review_only_hit_of_another_model_also_blocks_the_prior() -> None:
+    # A retail PN cannot ground an accept, but it can still say the title now
+    # names a different model than the one inherited.
+    verdict = _drive_decide(
+        "WD Ultrastar DC HC580 0F62796 24TB",
+        [_hit("0f62796", 4, review_only=True)],
+        prior=_prior(1),
+    )
+    assert verdict.outcome is ladder.Outcome.REVIEW
+    assert verdict.evidence["prior_model_not_named"] == {
+        "prior_model_id": 1,
+        "alias_model_ids": [4],
+        "identifiers": ["0f62796"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("title", "hits"),
+    [
+        # Same model re-observed.
+        ("Seagate ST12000NE0008 12TB", [_hit("st12000ne0008", 1, brand="seagate")]),
+        # No alias hit at all: an unseeded token says nothing about the prior.
+        ("Seagate ST12000NE0009 12TB", []),
+        ("Seagate IronWolf Pro 12TB NAS", []),
+    ],
+)
+def test_prior_is_inherited_when_no_other_model_is_named(
+    title: str, hits: list[ladder.AliasHit]
+) -> None:
+    verdict = _drive_decide(title, hits, prior=_prior(1))
+    assert verdict.outcome is ladder.Outcome.ACCEPT
+    assert verdict.rung == 0
+
+
+def test_one_identifier_fanning_out_to_the_prior_model_is_inherited() -> None:
+    # An OEM PN aliasing the prior's model among others still names it.
+    hits = [_hit("005049070", 1, brand="seagate"), _hit("005049070", 2, brand="seagate")]
+    verdict = _drive_decide("Seagate EMC 005049070 12TB", hits, prior=_prior(1))
+    assert verdict.outcome is ladder.Outcome.ACCEPT
+    assert verdict.rung == 0
+
+
+def test_family_grain_prior_is_unaffected() -> None:
+    # A family-grain prior names no model, so no hit can contradict one.
+    prior = ladder.PriorResolution(
+        target=ladder.TargetRef(grain=Grain.FAMILY, family_id=3),
+        confidence=0.8,
+        hard_attrs=ladder.HardAttrs(),
+    )
+    verdict = _drive_decide(
+        "Seagate ST12000NM0008 12TB", [_hit("st12000nm0008", 2, brand="seagate")], prior=prior
+    )
+    assert verdict.outcome is ladder.Outcome.ACCEPT
+    assert verdict.rung == 0

@@ -242,3 +242,27 @@ def test_near_model_xeon_number_does_not_reach_the_seeded_model(
     assert listing.product_model is None
     control = _cpu_listing(site, "xeon-6338", "Intel Xeon Gold 6338 32-Core LGA4189")
     assert _resolve(control).evidence["outcome"] == "accept"
+
+
+def test_reobserved_title_naming_another_epyc_does_not_inherit(
+    site: SourceSite, seeded_cpus: None
+) -> None:
+    """Round-3 tail T2: the title switched from 7763 to 7742. Its only alias
+    hits name 7742, so nothing conflicts among the current identifiers and
+    both are 64-core SP3 parts (no veto); the 7763 prior must not be kept."""
+    listing = _cpu_listing(site, "7763-then-7742", _BARE_7763)
+    assert _resolve(listing).evidence["outcome"] == "accept"
+    prior_model = ProductModel.objects.get(model_number="EPYC 7763")
+    assert listing.product_model == prior_model
+    Listing.objects.filter(pk=listing.pk).update(title_raw="AMD EPYC 7742 64-Core SP3")
+    listing.refresh_from_db()
+    _observe(listing, observed_at=_OBSERVED_AT + timedelta(hours=1))
+    edge = _resolve(listing)
+    assert edge.evidence["rung"] == 0
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["prior_model_not_named"] == {
+        "prior_model_id": prior_model.pk,
+        "alias_model_ids": [ProductModel.objects.get(model_number="EPYC 7742").pk],
+        "identifiers": ["epyc7742"],
+    }
+    assert listing.product_model is None
