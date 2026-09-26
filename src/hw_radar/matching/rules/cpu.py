@@ -16,6 +16,19 @@ the comparison is normalized.
 
 Veto fields: socket and cores. tdp_w is extracted but never vetoes, because
 configurable TDP makes a listing's quoted wattage an unreliable identity signal.
+
+Identity evidence (candidates and brand) is read from the title after
+`mask_reference_spans` with the CPU phrase set, exactly as the drive layers
+mask theirs: a model cited as "compatible with X" or "OEM version of X" is not
+the listed part. Physical attributes read the unmasked title. Two EPYC-specific
+guards follow the owner's F6 rule that a CPU auto-accept needs exact
+authoritative identity:
+  - A title naming more than one EPYC model ('7742/7702', '7B13 ... epyc
+    7763') yields no title-derived candidate at all, so it can never pick one
+    of them: an unseeded second model would otherwise leave a lone alias hit
+    on the seeded one and read as unambiguous.
+  - An AMD OPN followed by a '-NN' suffix ('100-000000314-04', a QS sample
+    marking) is not the OPN, so it is not a candidate.
 """
 
 from __future__ import annotations
@@ -25,6 +38,7 @@ from dataclasses import dataclass, replace
 
 from hw_radar.matching import vocab
 from hw_radar.matching.ladder import CategoryHardAttrs, HardAttrs
+from hw_radar.matching.normalize import mask_reference_spans, reference_phrase_pattern
 from hw_radar.matching.rules import (
     CandidateSet,
     add_code_tokens,
@@ -96,10 +110,31 @@ _NAMES: tuple[tuple[str, re.Pattern[str]], ...] = (
 # the 5-character S-spec ('srmgd') is not, so it needs an Intel line word.
 _ORDERING: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("intel", re.compile(r"\b(?:bx|bxc|bv|cm|cd|pk)\d{6,}[a-z0-9]*\b")),
-    ("amd", re.compile(r"\b100-\d{9}\b")),
+    # (?!-\w): a suffixed OPN ('100-000000314-04') is a sample/stepping
+    # marking, not the part number, so its stem must not reach the alias table.
+    ("amd", re.compile(r"\b100-\d{9}\b(?!-\w)")),
 )
 _SSPEC = re.compile(r"\bsr[a-z0-9]{3}\b")
 _VOCAB_TAILS = re.compile(r"(?:\d(?:ghz|mhz|mb|gb|w)|lga\d+|\dc/\d+t|\d-?cores?)$")
+
+# CPU-local reference phrase on top of the shared list. For a CPU, "7J13 OEM
+# version of 7763" names a different SKU (its own OPN, clocks and firmware).
+# Kept out of the shared list: drive masking is pinned by the A0 decision
+# oracle and tests/unit/test_reference_context.py, and no drive evidence says
+# the phrase names a different drive there (an OEM-relabelled drive can be
+# physically the cited model). Local, it leaves drive behavior unchanged by
+# construction.
+_REFERENCE = reference_phrase_pattern("oem version of")
+# An EPYC model number as titles print it: generation digit first, last digit
+# the generation (1-5), letters allowed inside (7H12, 72F3, 9V84) and a short
+# SKU suffix (9354P, 9684X, 4584PX). Excluded because they are not models:
+# x00y series names ('7003 series'), and numbers followed by a unit. Sockets
+# are blanked before the scan ('LGA 4094').
+_EPYC_MODEL = re.compile(
+    r"\b(?![3-9]00\d)[3-9][0-9a-z]{2}[1-5](?:px|hs|p|f|x|s)?\b"
+    r"(?!\s?(?:ghz|mhz|mt/s|gb|mb|tb|w\b))"
+)
+_EPYC_NAME = re.compile(r"\bepyc\b")
 
 
 def socket_key(value: str) -> str:
@@ -114,6 +149,25 @@ def _brand(title: str) -> Attribute[str] | None:
     return sole_pattern(title, _BRANDS, 0.9)
 
 
+def _identity_text(title: str) -> str:
+    return mask_reference_spans(title, _REFERENCE)
+
+
+def _names_several_epyc_models(identity: str) -> bool:
+    """Whether an EPYC title names more than one distinct model number.
+
+    Read from the reference-masked title, so a model cited only as a
+    reference object does not count. Suffixes count as distinct models
+    ('9354' and '9354p' are two parts).
+    """
+    if _EPYC_NAME.search(identity) is None:
+        return False
+    unsocketed = identity
+    for pattern in _SOCKETS:
+        unsocketed = pattern.sub(lambda m: " " * len(m.group(0)), unsocketed)
+    return len({m.group(0) for m in _EPYC_MODEL.finditer(unsocketed)}) > 1
+
+
 def extract(title: str) -> ExtractedAttributes:
     sockets = [(socket_key(m.group(0)), m.group(0)) for p in _SOCKETS for m in p.finditer(title)]
     cores = [(int(m.group(1) or m.group(2)), m.group(0)) for m in _CORES.finditer(title)]
@@ -122,7 +176,7 @@ def extract(title: str) -> ExtractedAttributes:
         cores=sole_value(cores, 0.85),
         tdp_w=sole_value(((int(m.group(1)), m.group(0)) for m in _TDP.finditer(title)), 0.7),
     )
-    brand = _brand(title)
+    brand = _brand(_identity_text(title))
     return replace(vocab.offer_terms(title), brand=brand, category_attrs=payload)
 
 
@@ -130,8 +184,13 @@ def extract_candidates(
     title: str, *, structured_mpn: str | None = None, source_key: str = ""
 ) -> list[MpnCandidate]:
     out = CandidateSet()
+    title = _identity_text(title)
     brand = _brand(title)
     add_structured(out, structured_mpn, TokenKind.MANUFACTURER_MPN, brand.value if brand else "")
+    if _names_several_epyc_models(title):
+        # Only the merchant-asserted structured MPN survives: every title token
+        # (names, OPNs, code tokens, house SKUs) could belong to either model.
+        return out.result()
     for vendor, pattern in _ORDERING:
         for m in pattern.finditer(title):
             out.add(m.group(0), TokenKind.MANUFACTURER_MPN, vendor=vendor, confidence=0.9)

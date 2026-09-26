@@ -62,10 +62,30 @@ def normalize_alias_text(text: str) -> str:
 # 'replacement' ("EMC 005049070 replacement drive" is the drive itself), bare
 # 'compatible' / 'for' / 'fits' / 'works with' (routinely describe the listed
 # drive's own use: "NAS drive for Synology").
-_REFERENCE_PHRASE = re.compile(
-    r"\b(?:comparable to|compatible with|replacement for|equivalent to|equiv to|"
-    r"alternative to|substitute for|replaces)\b"
+_REFERENCE_PHRASES: tuple[str, ...] = (
+    "comparable to",
+    "compatible with",
+    "replacement for",
+    "equivalent to",
+    "equiv to",
+    "alternative to",
+    "substitute for",
+    "replaces",
 )
+
+
+def reference_phrase_pattern(*extra: str) -> re.Pattern[str]:
+    """The shared reference-phrase pattern, widened by category-local phrases.
+
+    For a category whose titles cite other products in a phrase the shared
+    (drive) list must not carry. Build it once at import and pass it to
+    mask_reference_spans(phrases=...); with no extras it is the shared pattern.
+    """
+    alternation = "|".join(re.escape(p) for p in (*_REFERENCE_PHRASES, *extra))
+    return re.compile(rf"\b(?:{alternation})\b")
+
+
+_REFERENCE_PHRASE = reference_phrase_pattern()
 # Clause boundaries that end a reference span. Only " - ", "(" and ")" survive
 # canonicalize_title; ",", "|" and ";" are listed so the rule still holds on a
 # non-canonical caller, but _NOISE turns them into spaces first (see the trap
@@ -73,7 +93,7 @@ _REFERENCE_PHRASE = re.compile(
 _CLAUSE_BOUNDARY = re.compile(r" - |[()|,;]")
 
 
-def mask_reference_spans(title: str) -> str:
+def mask_reference_spans(title: str, phrases: re.Pattern[str] = _REFERENCE_PHRASE) -> str:
     """Blank every reference span of a canonical title with spaces.
 
     A span runs from a reference phrase ("comparable to", "compatible with",
@@ -81,6 +101,8 @@ def mask_reference_spans(title: str) -> str:
     (" - ", "(", ")") or the end of the title. Text outside spans is
     returned unchanged and the length is preserved, so offsets and word
     boundaries elsewhere are stable. A title with no phrase is returned as is.
+    `phrases` defaults to the shared list every drive layer uses; a category
+    passes reference_phrase_pattern(...) to add its own.
 
     Identity-only contract: callers mask before mining IDENTITY evidence (MPN
     candidates, OEM vendor gates, brand words) and never before reading
@@ -96,7 +118,7 @@ def mask_reference_spans(title: str) -> str:
 
     pieces: list[str] = []
     pos = 0
-    while (phrase := _REFERENCE_PHRASE.search(title, pos)) is not None:
+    while (phrase := phrases.search(title, pos)) is not None:
         boundary = _CLAUSE_BOUNDARY.search(title, phrase.end())
         end = boundary.start() if boundary is not None else len(title)
         pieces.append(title[pos : phrase.start()])
