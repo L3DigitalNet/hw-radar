@@ -54,7 +54,14 @@ _INTERFACES: tuple[tuple[re.Pattern[str], str], ...] = (
 # refurb, NOT manufacturer recert. '(?<!like )new' keeps "like new" unasserted.
 _CONDITIONS: tuple[tuple[re.Pattern[str], str, str | None, float], ...] = (
     (
-        re.compile(r"\bfor parts\b|\bparts only\b|\bas[- ]is\b|\bnot working\b"),
+        # "spares or repair" is the UK/eBay spelling of for-parts; the leading
+        # "for spares/repair" preamble is exempt from reference masking
+        # (normalize._LEADING_EXCLUSIONS), so it must be caught here or a broken
+        # drive lands on a working-condition variant.
+        re.compile(
+            r"\bfor parts\b|\bparts only\b|\bas[- ]is\b|\bnot working\b"
+            r"|\bspares?(?: or | and | ?/ ?| )repairs?\b|\bfor (?:spares|repairs?)\b"
+        ),
         "for_parts",
         None,
         0.95,
