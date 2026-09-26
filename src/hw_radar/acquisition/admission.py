@@ -71,7 +71,12 @@ class CellStatus(StrEnum):
 # are not acquisition columns, so they are never admitted.
 MATRIX_CATEGORIES: Final[tuple[str, ...]] = (DRIVE, cpu.SLUG, gpu.SLUG, ram.SLUG)
 
-_R, _N, _X = CellStatus.RETIRED, CellStatus.NOT_ADMITTED, CellStatus.NOT_APPLICABLE
+_R, _N, _X, _A = (
+    CellStatus.RETIRED,
+    CellStatus.NOT_ADMITTED,
+    CellStatus.NOT_APPLICABLE,
+    CellStatus.ADMITTED,
+)
 
 
 def _row(
@@ -83,10 +88,15 @@ def _row(
     }
 
 
-# Current truth (2026-09-26): no combination has passed its gates, so every
-# live cell is NOT_ADMITTED; admitting one means writing CellStatus.ADMITTED
-# into that cell in a reviewed commit. eBay is the only multi-category source;
-# the recertified-drive storefronts sell drives only.
+# Current truth (2026-09-26): exactly one cell is ADMITTED, (ebay, cpu), after
+# its live per-cell checklist (docs/handoff/deployed.md) passed on the release
+# running matcher 2026.09.4, where CPU auto-accept covers the ratified AMD EPYC
+# family only (OQ34). It admits the seeded-EPYC single-page query scopes in
+# sources.ebay.CATEGORY_SWEEPS and nothing else: eBay's drive, GPU and RAM
+# cells stay NOT_ADMITTED, so the legacy drive GET and the GPU/RAM sweeps never
+# run. Every other live cell is NOT_ADMITTED; admitting one means writing
+# CellStatus.ADMITTED into it in a reviewed commit. eBay is the only
+# multi-category source; the recertified-drive storefronts sell drives only.
 #
 # demo and synthetic are fixture sources (sources.FIXTURE_SOURCE_KEYS): their
 # listings are test fixtures, not merchant offers, so no category applies and
@@ -95,7 +105,7 @@ def _row(
 ADMISSION_MATRIX: Final[Mapping[tuple[str, str], CellStatus]] = MappingProxyType(
     {
         #                  drive cpu gpu ram
-        **_row("ebay", _N, _N, _N, _N),
+        **_row("ebay", _N, _A, _N, _N),
         **_row("wd-recertified", _N, _X, _X, _X),
         **_row("goharddrive", _N, _X, _X, _X),
         **_row("serverpartdeals", _R, _R, _R, _R),

@@ -852,6 +852,7 @@ def test_drive_and_cpu_admitted_keep_the_heartbeat_and_still_sweep_cpu(
     assert _lane().continuous_since is not None
 
 
+@pytest.mark.usefixtures("nothing_admitted")
 def test_no_admitted_ebay_cell_schedules_nothing() -> None:
     # Current production truth: every eBay cell is NOT_ADMITTED.
     scheduler = _enabled_ebay_scheduler()

@@ -217,6 +217,7 @@ def test_heartbeat_sources_get_fast_and_slow_repair_jobs(admit: Callable[..., No
         assert fast != slow  # distinct cadences, distinct job IDs
 
 
+@pytest.mark.usefixtures("nothing_admitted")
 def test_ebay_gets_single_heartbeat_job_only(admit: Callable[..., None]) -> None:
     # For the drive sweep alone, eBay's Browse poll IS both heartbeat and full
     # fetch (natively-both source), so a separate poll-ebay job would double-poll.
