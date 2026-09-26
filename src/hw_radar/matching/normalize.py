@@ -1,13 +1,16 @@
 """N1 text canonicalization + the single-normalizer alias key (ADR-0019 rule 1).
 
-Two public functions, one contract:
 - canonicalize_title() is the N1 pass every extraction layer reads from.
+- mask_reference_spans() blanks comparison/reference clauses out of a canonical
+  title so the drive identity layers (mpn.extract_candidates, the vocab brand
+  table) never read a cited product as the listed one. See its docstring.
 - normalize_alias_text() is the JOIN KEY for product_alias. Catalog ingest
   (MS-1c refdata) and listing-side candidates MUST both call it; the CI parity
   test in tests/db/test_resolver.py asserts that. Never fork a second
   normalizer — two drifting normalizers are the classic silent killer of
   alias joins (ADR-0019).
-Both functions are idempotent (property-tested in tests/unit/test_normalize.py)."""
+canonicalize_title() and normalize_alias_text() are idempotent (property-tested
+in tests/unit/test_normalize.py)."""
 
 from __future__ import annotations
 
@@ -51,3 +54,53 @@ def normalize_alias_text(text: str) -> str:
     'mz77e1t0bam' — separator styling never splits an alias join."""
 
     return _ALNUM_ONLY.sub("", unicodedata.normalize("NFKC", text).casefold())
+
+
+# Reference phrases whose OBJECT names a product other than the one listed.
+# Deliberately closed and unambiguous: every entry is pinned by
+# tests/unit/test_reference_context.py. Rejected as too ambiguous: bare
+# 'replacement' ("EMC 005049070 replacement drive" is the drive itself), bare
+# 'compatible' / 'for' / 'fits' / 'works with' (routinely describe the listed
+# drive's own use: "NAS drive for Synology").
+_REFERENCE_PHRASE = re.compile(
+    r"\b(?:comparable to|compatible with|replacement for|equivalent to|equiv to|"
+    r"alternative to|substitute for|replaces)\b"
+)
+# Clause boundaries that end a reference span. Only " - ", "(" and ")" survive
+# canonicalize_title; ",", "|" and ";" are listed so the rule still holds on a
+# non-canonical caller, but _NOISE turns them into spaces first (see the trap
+# in mask_reference_spans).
+_CLAUSE_BOUNDARY = re.compile(r" - |[()|,;]")
+
+
+def mask_reference_spans(title: str) -> str:
+    """Blank every reference span of a canonical title with spaces.
+
+    A span runs from a reference phrase ("comparable to", "compatible with",
+    "replacement for", ...) up to, not including, the next clause boundary
+    (" - ", "(", ")") or the end of the title. Text outside spans is
+    returned unchanged and the length is preserved, so offsets and word
+    boundaries elsewhere are stable. A title with no phrase is returned as is.
+
+    Identity-only contract: callers mask before mining IDENTITY evidence (MPN
+    candidates, OEM vendor gates, brand words) and never before reading
+    physical attributes, so a span that over-reaches costs identity alone.
+
+    Known trap: canonicalization erases ",", "|" and ";", so in the resolver a
+    span runs past what were clause breaks in the raw title — and past the
+    condition label the resolver appends — to the next surviving boundary or
+    the end. "Compatible with ST16000NM002G, Seagate ST18000NM000J" therefore
+    masks BOTH MPNs. That over-reach is the intended failure direction: an
+    unresolved listing queues, while a false merge poisons a model's price
+    history (ADR-0019)."""
+
+    pieces: list[str] = []
+    pos = 0
+    while (phrase := _REFERENCE_PHRASE.search(title, pos)) is not None:
+        boundary = _CLAUSE_BOUNDARY.search(title, phrase.end())
+        end = boundary.start() if boundary is not None else len(title)
+        pieces.append(title[pos : phrase.start()])
+        pieces.append(" " * (end - phrase.start()))
+        pos = end
+    pieces.append(title[pos:])
+    return "".join(pieces)

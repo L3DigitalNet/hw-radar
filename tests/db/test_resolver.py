@@ -495,3 +495,42 @@ def test_listing_delete_is_blocked_by_supersede_chain(
 
     with pytest.raises(ProtectedError):
         listing.delete()  # cascade to a protected edge → blocked, by design
+
+
+def test_comparison_only_mpn_persists_no_edge_to_the_cited_model(site: SourceSite) -> None:
+    """MS-1e ebay-0021 (owner-confirmed false positive): a white-label drive
+    'Comparable to ST16000NM002G' names a Seagate MPN it is NOT. Even with that
+    MPN seeded as a catalog-authoritative alias — the strongest rung-1 bait —
+    the listing must resolve to nothing: no model, variant, or family edge,
+    because a false merge poisons the cited model's price history (ADR-0019)."""
+    cited = _seed_alias_for("ST16000NM002G")
+    listing = _listing(
+        site,
+        "ref-1",
+        'WL OEM 16TB 7.2K RPM SAS 12Gb/s 3.5" HDD - Comparable to ST16000NM002G',
+    )
+    CatalogResolver().resolve_listing(listing.pk)
+    listing.refresh_from_db()
+    assert listing.resolution_grain == ResolutionGrain.NONE
+    assert listing.product_family is None
+    assert listing.product_model is None
+    assert listing.product_variant is None
+    edge = _edge(listing, is_current=True)
+    assert edge.grain == ResolutionGrain.NONE
+    assert edge.evidence["outcome"] == "none"
+    assert edge.product_model is None and edge.product_variant is None
+    assert edge.product_family is None
+    assert not ProductVariant.objects.filter(product_model=cited).exists()
+    assert not ProductFamily.objects.exists()  # no provisional family materialized
+
+
+def test_direct_listing_of_the_same_mpn_still_resolves(site: SourceSite) -> None:
+    """Control for the comparison case: the same seeded MPN as the listing's own
+    identity keeps the normal rung-1 path."""
+    model = _seed_alias_for("ST16000NM002G")
+    listing = _listing(site, "ref-2", "Seagate Exos X16 16TB SAS ST16000NM002G Recertified")
+    CatalogResolver().resolve_listing(listing.pk)
+    listing.refresh_from_db()
+    assert listing.resolution_grain == ResolutionGrain.VARIANT
+    assert listing.product_variant is not None
+    assert listing.product_variant.product_model == model

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 
+from hw_radar.matching.normalize import mask_reference_spans
 from hw_radar.matching.types import Attribute, ExtractedAttributes
 
 _LAYER = "vocab"
@@ -267,5 +268,10 @@ def extract(title: str) -> ExtractedAttributes:
         warranty_months=_int_pattern(title, _WARRANTY_YEARS, scale=12),
         warranty_channel=_first_pattern(title, _WARRANTY_CHANNELS, 0.9),
         quantity=_quantity(title),
-        brand=_first_pattern(title, _BRANDS, 0.9),
+        # Brand is identity evidence (it satisfies the rung-1 brand gate), so a
+        # brand word cited in a reference span ("comparable to Seagate Exos")
+        # must not supply it. Only brand is masked: the ladder uses the other
+        # fields solely in hard-attribute vetoes, where a field read from a span
+        # can send a match to review but can never create one.
+        brand=_first_pattern(mask_reference_spans(title), _BRANDS, 0.9),
     )
