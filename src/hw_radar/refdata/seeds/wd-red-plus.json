@@ -1,0 +1,205 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "manufacturer_name": "Western Digital",
+  "manufacturer_key": "western_digital",
+  "family_name": "Red Plus",
+  "provenance": {
+    "source_kind": "first_party_datasheet",
+    "sources": [
+      {
+        "url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-red-plus-hdd/data-sheet-western-digital-wd-red-plus-hdd.pdf",
+        "title": "WD Red Plus datasheet (September 2025)",
+        "retrieved": "2026-09-26"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "WD120EFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Helium"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD120EFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD120EFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD120EFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD100EFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD100EFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD101EFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD101EFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD80EFPX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "8",
+        "rpm": 5640,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD80EFPX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD80EFZZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "8",
+        "rpm": 5640,
+        "cache_mb": 128,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD80EFZZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD60EFPX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "6",
+        "rpm": 5400,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD60EFPX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD60EFZX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "6",
+        "rpm": 5640,
+        "cache_mb": 128,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD60EFZX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD40EFZZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "4",
+        "rpm": 5400,
+        "cache_mb": 128,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD40EFZZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD40EFPX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "4",
+        "rpm": 5400,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD40EFPX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD20EFPX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "2",
+        "rpm": 5400,
+        "cache_mb": 64,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Plus",
+        "spec_json": {"drive_tech": "Air"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD20EFPX", "is_primary": true}]
+    }
+  ]
+}

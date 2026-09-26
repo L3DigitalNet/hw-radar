@@ -54,18 +54,40 @@ def _listing(site: SourceSite, key: str, title: str, condition: str = "") -> Lis
 
 
 def test_exos_recertified_lands_as_one_family_with_full_datasheet_fanout() -> None:
-    # D2a: the FULL-fan-out acceptance family. The Seagate recert datasheet's
-    # published ladder is exactly these six SKUs — complete first-party
-    # coverage, unlike HC550 (a deliberate subset, tested below).
+    # D2a: the FULL-fan-out acceptance family. The Seagate Exos Recertified
+    # data sheet's published ladder (4-28TB, two literals per capacity except
+    # 18TB) is exactly these SKUs — complete first-party coverage, unlike HC550
+    # (a deliberate subset, tested below). The X-series and 7E documents share
+    # the 'Exos' family, so the recert ladder is picked out by its spec flag.
     family = ProductFamily.objects.get(normalized_name="exos")
-    numbers = set(family.models.values_list("model_number", flat=True))
+    recertified = family.models.filter(drive_spec__spec_json__seagate_recertified_sku=True)
+    numbers = set(recertified.values_list("model_number", flat=True))
     assert numbers == {
+        "ST4000NM000C",
+        "ST4000NM001C",
+        "ST6000NM000C",
+        "ST6000NM001C",
+        "ST8000NM000C",
+        "ST8000NM001C",
+        "ST10000NM000C",
+        "ST10000NM001C",
+        "ST12000NM002C",
+        "ST12000NM003C",
+        "ST14000NM002C",
+        "ST14000NM003C",
         "ST16000NM002C",
+        "ST16000NM003C",
+        "ST18000NM002C",
         "ST20000NM002C",
+        "ST20000NM004C",
         "ST22000NM000C",
+        "ST22000NM001C",
         "ST24000NM000C",
+        "ST24000NM001C",
         "ST26000NM000C",
+        "ST26000NM001C",
         "ST28000NM000C",
+        "ST28000NM001C",
     }
     for model in family.models.all():
         assert model.retention_class == RetentionClass.MANUFACTURER_REFERENCE

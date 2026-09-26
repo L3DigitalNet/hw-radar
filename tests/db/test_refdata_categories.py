@@ -2,8 +2,12 @@
 
 The drive snapshot in __snapshots__/test_refdata_categories.ambr was recorded by
 running test_drive_import_byte_identical against the UNMODIFIED pre-B4 importer
-(contracts.py/persist.py at the Slice B base). A diff there is a change to what
-the drive import writes, never a snapshot to refresh with --snapshot-update.
+(contracts.py/persist.py at the Slice B base). It imports the committed drive
+seeds, so it has exactly one legitimate refresh trigger: a commit that changes
+drive seed documents regenerates it in that same commit, and every row the
+previous snapshot held must survive verbatim unless the seed change intends
+otherwise. Any other diff is a change to what the drive import writes, never a
+snapshot to refresh with --snapshot-update.
 
 Inline seed documents only: the curated GPU/RAM/CPU seeds are B4c's, and these
 tests must not move when that content changes.
@@ -105,11 +109,12 @@ def test_drive_documents_validate_unchanged() -> None:
     assert doc.category == "drive"
     assert doc.models[0].spec.category == "drive"
     assert doc.models[0].source_url is None
-    # The shipped drive seeds predate MS-2 and must all still load as drive.
+    # The shipped Seagate/WD seeds carry no category tag (the pre-MS-2 shape)
+    # and must all still load as drive.
     shipped = load_seed_documents()
     assert shipped
     shipped_drive = [d for d in shipped if d.manufacturer_key in {"seagate", "western_digital"}]
-    assert len(shipped_drive) == 3
+    assert len(shipped_drive) == 15
     assert {d.category for d in shipped_drive} == {"drive"}
 
 

@@ -1,0 +1,178 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "manufacturer_name": "Western Digital",
+  "manufacturer_key": "western_digital",
+  "family_name": "Ultrastar DC HC580",
+  "provenance": {
+    "source_kind": "first_party_datasheet",
+    "sources": [
+      {
+        "url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/data-center-drives/ultrastar-dc-hc500-series/data-sheet-ultrastar-dc-hc580.pdf",
+        "title": "WD Ultrastar DC HC580 datasheet (July 2024)",
+        "retrieved": "2026-09-26"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "WUH722424ALE6L1",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Ultrastar DC HC580",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "4Kn:4096 / 512e:512"}
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "WUH722424ALE6L1", "is_primary": true},
+        {"alias_type": "retail_pn", "text": "0F62795"}
+      ]
+    },
+    {
+      "model_number": "WUH722424ALE6L4",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Ultrastar DC HC580",
+        "spec_json": {"security_variant": "Base (no encryption)", "sector_format_stated": "4Kn:4096 / 512e:512"}
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "WUH722424ALE6L4", "is_primary": true},
+        {"alias_type": "retail_pn", "text": "0F62796"}
+      ]
+    },
+    {
+      "model_number": "WUH722422ALE6L1",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "22",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Ultrastar DC HC580",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "4Kn:4096 / 512e:512"}
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "WUH722422ALE6L1", "is_primary": true},
+        {"alias_type": "retail_pn", "text": "0F62784"}
+      ]
+    },
+    {
+      "model_number": "WUH722422ALE6L4",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "22",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Ultrastar DC HC580",
+        "spec_json": {"security_variant": "Base (no encryption)", "sector_format_stated": "4Kn:4096 / 512e:512"}
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "WUH722422ALE6L4", "is_primary": true},
+        {"alias_type": "retail_pn", "text": "0F62785"}
+      ]
+    },
+    {
+      "model_number": "WUH722424AL5201",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Ultrastar DC HC580",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "4Kn:4096 / 512e:512"}
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "WUH722424AL5201", "is_primary": true},
+        {"alias_type": "retail_pn", "text": "0F62801"}
+      ]
+    },
+    {
+      "model_number": "WUH722424AL5204",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Ultrastar DC HC580",
+        "spec_json": {"security_variant": "Base (no encryption)", "sector_format_stated": "4Kn:4096 / 512e:512"}
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "WUH722424AL5204", "is_primary": true},
+        {"alias_type": "retail_pn", "text": "0F62802"}
+      ]
+    },
+    {
+      "model_number": "WUH722422AL5201",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "22",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Ultrastar DC HC580",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "4Kn:4096 / 512e:512"}
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "WUH722422AL5201", "is_primary": true},
+        {"alias_type": "retail_pn", "text": "0F62790"}
+      ]
+    },
+    {
+      "model_number": "WUH722422AL5204",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "22",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Ultrastar DC HC580",
+        "spec_json": {"security_variant": "Base (no encryption)", "sector_format_stated": "4Kn:4096 / 512e:512"}
+      },
+      "aliases": [
+        {"alias_type": "mpn", "text": "WUH722422AL5204", "is_primary": true},
+        {"alias_type": "retail_pn", "text": "0F62791"}
+      ]
+    }
+  ]
+}

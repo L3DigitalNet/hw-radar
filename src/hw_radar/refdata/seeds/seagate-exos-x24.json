@@ -1,0 +1,358 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "manufacturer_name": "Seagate",
+  "manufacturer_key": "seagate",
+  "family_name": "Exos",
+  "provenance": {
+    "source_kind": "first_party_datasheet",
+    "sources": [
+      {
+        "url": "https://www.seagate.com/content/dam/seagate/en/content-fragments/products/datasheets/exos-x24/exos-x24-DS2080-2307US-en_US.pdf",
+        "title": "Seagate Exos X24 datasheet DS2080-2307US",
+        "retrieved": "2026-09-26"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "ST24000NM002H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "Standard (Seagate Instant Secure Erase / ISE)", "sector_format_stated": "512e/4Kn (both stated)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST24000NM002H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST24000NM001H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST24000NM001H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST20000NM002H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "Standard (ISE)", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM002H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST20000NM001H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM001H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM002H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "Standard (ISE)", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM002H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM001H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM001H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM002H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "Standard (ISE)", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM002H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM001H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM001H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST24000NM007H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "Standard (ISE)", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST24000NM007H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST24000NM005H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST24000NM005H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST24000NM006H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST24000NM006H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST20000NM007H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "Standard (ISE)", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM007H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST20000NM005H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM005H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST20000NM006H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM006H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM007H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "Standard (ISE)", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM007H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM005H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM005H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM006H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM006H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM007H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "Standard (ISE)", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM007H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM005H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM005H", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM009H",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X24",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "512e (512/520/528) / 4Kn (4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM009H", "is_primary": true}]
+    }
+  ]
+}

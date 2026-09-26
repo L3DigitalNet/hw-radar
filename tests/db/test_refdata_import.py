@@ -32,10 +32,10 @@ def docs() -> list[SeedDocument]:  # the drive seed corpus — the fixtures ARE 
 
 def test_import_writes_the_full_corpus_with_dr009_stamps(docs: list[SeedDocument]) -> None:
     report = import_documents(docs)
-    assert report.models_created == 15
-    assert report.aliases_created == 17
-    assert ProductModel.objects.count() == 15
-    assert DriveSpec.objects.count() == 15
+    assert report.models_created == 268
+    assert report.aliases_created == 284
+    assert ProductModel.objects.count() == 268
+    assert DriveSpec.objects.count() == 268
     for model in ProductModel.objects.all():
         assert model.retention_class == RetentionClass.MANUFACTURER_REFERENCE
         assert model.expires_at is None
@@ -53,8 +53,8 @@ def test_import_is_idempotent(docs: list[SeedDocument]) -> None:
     report = import_documents(docs)
     assert report.models_created == 0
     assert report.aliases_created == 0
-    assert ProductModel.objects.count() == 15
-    assert ProductAlias.objects.count() == 17
+    assert ProductModel.objects.count() == 268
+    assert ProductAlias.objects.count() == 284
 
 
 def test_import_adopts_rung2_provisional_family(docs: list[SeedDocument]) -> None:
@@ -68,7 +68,9 @@ def test_import_adopts_rung2_provisional_family(docs: list[SeedDocument]) -> Non
     assert "exos" in report.families_adopted
     adopted = ProductFamily.objects.get(manufacturer=seagate, normalized_name="exos")
     assert adopted.pk == provisional.pk  # same row, no duplicate
-    assert adopted.models.count() == 6  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no reverse-FK manager stub
+    # Every Seagate Exos document (X-series, 7E, recertified) shares the one
+    # 'Exos' family, so the adopted row gathers all of them.
+    assert adopted.models.count() == 195  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no reverse-FK manager stub
 
 
 def test_unadopted_provisional_families_are_reported_not_touched(docs: list[SeedDocument]) -> None:

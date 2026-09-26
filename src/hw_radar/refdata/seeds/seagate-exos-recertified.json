@@ -15,10 +15,219 @@
         "url": "https://www.seagate.com/products/seagate-recertified/exos-recertified/",
         "title": "Seagate direct Exos recertified category page",
         "retrieved": "2026-07-05"
+      },
+      {
+        "url": "https://www.seagate.com/content/dam/seagate/en/content-fragments/products/datasheets/exos-recertified/exos-recertified-1--en_US.pdf",
+        "title": "Seagate Exos Recertified data sheet (undated; document id not captured)",
+        "retrieved": "2026-09-26"
       }
     ]
   },
   "models": [
+    {
+      "model_number": "ST4000NM000C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "4",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST4000NM000C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST4000NM001C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "4",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST4000NM001C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST6000NM000C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "6",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST6000NM000C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST6000NM001C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "6",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST6000NM001C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST8000NM000C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "8",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST8000NM000C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST8000NM001C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "8",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST8000NM001C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST10000NM000C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST10000NM000C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST10000NM001C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST10000NM001C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM002C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM002C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM003C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM003C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST14000NM002C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "14",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST14000NM002C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST14000NM003C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "14",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST14000NM003C", "is_primary": true}]
+    },
     {
       "model_number": "ST16000NM002C",
       "spec": {
@@ -35,6 +244,40 @@
         "spec_json": {"seagate_recertified_sku": true}
       },
       "aliases": [{"alias_type": "mpn", "text": "ST16000NM002C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM003C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM003C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM002C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM002C", "is_primary": true}]
     },
     {
       "model_number": "ST20000NM002C",
@@ -54,6 +297,23 @@
       "aliases": [{"alias_type": "mpn", "text": "ST20000NM002C", "is_primary": true}]
     },
     {
+      "model_number": "ST20000NM004C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM004C", "is_primary": true}]
+    },
+    {
       "model_number": "ST22000NM000C",
       "spec": {
         "media_type": "hdd",
@@ -69,6 +329,23 @@
         "spec_json": {"seagate_recertified_sku": true}
       },
       "aliases": [{"alias_type": "mpn", "text": "ST22000NM000C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST22000NM001C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "22",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST22000NM001C", "is_primary": true}]
     },
     {
       "model_number": "ST24000NM000C",
@@ -88,6 +365,23 @@
       "aliases": [{"alias_type": "mpn", "text": "ST24000NM000C", "is_primary": true}]
     },
     {
+      "model_number": "ST24000NM001C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST24000NM001C", "is_primary": true}]
+    },
+    {
       "model_number": "ST26000NM000C",
       "spec": {
         "media_type": "hdd",
@@ -105,6 +399,23 @@
       "aliases": [{"alias_type": "mpn", "text": "ST26000NM000C", "is_primary": true}]
     },
     {
+      "model_number": "ST26000NM001C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "26",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST26000NM001C", "is_primary": true}]
+    },
+    {
       "model_number": "ST28000NM000C",
       "spec": {
         "media_type": "hdd",
@@ -120,6 +431,23 @@
         "spec_json": {"seagate_recertified_sku": true}
       },
       "aliases": [{"alias_type": "mpn", "text": "ST28000NM000C", "is_primary": true}]
+    },
+    {
+      "model_number": "ST28000NM001C",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "28",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "market_tier": "enterprise",
+        "model_family": "Exos",
+        "spec_json": {"seagate_recertified_sku": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST28000NM001C", "is_primary": true}]
     }
   ]
 }

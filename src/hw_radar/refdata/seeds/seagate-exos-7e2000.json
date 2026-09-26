@@ -1,0 +1,385 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "manufacturer_name": "Seagate",
+  "manufacturer_key": "seagate",
+  "family_name": "Exos",
+  "provenance": {
+    "source_kind": "first_party_datasheet",
+    "sources": [
+      {
+        "url": "https://www.seagate.com/content/dam/seagate/migrated-assets/www-content/datasheets/pdfs/exos-7e2000-DS1955-1-1709US-en_US.pdf",
+        "title": "Seagate Exos 7E2000 datasheet DS1955.1-1709US",
+        "retrieved": "2026-09-26"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "ST2000NX0263",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "4kn",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0263", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0323",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "4kn",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0323", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0323",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "4kn",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0323", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0363",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "4kn",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0363", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0333",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "4kn",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED-FIPS"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0333", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0273",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "5xx emulation"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0273", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0333",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "5xx emulation"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0333", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0343",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "5xx emulation"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0343", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0373",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "5xx emulation"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0373", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0353",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "5xx emulation"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0353", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0433",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "5xx native"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0433", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0453",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "5xx native"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0453", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0243",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "4kn",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0243", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0303",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "4kn",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0303", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0283",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "4kn",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0283", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0343",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "4kn",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0343", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0253",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "512e",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0253", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0313",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "512e",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0313", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0303",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "512e",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0303", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0353",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "512e",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0353", "is_primary": true}]
+    },
+    {
+      "model_number": "ST2000NX0403",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "512n",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST2000NX0403", "is_primary": true}]
+    },
+    {
+      "model_number": "ST1000NX0423",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "2.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "512n",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos 7E2000",
+        "spec_json": {"security_variant": "Standard"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST1000NX0423", "is_primary": true}]
+    }
+  ]
+}
