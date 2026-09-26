@@ -93,7 +93,7 @@ Every box below is unchecked: nothing has been enabled.
       (`src/hw_radar/matching/__init__.py`).
 - [ ] Source-policy status re-checked against current Terms (not the date of this table).
 - [ ] Rollback path confirmed: flip the cell back to `NOT_ADMITTED` / disable the source, release.
-- [ ] Observability (`scraper_runs` alerting, CT-116 disk-space alert) is active, and this cell's
+- [ ] Observability (`scraper_runs` alerting, production-container disk-space alert) is active, and this cell's
       cost/budget stays inside the Hardware Radar Apify ceiling if it ever runs through Apify — no
       admitted cell currently does.
 
