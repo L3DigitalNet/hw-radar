@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
+from hw_radar.acquisition.admission import RETIRED_SOURCES
 from hw_radar.matching.eval.corpus import (
     CORPUS_SOURCE_KEYS,
     AuditStatus,
@@ -66,22 +67,17 @@ MIN_RATIFICATION_SOURCES: Final = 3
 # the matcher, since the draft may itself have been read off the matcher.
 _OWNER_RATIFIED: Final = frozenset({AuditStatus.OWNER_CONFIRMED, AuditStatus.OWNER_CORRECTED})
 
-# TODO(s7-integration): replace this placeholder with
-# `from hw_radar.acquisition.admission import RETIRED_SOURCES` once the admission
-# module lands on dev (being written by a parallel leg); the value is the same two
-# keys. Until then this local copy is the single retired-source authority here.
-_RETIRED_SOURCES_PLACEHOLDER: Final[frozenset[str]] = frozenset(
-    {"serverpartdeals", "seagate-recertified"}
-)
-
 
 def retired_source_keys() -> frozenset[str]:
     """Sources that may no longer be declared for a ratification.
 
     Retired sources stay in CORPUS_SOURCE_KEYS so historical corpora still load;
-    declaring one fails the source floor rather than the load.
+    declaring one fails the source floor rather than the load. Delegates to
+    acquisition.admission.RETIRED_SOURCES so the retired set has exactly one
+    source of truth (matching.eval imports this exact name and type per that
+    module's header contract).
     """
-    return _RETIRED_SOURCES_PLACEHOLDER
+    return RETIRED_SOURCES
 
 
 # ADR-0019 rule 7's dual-label spot check is only meaningful where OEM
