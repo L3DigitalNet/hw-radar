@@ -39,6 +39,12 @@ Semantics (MS2-D-08):
   module) can only ever produce `no_match`, and only when it positively
   contradicts the requirement with confidence >= the category policy's
   threshold. Agreement at listing tier never produces `match`.
+- One exception: `cpu.vendor_lock` (a watch's `require_vendor_unlocked`). A
+  vendor (PSB) lock is a property of the particular unit, not of the model, so
+  the catalog can never know it and the listing's explicit statement is the
+  only evidence there is (matching.rules.cpu `vendor_lock`). Like the offer
+  clauses it therefore reads the listing directly: stated unlocked => `match`,
+  stated locked => `no_match`, unstated or contradictory => `unknown`.
 - Offer clauses (price, condition, stock, international) read the latest
   `OfferSnapshot` and the `Listing`.
 - The soft `Watch.target_unit_price_usd` is never read here (MS2-D-07, R11).
@@ -86,7 +92,7 @@ from hw_radar.catalog.models import (
 from hw_radar.eligibility.requirements import DRIVE_FORM_FACTOR_TOKENS, DRIVE_INTERFACE_TOKENS
 from hw_radar.matching import categories, vocab
 from hw_radar.matching.normalize import canonicalize_listing_text
-from hw_radar.matching.rules.cpu import CpuAttributes, socket_key
+from hw_radar.matching.rules.cpu import VENDOR_LOCKED, VENDOR_UNLOCKED, CpuAttributes, socket_key
 from hw_radar.matching.rules.gpu import GpuAttributes
 from hw_radar.matching.rules.ram import RamAttributes
 from hw_radar.matching.types import Attribute, ExtractedAttributes
@@ -95,7 +101,7 @@ from hw_radar.matching.types import Attribute, ExtractedAttributes
 # stored row whose evaluator_version differs is non-current (MS2-D-20), so a
 # bump makes every old verdict pending until re-evaluated. Forgetting it leaves
 # verdicts computed under the old rules looking current.
-EVALUATOR_VERSION: Final = "ms2c.2"
+EVALUATOR_VERSION: Final = "ms2c.3"
 # Bump when the CatalogInputs shape or its canonical JSON changes, so every
 # stored fingerprint stops matching instead of silently comparing across shapes.
 CATALOG_INPUTS_VERSION: Final = "1"
@@ -1098,7 +1104,53 @@ def _cpu_clauses(
             policy,
             source=source,
         ),
+        vendor_lock_clause(req.require_vendor_unlocked, title.vendor_lock, policy, source),
     ]
+
+
+def vendor_lock_clause(
+    require_unlocked: bool,
+    lock: Attribute[str] | None,
+    policy: CategoryPolicy,
+    source: Mapping[str, object],
+) -> ClauseResult:
+    """`cpu.vendor_lock`: see the module docstring for why this one product
+    clause is decided at listing tier. An unstated lock, or one extracted below
+    the policy's confidence, is `unknown` and never satisfies the requirement:
+    an unlocked requirement exists because a locked CPU will not boot in the
+    buyer's board, so only an explicit statement may pass it."""
+    src = dict(source)
+    clause = "cpu.vendor_lock"
+    if not require_unlocked:
+        return ClauseResult(
+            clause, EligibilityVerdict.MATCH, EvidenceTier.NONE, None, None, "no constraint", src
+        )
+    required = VENDOR_UNLOCKED
+    if lock is None or lock.confidence < policy.listing_min_confidence:
+        return ClauseResult(
+            clause,
+            EligibilityVerdict.UNKNOWN,
+            EvidenceTier.NONE,
+            required,
+            None,
+            "the listing does not state its vendor lock; only a stated unlock satisfies this",
+            src,
+        )
+    observed = {
+        "listing": {
+            "value": lock.value,
+            "confidence": lock.confidence,
+            "source_text": lock.source_text,
+        }
+    }
+    if lock.value == VENDOR_UNLOCKED:
+        outcome, detail = EligibilityVerdict.MATCH, "listing states the unit is unlocked"
+    elif lock.value == VENDOR_LOCKED:
+        outcome, detail = EligibilityVerdict.NO_MATCH, "listing states the unit is vendor locked"
+    else:
+        # A value this clause does not know is not evidence of either state.
+        outcome, detail = EligibilityVerdict.UNKNOWN, "unrecognized vendor-lock value"
+    return ClauseResult(clause, outcome, EvidenceTier.LISTING, required, observed, detail, src)
 
 
 type _Requirement = DriveRequirement | GpuRequirement | RamRequirement | CpuRequirement

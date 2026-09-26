@@ -31,10 +31,11 @@ authoritative identity:
     on the seeded one and read as unambiguous.
   - An AMD OPN followed by a '-NN' suffix ('100-000000314-04', a QS sample
     marking) is not the OPN, so it is not a candidate.
-  - A first-party AMD codename between 'EPYC' and the number ('EPYC Genoa
-    9354', 'EPYC Milan-X 7773X') is skipped when forming the name candidate,
-    which is emitted as 'epyc <number>'. The number keeps its suffix, so the
-    P-variant and multi-model guards see exactly what they would without it.
+  - A first-party AMD codename, socket or Zen generation between 'EPYC' and
+    the number ('EPYC Genoa 9354', 'EPYC Milan-X 7773X', 'EPYC GENOA SP5 ZEN4
+    9354') is skipped when forming the name candidate, which is emitted as
+    'epyc <number>'. The number keeps its suffix, so the P-variant and
+    multi-model guards see exactly what they would without it.
 
 Candidate filtering alone is not enough for multi-model titles: rung 0 never
 looks at candidates, so a listing accepted under one title and re-observed
@@ -52,6 +53,21 @@ H12DSi-N6 Motherboard With 2x AMD EPYC 7763') names the CPU exactly, so it
 reaches the alias. Its price is not a CPU price, so the product-type marker is
 extracted as `bundle` and vetoes (see _BUNDLE for what does and does not count).
 
+Vendor (PSB) lock is extracted as `vendor_lock` but is deliberately NOT an
+identity field: it is a property of the particular unit and its sales channel
+(the same EPYC 7742 ships locked to Dell or unlocked), not of the CPU model, so
+it is listing evidence rather than a `cpu_spec` column, `veto` never reads it,
+and a 'Dell Locked EPYC 7742' resolves to EPYC 7742 like any other. Whether a
+watch accepts a locked unit is eligibility's decision (`cpu.vendor_lock` in
+eligibility.evaluate).
+
+Price is not identity either (owner ruling on cpu-0283: a $399 'EPYC 7763 ...
+100-000000312' is EPYC 7763). Nothing in this module, nor the ladder that
+calls it, receives the listing price, and that must stay so: a price anomaly
+is a question for eligibility, seller trust, deal evaluation and review, and
+letting it veto or demote identity would hide exactly the listings those
+layers exist to judge.
+
 Engineering and qualification samples ('ES', 'QS', 'engineering sample',
 'pre-production', a suffixed OPN) are different parts from the retail SKU:
 their own OPNs, stepping, clocks and often locked or unfinished firmware. A
@@ -68,6 +84,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+from typing import Final
 
 from hw_radar.matching import vocab
 from hw_radar.matching.ladder import CategoryHardAttrs, HardAttrs
@@ -110,6 +127,11 @@ class CpuAttributes(CategoryAttributes):
     # The distinct model numbers (EPYC numbers and _line_models keys),
     # space-joined, when the title names more than one; None = at most one.
     multi_model: Attribute[str] | None = None
+    # VENDOR_LOCKED / VENDOR_UNLOCKED when the title states the unit's vendor
+    # (PSB) lock explicitly; None = unknown. Listing evidence for the watch
+    # clause `cpu.vendor_lock` only: never compared to the catalog and never
+    # read by `veto`, so it cannot change identity (see _vendor_lock).
+    vendor_lock: Attribute[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -143,9 +165,16 @@ _TDP = re.compile(r"\b(\d{2,3})\s?w\b")
 # number must also start its own token, hence the Ryzen tier digit needs
 # whitespace after it: an optional '[3579]?' let 'Ryzen 79500' read as tier 7
 # plus model '9500'.
+#
+# Between 'EPYC' and the number a title may carry up to three AMD qualifier
+# words: the first-party codename, the socket ('sp5') and the core
+# microarchitecture ('zen4', 'zen 4'), in any order ('EPYC GENOA SP5 ZEN4 9354',
+# cpu-0082). Only that closed vocabulary is skipped, so a free word between
+# them ('EPYC server 9354') still breaks the phrase, and the number must still
+# follow the last qualifier directly with its suffix intact (9354P stays 9354P).
 _EPYC_NAME_PHRASE = re.compile(
-    r"\bepyc\s+(?:(?P<codename>naples|rome|milan(?:-x)?|genoa(?:-x)?|bergamo|siena"
-    r"|turin)\s+)?(?P<num>\d{4}[a-z]{0,2})\b"
+    r"\bepyc\s+(?P<qualifiers>(?:(?:naples|rome|milan(?:-x)?|genoa(?:-x)?|bergamo|siena"
+    r"|turin|sp[3-6]|zen\s?[1-6]c?)\s+){1,3})?(?P<num>\d{4}[a-z]{0,2})\b"
 )
 _NAMES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -173,7 +202,13 @@ _ORDERING: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("intel", re.compile(r"\b(?:bx|bxc|bv|cm|cd|pk)\d{6,}[a-z0-9]*\b")),
     # (?!-\w): a suffixed OPN ('100-000000314-04') is a sample/stepping
     # marking, not the part number, so its stem must not reach the alias table.
-    ("amd", re.compile(r"\b100-\d{9}\b(?!-\w)")),
+    # The second branch admits an OPN fused with a following condition word
+    # ('100-000000798Open', cpu-0082: the seller's text ran into the part
+    # number). Only that closed word set, never an arbitrary alphanumeric
+    # continuation: AMD's own boxed part numbers extend the digits with letters
+    # ('100-100000312WOF'), and a longer digit run is another code entirely, so
+    # a general suffix strip would collapse distinct parts onto one alias.
+    ("amd", re.compile(r"\b100-\d{9}(?:\b(?!-\w)|(?=(?:open(?:box)?|new|used)\b(?!-\w)))")),
 )
 _SSPEC = re.compile(r"\bsr[a-z0-9]{3}\b")
 _VOCAB_TAILS = re.compile(r"(?:\d(?:ghz|mhz|mb|gb|w)|lga\d+|\dc/\d+t|\d-?cores?)$")
@@ -225,6 +260,36 @@ _BUNDLE = re.compile(
     r"|(?:with|w/|incl|including|plus|\+)\s*[2-9]\s?x"
     r"|[2-9]\s?x\s+(?:cpus?|processors?|amd|intel|epyc|xeon))(?![a-z0-9])"
 )
+
+
+VENDOR_LOCKED: Final = "locked"
+VENDOR_UNLOCKED: Final = "unlocked"
+
+# Vendor (AMD PSB) lock wording, read on the UNMASKED canonical title: the
+# words describe the unit on sale wherever they sit, and titles routinely put
+# them inside a span reference masking would hide ('OEM Version of EPYC 7763
+# unlocked'). Explicit wording only; OEM branding alone ('Dell', 'Pulled from
+# Cisco UCS') never implies a lock, because OEMs ship both locked and
+# unlocked parts.
+#
+# Negated and 'un-' forms are matched FIRST and blanked before the locked scan,
+# so 'not locked', 'non-locked', 'no vendor lock' and 'unlocked' can never
+# also read as the bare word 'locked'. 'unlock' and typos ('unclocked') are
+# deliberately absent: the watch clause treats unknown as not satisfying an
+# unlocked requirement, so a missed unlocked costs a review, a misread one an
+# eligible locked CPU.
+_LOCK_OEMS = r"(?:dell|lenovo|hpe?|cisco)"
+_UNLOCKED_WORDING = re.compile(
+    r"\bunlocked\b"
+    r"|\bno\s+(?:vendor\s+|psb\s+)?lock(?:ed)?\b"
+    rf"|\bnot\s+(?:(?:vendor|psb|{_LOCK_OEMS})\s+)?locked\b"
+    r"|\bnon[-\s]?(?:(?:vendor|psb)\s+)?locked\b"
+)
+# The bare word covers 'Dell Locked', 'vendor locked', 'PSB locked', 'locked to
+# <vendor>' and the emphasized '(*locked*)'. '<OEM> only' ('LENOVO ONLY') is an
+# exclusivity claim, which for a CPU means it only boots in that OEM's boards:
+# a vendor lock stated in other words.
+_LOCKED_WORDING = re.compile(rf"\blocked\b|\b(?:vendor|psb)[-\s]lock\b|\b{_LOCK_OEMS}\s+only\b")
 
 
 def socket_key(value: str) -> str:
@@ -329,6 +394,21 @@ def _multi_model(identity: str) -> Attribute[str] | None:
     return Attribute(value=joined, confidence=0.9, layer=LAYER, source_text=joined)
 
 
+def _vendor_lock(title: str) -> Attribute[str] | None:
+    """The unit's stated vendor lock; None when the title states neither, or
+    both (a self-contradicting title is unknown, not whichever came first)."""
+    unlocked = _UNLOCKED_WORDING.search(title)
+    rest = _UNLOCKED_WORDING.sub(lambda m: " " * len(m.group(0)), title)
+    locked = _LOCKED_WORDING.search(rest)
+    if unlocked is not None and locked is None:
+        m, value = unlocked, VENDOR_UNLOCKED
+    elif locked is not None and unlocked is None:
+        m, value = locked, VENDOR_LOCKED
+    else:
+        return None
+    return Attribute(value=value, confidence=0.9, layer=LAYER, source_text=m.group(0))
+
+
 def extract(title: str) -> ExtractedAttributes:
     sockets = [(socket_key(m.group(0)), m.group(0)) for p in _SOCKETS for m in p.finditer(title)]
     cores = [(int(m.group(1) or m.group(2)), m.group(0)) for m in _CORES.finditer(title)]
@@ -343,6 +423,7 @@ def extract(title: str) -> ExtractedAttributes:
         sample=_marker(_SAMPLE, identity),
         bundle=_marker(_BUNDLE, identity),
         multi_model=_multi_model(identity),
+        vendor_lock=_vendor_lock(title),
     )
     brand = _brand(identity)
     return replace(vocab.offer_terms(title), brand=brand, category_attrs=payload)
@@ -387,10 +468,11 @@ def extract_candidates(
     for vendor, pattern in _NAMES:
         for m in pattern.finditer(title):
             whole = m.group(0)
-            if m.groupdict().get("codename"):
-                # 'epyc genoa 9354' → 'epyc 9354': seeds alias the name without
-                # the codename, so the whole phrase would never join.
-                start, end = m.span("codename")
+            if m.groupdict().get("qualifiers"):
+                # 'epyc genoa sp5 9354' → 'epyc 9354': seeds alias the name
+                # without codename or platform words, so the whole phrase
+                # would never join.
+                start, end = m.span("qualifiers")
                 whole = title[m.start() : start] + title[end : m.end()]
             out.add(whole, TokenKind.MANUFACTURER_MPN, vendor=vendor, confidence=0.85)
             out.add(m.group("num"), TokenKind.MANUFACTURER_MPN, vendor=vendor, confidence=0.75)
