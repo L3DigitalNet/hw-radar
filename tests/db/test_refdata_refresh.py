@@ -117,7 +117,7 @@ def test_scan_is_idempotent_and_skips_synthetic_keys(site: SourceSite) -> None:
 
 def test_run_refresh_imports_reconsiders_and_scans(site: SourceSite) -> None:
     listing = _listing(site, "rr-1", "seagate exos st16000nm002c 16tb sata")
-    CatalogResolver().resolve_listing(listing.pk)  # family grain before the seed
+    CatalogResolver().resolve_listing(listing.pk)  # unresolved before the seed (`nm`: no family)
     # Seeded after resolution, so the upgrade can only come from the refresh's
     # reconsider pass.
     _admit("drive")
@@ -126,7 +126,7 @@ def test_run_refresh_imports_reconsiders_and_scans(site: SourceSite) -> None:
     assert report.conflicts == []
     assert report.import_report is not None
     assert report.reconsidered >= 1
-    assert report.upgraded >= 1  # family → model via the seeded Exos alias
+    assert report.upgraded >= 1  # none → model via the seeded Exos alias
     listing.refresh_from_db()
     assert listing.resolution_grain == ResolutionGrain.MODEL
     config = RefdataConfig.current()

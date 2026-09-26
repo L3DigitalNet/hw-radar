@@ -101,7 +101,7 @@ def exos_16tb() -> ProductModel:
 
 
 @pytest.fixture
-def exos_family_split() -> ProductFamily:
+def ironwolf_pro_family_split() -> ProductFamily:
     """FAMILY-grain agreement fixture (spec 1216 / C.3.2 `_family_agreement_attrs`):
     two models under one family that AGREE on interface (both SATA) but
     DISAGREE on capacity (16TB vs 18TB). Neither model carries an MPN alias,
@@ -110,22 +110,23 @@ def exos_family_split() -> ProductFamily:
     test_resolver.py) — the resulting prior's hard_attrs are the agreement
     set, not either model's own spec, which is exactly what the single-model
     `exos_16tb` fixture above can never exercise: one model can't disagree
-    with itself.
+    with itself. IronWolf Pro (`ne` segment), not Exos: the Seagate grammar
+    asserts no family for `nm` tokens, so an Exos MPN never reaches rung 2.
     """
     manufacturer, _ = Manufacturer.objects.get_or_create(
         normalized_name="seagate", defaults={"name": "Seagate"}
     )
     family = ProductFamily.objects.create(
         manufacturer=manufacturer,
-        normalized_name="exos",
-        name="Exos",
+        normalized_name="ironwolf pro",
+        name="IronWolf Pro",
         category=Category.objects.get(slug="drive"),
     )
     model_a = ProductModel.objects.create(
         manufacturer=manufacturer,
         product_family=family,
-        model_number="ST16000NM002C",
-        normalized_model_number=normalize_alias_text("ST16000NM002C"),
+        model_number="ST16000NE000",
+        normalized_model_number=normalize_alias_text("ST16000NE000"),
         retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     DriveSpec.objects.create(
@@ -138,8 +139,8 @@ def exos_family_split() -> ProductFamily:
     model_b = ProductModel.objects.create(
         manufacturer=manufacturer,
         product_family=family,
-        model_number="ST18000NM003D",
-        normalized_model_number=normalize_alias_text("ST18000NM003D"),
+        model_number="ST18000NE000",
+        normalized_model_number=normalize_alias_text("ST18000NE000"),
         retention_class=RetentionClass.MANUFACTURER_REFERENCE,
     )
     DriveSpec.objects.create(
@@ -305,7 +306,7 @@ def test_contradicting_reobservation_is_demoted_to_review_not_inherited(
 
 
 def test_family_agreement_veto_fires_on_agreed_field(
-    site: SourceSite, exos_family_split: ProductFamily
+    site: SourceSite, ironwolf_pro_family_split: ProductFamily
 ) -> None:
     """C.3.2 agreement-set veto, agree half: the split models agree on
     interface (both SATA), so `_family_agreement_attrs()` carries a real
@@ -313,17 +314,17 @@ def test_family_agreement_veto_fires_on_agreed_field(
     exactly like the single-model contradiction tests above."""
     listing = _observe(
         site,
-        title="Seagate Exos ST16000NM002C 16TB SATA Factory Recertified",
+        title="Seagate IronWolf Pro ST16000NE000 16TB SATA Factory Recertified",
         observed_at=_FIRST_SEEN,
         price="199.00",
     )
     assert listing.resolution_grain == ResolutionGrain.FAMILY
-    assert listing.product_family == exos_family_split
+    assert listing.product_family == ironwolf_pro_family_split
     first_edge = _edge(listing, is_current=True)
 
     listing = _observe(
         site,
-        title="Seagate Exos ST16000NM002C 16TB NVMe Factory Recertified",
+        title="Seagate IronWolf Pro ST16000NE000 16TB NVMe Factory Recertified",
         observed_at=_FIRST_SEEN + timedelta(days=1),
         price="199.00",
     )
@@ -342,7 +343,7 @@ def test_family_agreement_veto_fires_on_agreed_field(
 
 
 def test_family_agreement_veto_silent_on_disagreed_field(
-    site: SourceSite, exos_family_split: ProductFamily
+    site: SourceSite, ironwolf_pro_family_split: ProductFamily
 ) -> None:
     """C.3.2 agreement-set veto, disagree half: the split models disagree on
     capacity (16TB vs 18TB), so that field is unknown on the catalog side and
@@ -351,7 +352,7 @@ def test_family_agreement_veto_silent_on_disagreed_field(
     treated as non-contradicting and inherits, same as an unchanged re-poll."""
     listing = _observe(
         site,
-        title="Seagate Exos ST16000NM002C 16TB SATA Factory Recertified",
+        title="Seagate IronWolf Pro ST16000NE000 16TB SATA Factory Recertified",
         observed_at=_FIRST_SEEN,
         price="199.00",
     )
@@ -361,7 +362,7 @@ def test_family_agreement_veto_silent_on_disagreed_field(
 
     listing = _observe(
         site,
-        title="Seagate Exos ST16000NM002C 18TB SATA Factory Recertified",
+        title="Seagate IronWolf Pro ST16000NE000 18TB SATA Factory Recertified",
         observed_at=_FIRST_SEEN + timedelta(days=1),
         price="189.00",
     )
@@ -371,4 +372,4 @@ def test_family_agreement_veto_silent_on_disagreed_field(
     assert current.pk == first_edge.pk
     assert current.last_evaluated_at > stamp_before
     assert listing.resolution_grain == ResolutionGrain.FAMILY
-    assert listing.product_family == exos_family_split
+    assert listing.product_family == ironwolf_pro_family_split

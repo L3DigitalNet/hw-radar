@@ -32,9 +32,11 @@ def _resolve(site: SourceSite, key: str, title: str) -> Listing:
 
 
 def test_same_decoded_hypothesis_groups_across_listings(site: SourceSite) -> None:
-    _resolve(site, "b1", "Seagate 20TB ST20000NM007D Recertified")
-    _resolve(site, "b2", "Seagate 20TB ST20000NM007D Renewed")
-    row = UnknownModelBackfill.objects.get(mpn_hypothesis="st20000nm007d")
+    # An IronWolf Pro (`ne`) token: it must reach rung 2, and the Seagate
+    # grammar names no family for `nm` tokens.
+    _resolve(site, "b1", "Seagate 20TB ST20000NE000 Recertified")
+    _resolve(site, "b2", "Seagate 20TB ST20000NE000 Renewed")
+    row = UnknownModelBackfill.objects.get(mpn_hypothesis="st20000ne000")
     assert row.occurrences == 2
     assert row.family_grain_count == 2  # both attached at family grain (rung 2)
     assert row.first_seen <= row.last_seen

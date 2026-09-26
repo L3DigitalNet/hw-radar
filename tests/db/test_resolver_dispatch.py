@@ -33,7 +33,8 @@ from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.matching.types import ExtractedAttributes, Grain
 
 _EXOS_TITLE = "Seagate Exos X16 16TB ST16000NM001G Factory Recertified SATA"
-_DECODE_TITLE = "Seagate 20TB ST20000NM007D Recertified Enterprise"
+# `ne` (IronWolf Pro), not `nm`: the Seagate grammar names no family for `nm`.
+_DECODE_TITLE = "Seagate 20TB ST20000NE000 Recertified NAS"
 _OBSERVED_AT = datetime(2026, 9, 24, 12, 0, tzinfo=UTC)
 
 

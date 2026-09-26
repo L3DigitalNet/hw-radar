@@ -39,14 +39,32 @@ def test_comparison_only_mpn_yields_no_candidate_and_no_decode() -> None:
 
 
 def test_direct_identity_mpn_still_decodes_to_family() -> None:
-    title = 'Seagate 16TB 7.2K RPM SAS 12Gb/s 3.5" HDD ST16000NM002G'
+    # An IronWolf Pro token, not the ebay-0021 Exos one: the Seagate grammar
+    # names no family for `nm`, so only a mapped segment can show that masking
+    # leaves a direct identity MPN's rung-2 decode intact.
+    title = 'Seagate 16TB 7.2K RPM SATA 6Gb/s 3.5" NAS HDD ST16000NE000'
     found = _candidates(title)
-    assert found["st16000nm002g"].vendor_hint == "seagate"
+    assert found["st16000ne000"].vendor_hint == "seagate"
     verdict = _drive_verdict(title)
     assert verdict.outcome is ladder.Outcome.ACCEPT
     assert verdict.rung == 2
     assert verdict.target is not None
-    assert verdict.target.family_key == ("seagate", "exos")
+    assert verdict.target.family_key == ("seagate", "ironwolf pro")
+
+
+def test_direct_nm_identity_mpn_is_kept_but_names_no_family() -> None:
+    # MS-1e ghd-0006 (owner-confirmed false positive under matcher 2026.09.1):
+    # a Constellation ES drive auto-accepted at rung 2 as Seagate/Exos.
+    title = (
+        "Seagate Constellation ES.3 ST1000NM0001 1TB 7200 RPM 128MB Cache SAS 6Gb/s "
+        '3.5" Enterprise Internal Hard Drive (Refurbished) - 3 Year Warranty'
+    )
+    assert _candidates(title)["st1000nm0001"].vendor_hint == "seagate"
+    verdict = _drive_verdict(title)
+    assert verdict.outcome is ladder.Outcome.NONE
+    assert verdict.grain is Grain.NONE
+    assert verdict.target is None
+    assert verdict.evidence["vendor_hint"] == "seagate"  # decoded, just no family
 
 
 @pytest.mark.parametrize(
