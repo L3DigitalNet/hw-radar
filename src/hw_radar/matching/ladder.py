@@ -5,7 +5,9 @@ HardAttrs); decide() does no I/O, so the golden verdict table runs without a
 DB. Only rungs 0-2 auto-accept. The veto runs at EVERY rung - an exact alias
 hit that contradicts extracted capacity goes to review, never into the price
 history (ADR-0019: false merges poison the moat asymmetrically; missed matches
-just queue).
+just queue). Likewise a brand contradiction never falls through to a weaker
+rung: exact hits that all contradict the listing's brand go to review, and a
+grammar decode whose vendor contradicts it never attaches at rung 2.
 
 Confidence constants are OQ-provisional tunables; ADR-0016 settings-row
 versions arrive with the rung-3/occurrence thresholds at MS-1c."""
@@ -210,6 +212,24 @@ def decide(
     # MPN (merchant-asserted). Absent all three → review, never auto-accept.
     brand = extracted.brand.value if extracted.brand is not None else None
     viable = [h for h in alias_hits if brands_consistent(brand, h.brand)]
+    if alias_hits and not viable:
+        # Every exact hit names a brand the listing contradicts. That is a
+        # conflict, not 'no catalog hit': falling through would let rung 2
+        # accept the SAME token's grammar family without ever checking the
+        # exact model's hard attributes (e.g. 'Toshiba ST12000NE0008 SAS'
+        # attaching to Seagate IronWolf Pro, whose exact model is SATA).
+        return Verdict(
+            Outcome.REVIEW,
+            Grain.NONE,
+            rung=1,
+            evidence={
+                **evidence,
+                "brand_contradicts_exact_alias": {
+                    "brand": brand,
+                    "alias_brands": sorted({h.brand for h in alias_hits if h.brand}),
+                },
+            },
+        )
     if viable:
 
         def has_brand_evidence(hit: AliasHit) -> bool:
@@ -279,6 +299,20 @@ def decide(
 
     # Rung 2 — valid grammar decode, no catalog hit → family grain, provisional.
     if decoded is not None and decoded.family_name:
+        if not brands_consistent(brand, decoded.vendor):
+            # A grammar decode only proves the token is SHAPED like the vendor's
+            # MPN; an explicit contrary brand in the title means the shape is
+            # coincidental or the listing is mislabeled — either way not an
+            # automatic family attach.
+            return Verdict(
+                Outcome.REVIEW,
+                Grain.NONE,
+                rung=2,
+                evidence={
+                    **evidence,
+                    "brand_contradicts_decode": {"brand": brand, "vendor": decoded.vendor},
+                },
+            )
         if (
             extracted.capacity_bytes is not None
             and decoded.capacity_bytes is not None

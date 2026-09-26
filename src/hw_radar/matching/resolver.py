@@ -17,7 +17,9 @@ Invariants:
   REPEATED IDENTICAL errors write no new edge; distinct new errors do.
 - Rung 0 prior = the listing's denorm fields (last accepted state): MS-1a
   persist upserts on (source_site, source_listing_key), so a re-observation IS
-  the same row.
+  the same row. Exception: an automated (rung 1-2) accept decided under an
+  older MATCHER_VERSION is re-decided by the full ladder, and the new edge
+  records `reconsidered_from_matcher_version`; manual accepts always inherit.
 - Single normalizer: all alias joins ride matching.normalize (ADR-0019 rule 1).
 - Lazy alias learning (rule 7): dual-labeled listings emit listing_derived OEM
   aliases at MODEL grain max; house SKUs become source-local aliases.
@@ -469,6 +471,39 @@ def _prior_basis(listing: Listing) -> _AcceptanceBasis | None:
     )
 
 
+# Methods whose accept is a rule-derived, automated decision (rungs 1-2). Their
+# correctness is only as good as the matcher_version that produced them; a
+# MANUAL accept is an owner decision and no rule change may overturn it.
+_AUTOMATED_METHODS: Final = frozenset(
+    {ResolutionMethod.EXACT_ALIAS.value, ResolutionMethod.MPN_DECODE.value}
+)
+
+
+def _stale_prior_version(listing: Listing) -> str | None:
+    """The older matcher_version the listing's accepted state was decided under,
+    when that decision was automated; None when the prior may be inherited.
+
+    The origin is the latest non-error accept edge that is NOT a rung-0
+    `source_alias` edge: a rung-0 edge only re-stamps an inherited target, so its
+    own matcher_version says nothing about which rules chose that target (and
+    denorm is only ever set by an accept, so no fresh decision sits between the
+    origin and later rung-0 edges). No origin edge at all — denorm written
+    outside the resolver — is not provably automated and stays inheritable."""
+    origin = cast(
+        "ListingResolution | None",
+        listing.resolutions.filter(evidence__outcome=ladder.Outcome.ACCEPT.value)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no reverse-FK manager stub
+        .exclude(evidence__has_key="error")
+        .exclude(method=ResolutionMethod.SOURCE_ALIAS.value)
+        .order_by("-resolved_at", "-pk")
+        .first(),
+    )
+    if origin is None or origin.method not in _AUTOMATED_METHODS:
+        return None
+    if origin.matcher_version == MATCHER_VERSION:
+        return None
+    return origin.matcher_version
+
+
 def _apply_category_gates(
     listing: Listing, slug: str, rules: categories.CategoryRules, verdict: ladder.Verdict
 ) -> ladder.Verdict:
@@ -574,6 +609,15 @@ def _run_ladder(
     # listing re-accepts its prior forever and the catalog seed can never
     # upgrade it. The veto still runs; unchanged outcomes write no edge.
     prior = None if reconsider else _prior_from_listing(listing, spec)
+    # C.3.5: a MATCHER_VERSION bump is a re-resolution experiment, so an
+    # automated accept decided under older rules is re-decided by the full
+    # ladder instead of inherited. Without this, a rule fix (e.g. 2026.09.2's
+    # ST…NM… no longer implying Exos) could never undo a false merge the old
+    # rules made — rung 0 would re-accept it on every re-observation.
+    stale_version = _stale_prior_version(listing) if prior is not None else None
+    if stale_version is not None:
+        prior = None
+        provenance["reconsidered_from_matcher_version"] = stale_version
     verdict = ladder.decide(
         extracted,
         candidates,
@@ -812,11 +856,17 @@ def _apply(
         # Non-accept (incl. error) edges never materialize identity rows — this
         # also keeps the CR-001 fallback error-write free of _materialize.
         grain, family, model, variant, on_demand = ResolutionGrain.NONE, None, None, None, False
+    # A version re-decision that lands on the same target still writes an edge:
+    # it records the decision under the current rules, which is what lets the
+    # NEXT re-observation inherit at rung 0 — skipping it would re-run the full
+    # ladder on every poll, and leave no diffable trace of the re-resolution.
+    reconsidered = "reconsidered_from_matcher_version" in verdict.evidence
     if (
         accepted
         and current is not None
         and "error" not in current.evidence
         and not category_changed
+        and not reconsidered
     ):
         new_targets = (
             family.pk if grain == ResolutionGrain.FAMILY and family is not None else None,

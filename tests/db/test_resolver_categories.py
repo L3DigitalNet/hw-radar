@@ -42,7 +42,7 @@ from hw_radar.catalog.models import (
     RetentionClass,
     SourceSite,
 )
-from hw_radar.matching import categories
+from hw_radar.matching import MATCHER_VERSION, categories
 from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.resolver import CatalogResolver
 
@@ -326,7 +326,7 @@ def test_cross_category_prior_goes_to_review(site: SourceSite) -> None:
         product_model=drive_model,
         method=ResolutionMethod.EXACT_ALIAS,
         confidence=0.98,
-        matcher_version="test",
+        matcher_version=MATCHER_VERSION,
         evidence={"outcome": "accept", "rung": 1, "category": "drive"},
     )
     Listing.objects.filter(pk=listing.pk).update(
@@ -431,7 +431,9 @@ def _accepted_prior(
         product_model=model,
         method=method,
         confidence=0.95,
-        matcher_version="test",
+        # Current version: these cases pin rung-0 inheritance, which an
+        # automated prior from an older matcher_version no longer gets.
+        matcher_version=MATCHER_VERSION,
         evidence={"outcome": "accept", "category": "gpu", **evidence},
     )
     Listing.objects.filter(pk=listing.pk).update(

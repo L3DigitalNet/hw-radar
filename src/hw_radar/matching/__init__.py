@@ -18,4 +18,6 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               recertified-store SKU keys expose the manufacturer MPN as a
 #               structured-field candidate. Edges stamped 2026.09.1 may carry
 #               rung-2 Seagate/Exos families that 2026.09.2 would not assert.
+#               2026.09.2 also: contradicted exact alias -> review; older-version
+#               automated priors re-decided.
 MATCHER_VERSION = "2026.09.2"

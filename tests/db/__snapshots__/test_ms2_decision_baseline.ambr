@@ -56,13 +56,22 @@
       ]),
     ),
     'rung1_brand_mismatch': tuple(
-      <Outcome.NONE: 'none'>,
+      <Outcome.REVIEW: 'review'>,
       <Grain.NONE: 'none'>,
-      None,
+      1,
       '',
       None,
       None,
       list([
+        tuple(
+          'brand_contradicts_exact_alias',
+          dict({
+            'alias_brands': list([
+              'seagate',
+            ]),
+            'brand': 'toshiba',
+          }),
+        ),
         tuple(
           'mpn_hypothesis',
           'st16000nm001g',
