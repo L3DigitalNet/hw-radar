@@ -69,6 +69,10 @@ Browse facts the sweep code relies on (live eBay API, 2026-09-25, app token):
     legacy GET + at most RUN_PAGE_BUDGET category pages) = 3,024/day, plus one
     legacy GET per heartbeat-fired FULL run, which skips the category sweeps
     (see probe()). Paginating inside probe() or a fired run would exceed it.
+    The 144 is the scheduled FULL lane (poller.service.build_scheduler's
+    poll-ebay job, registered only while a non-drive eBay category is
+    admitted) at cadence_baseline_s 600 s, where scheduling.apply.ramp_floor_s
+    pins the full lane of a heartbeat source.
     A 401 re-mint (_search) adds one more GET to the call it affects, plus a
     token POST, which is outside the Browse quota.
 
@@ -239,14 +243,35 @@ def validate_sweeps(sweeps: Sequence[CategorySweep]) -> tuple[CategorySweep, ...
 
 
 # Pilot sweeps (MS-2 F1) — defaults the owner may tune. Category ids verified
-# 2026-09-25 against the live Taxonomy API for EBAY_US (default tree 0, version
-# 134): 27386 "Graphics/Video Cards" (leaf; eBay has no separate datacenter-
-# accelerator category, and Tesla-class cards suggest into it), 11210 "Server
-# Memory (RAM)" (leaf under 170083 "Memory (RAM)"), 56088 "Server CPUs/
-# Processors" (leaf under 164 "CPUs/Processors"). eBay revises categories
-# quarterly; docs/TODO.md tracks the re-verification. A query, not a bare
-# category: category-only result sets (GPU ~109k, RAM ~1.32M, CPU ~143k) are
-# far past the 10,000-item window, so they could never be proven complete.
+# 2026-09-25/26 against the live Taxonomy API for EBAY_US (default tree 0,
+# version 134): 27386 "Graphics/Video Cards" (leaf; eBay has no separate
+# datacenter-accelerator category, and Tesla-class cards suggest into it);
+# 11210 "Server Memory (RAM)" and 56088 "Server CPUs/Processors", both leaves
+# under 51240 "Server Components"; 164 "CPUs/Processors", a leaf under 175673
+# "Computer Components & Parts". 56088 and 164 are leaves in different
+# subtrees, not parent and child: a query in one does not return the other's
+# listings (live probe: at most 3 dual-listed items per EPYC model), so each
+# needs its own sweep. eBay revises categories quarterly; docs/TODO.md tracks
+# the re-verification. A query, not a bare category: category-only
+# result sets (GPU ~109k, RAM ~1.32M, CPU ~143k) are far past the 10,000-item
+# window, so they could never be proven complete.
+#
+# CPU (F6 pilot, ledger L14): one sweep per (category, seeded EPYC model) whose
+# live result set fits ONE page, so every CPU scope can be proven complete
+# (see the module docstring on single-page completeness) — max_pages=1 because
+# a second page could only ever make the sweep unprovable. Only models in the
+# first-party seed (refdata/seeds/amd-epyc.json) are swept: an unseeded model
+# has no catalog target to accept against. Live totals 2026-09-26 (EBAY_US,
+# fixed price): 56088 — 9354: 16, 9654: 22, 7763: 9, 7742: 13; 164 — 9354: 74,
+# 7763: 152 (the closest to the 200-item page; a result set past it turns the
+# scope incomplete via `next`, never falsely complete). Deliberately excluded:
+#   - (164, "EPYC 9654"): ~228 results, more than one page, so never complete.
+#   - (164, "EPYC 7742"): multi-variation listings come back as one variation
+#     per listing, and Browse rotates which one between calls (same legacy id,
+#     new itemId). source_listing_key is the full itemId, so a complete sweep
+#     would delist one variation and ingest another on alternate runs.
+# Six CPU pages leave RUN_PAGE_BUDGET 9 for the multi-page pilots, so RAM
+# drops from 5 pages to 4 (neither pilot can be complete at any page count).
 CATEGORY_SWEEPS: Final = validate_sweeps(
     (
         CategorySweep(slug="gpu", query_id="rtx-3090", category_id="27386", q="RTX 3090"),
@@ -255,8 +280,26 @@ CATEGORY_SWEEPS: Final = validate_sweeps(
             query_id="ddr4-ecc-rdimm-32gb",
             category_id="11210",
             q="32GB DDR4 ECC RDIMM",
+            max_pages=4,
         ),
-        CategorySweep(slug="cpu", query_id="epyc-7302", category_id="56088", q="EPYC 7302"),
+        CategorySweep(
+            slug="cpu", query_id="epyc-9354-56088", category_id="56088", q="EPYC 9354", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-9654-56088", category_id="56088", q="EPYC 9654", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-7763-56088", category_id="56088", q="EPYC 7763", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-7742-56088", category_id="56088", q="EPYC 7742", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-9354-164", category_id="164", q="EPYC 9354", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-7763-164", category_id="164", q="EPYC 7763", max_pages=1
+        ),
     )
 )
 
@@ -862,11 +905,22 @@ class EbayAdapter:
         ]
 
 
-def category_sweep_adapter() -> EbayAdapter:
-    """The unfiltered eBay adapter: legacy drive sweep plus every CATEGORY_SWEEPS entry.
+def category_sweep_adapter(category: str | None = None) -> EbayAdapter:
+    """The eBay harvest adapter, unfiltered by the admission matrix.
+
+    With no category: the legacy drive sweep plus every CATEGORY_SWEEPS entry.
+    With a category slug: only that category's sweeps, and the legacy drive
+    GET only when the slug is drive, so a focused harvest spends Browse calls
+    on that category alone. A slug no sweep carries yields an adapter that
+    fetches nothing (drive aside); callers validate the slug.
 
     harvest_corpus's entry (sources.HARVEST_ADAPTERS; at most 1 +
     RUN_PAGE_BUDGET Browse calls). The poller never uses it: its entry is
     sources.admitted_ebay_adapter, which drops non-admitted sweeps.
     """
-    return EbayAdapter(category_sweeps=CATEGORY_SWEEPS)
+    if category is None:
+        return EbayAdapter(category_sweeps=CATEGORY_SWEEPS)
+    return EbayAdapter(
+        category_sweeps=[s for s in CATEGORY_SWEEPS if s.slug == category],
+        drive_sweep=category == DRIVE,
+    )

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import subprocess
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -21,7 +21,7 @@ import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
 
-from hw_radar.acquisition.contracts import ParsedListing, RawBatch
+from hw_radar.acquisition.contracts import DelistScope, ParsedListing, RawBatch, ScopeSweepReport
 from hw_radar.catalog.management.commands import harvest_corpus
 from hw_radar.catalog.models import RunKind
 
@@ -479,3 +479,55 @@ def test_duplicate_ids_are_staged_once_first_wins(
         "skipped_malformed": 0,
         "duplicates_dropped": 1,
     }
+
+
+class ScopedFakeAdapter(FakeAdapter):
+    """A multi-scope adapter double: one complete scope and one that saw nothing."""
+
+    def delist_scopes(self, batch: RawBatch, parsed: list[ParsedListing]) -> list[ScopeSweepReport]:
+        complete = DelistScope(
+            seen_keys=frozenset(p.source_listing_key for p in parsed),
+            observed_at=batch.fetched_at,
+            complete=True,
+            absence_grace=timedelta(hours=6),
+            scope_key="ebay:cpu:a",
+        )
+        return [
+            ScopeSweepReport("ebay:cpu:a", complete, 1, "complete"),
+            ScopeSweepReport("ebay:cpu:b", None, 0, "empty"),
+        ]
+
+
+def test_category_harvest_uses_the_category_adapter_and_records_scopes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("EBAY_CLIENT_ID", "id")
+    monkeypatch.setenv("EBAY_CLIENT_SECRET", "secret")
+    # The unfiltered registry entry must not be touched by a focused harvest.
+    unfiltered = _install(monkeypatch, {"ebay": FakeAdapter("ebay", [])})["ebay"]
+    requested: list[str] = []
+    scoped = ScopedFakeAdapter("ebay", [_listing("CPU-1"), _listing("CPU-2")])
+
+    def factory(category: str) -> ScopedFakeAdapter:
+        requested.append(category)
+        return scoped
+
+    monkeypatch.setattr(harvest_corpus, "category_sweep_adapter", factory)
+
+    call_command("harvest_corpus", "--source", "ebay", "--category", "cpu", "--out", str(tmp_path))
+
+    entries, meta = _read_staging(tmp_path)
+    assert requested == ["cpu"]
+    assert not unfiltered.fetched
+    assert [e["id"] for e in entries] == ["ebay:CPU-1", "ebay:CPU-2"]
+    assert meta["category"] == "cpu"
+    assert meta["sources"]["ebay"]["scopes"] == [
+        {"scope_key": "ebay:cpu:a", "pages": 1, "complete": True, "reason": "complete", "seen": 2},
+        {"scope_key": "ebay:cpu:b", "pages": 0, "complete": False, "reason": "empty", "seen": 0},
+    ]
+
+
+@pytest.mark.parametrize("source_args", [["--source", "goharddrive"], ["--all"]])
+def test_category_requires_the_ebay_source(source_args: list[str], tmp_path: Path) -> None:
+    with pytest.raises(CommandError, match="--category requires --source ebay"):
+        call_command("harvest_corpus", *source_args, "--category", "cpu", "--out", str(tmp_path))

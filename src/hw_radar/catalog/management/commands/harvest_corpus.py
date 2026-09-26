@@ -14,6 +14,12 @@ ground truth the ratification gate is measured against.
 
 Writes `<out>/staging.jsonl` (one entry per line) and `<out>/staging.meta.json` (per-source
 `harvested` / `skipped_malformed` counts and per-source status), and prints the same summary.
+A multi-scope source (eBay's category sweeps) also records one `scopes` entry per swept
+collection scope — pages, completeness and its reason, distinct listings seen — which is the
+evidence that a harvested scope was enumerated completely.
+
+`--category <slug>` (eBay only) narrows the harvest to that category's sweeps, with the legacy
+drive search only for `drive`, so a focused corpus spends no Browse quota on other categories.
 """
 
 from __future__ import annotations
@@ -28,9 +34,15 @@ from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
-from hw_radar.acquisition.admission import RETIRED_REASON, is_retired
-from hw_radar.acquisition.contracts import ParsedListing, SourceAdapter
+from hw_radar.acquisition.admission import MATRIX_CATEGORIES, RETIRED_REASON, is_retired
+from hw_radar.acquisition.contracts import (
+    MultiScopeDelistDetector,
+    ParsedListing,
+    SourceAdapter,
+)
 from hw_radar.acquisition.sources import HARVEST_ADAPTERS
+from hw_radar.acquisition.sources.ebay import SITE_KEY as EBAY_SITE_KEY
+from hw_radar.acquisition.sources.ebay import category_sweep_adapter
 from hw_radar.matching.mpn import extract_candidates
 from hw_radar.matching.normalize import canonicalize_title
 from hw_radar.matching.types import TokenKind
@@ -144,15 +156,33 @@ def _requires_repo_opt_in(out_dir: Path) -> bool:
     return ignored.returncode != 0
 
 
-async def _fetch_parse(adapter: SourceAdapter) -> tuple[list[ParsedListing], int]:
-    """Return this adapter's parsed listings plus the malformed records parse() dropped.
+async def _fetch_parse(
+    adapter: SourceAdapter,
+) -> tuple[list[ParsedListing], int, list[dict[str, Any]] | None]:
+    """Return parsed listings, the malformed records parse() dropped, and scope reports.
 
     The skip count must be read from the same adapter instance immediately after
-    parse() — `last_parse_skipped` describes only the most recent call.
+    parse() — `last_parse_skipped` describes only the most recent call. Scope
+    reports are None for a single-scope adapter; for a multi-scope one they are
+    the adapter's own delist_scopes() verdicts over this very batch, so the
+    manifest's `complete` is the production completeness rule, not a re-derivation.
     """
     batch = await adapter.fetch()
     parsed = adapter.parse(batch)
-    return parsed, adapter.last_parse_skipped
+    skipped = adapter.last_parse_skipped
+    if not isinstance(adapter, MultiScopeDelistDetector):
+        return parsed, skipped, None
+    scopes = [
+        {
+            "scope_key": report.scope_key,
+            "pages": report.pages,
+            "complete": report.scope is not None and report.scope.complete,
+            "reason": report.reason,
+            "seen": 0 if report.scope is None else len(report.scope.seen_keys),
+        }
+        for report in adapter.delist_scopes(batch, parsed)
+    ]
+    return parsed, skipped, scopes
 
 
 class Command(BaseCommand):
@@ -167,6 +197,12 @@ class Command(BaseCommand):
         parser.add_argument(
             "--limit", type=int, default=None, help="cap parsed listings per source"
         )
+        parser.add_argument(
+            "--category",
+            choices=MATRIX_CATEGORIES,
+            default=None,
+            help="with --source ebay: harvest only this category's sweeps",
+        )
         parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
         parser.add_argument(
             "--allow-repo-output",
@@ -180,6 +216,11 @@ class Command(BaseCommand):
         source: str | None = options["source"]
         if source is not None and is_retired(source):
             raise CommandError(f"{source} is retired: {RETIRED_REASON}")
+        category: str | None = options["category"]
+        if category is not None and source != EBAY_SITE_KEY:
+            # Only eBay collects more than one category; on any other source the
+            # flag would silently harvest everything or nothing.
+            raise CommandError("--category requires --source ebay")
         out_dir: Path = options["out"]
         limit: int | None = options["limit"]
         if limit is not None and limit < 1:
@@ -194,7 +235,7 @@ class Command(BaseCommand):
         entries: list[dict[str, Any]] = []
         report: dict[str, dict[str, Any]] = {}
         for key in sources:
-            source_entries, status = self._harvest(key, limit)
+            source_entries, status = self._harvest(key, limit, category)
             entries.extend(source_entries)
             report[key] = status
 
@@ -204,10 +245,14 @@ class Command(BaseCommand):
             "sources": report,
             "total_harvested": len(entries),
         }
+        if category is not None:
+            summary["category"] = category
         self._write(out_dir, entries, summary)
         self.stdout.write(json.dumps(summary, indent=2))
 
-    def _harvest(self, key: str, limit: int | None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    def _harvest(
+        self, key: str, limit: int | None, category: str | None = None
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """Harvest one source, absorbing its failures.
 
         Never raises: a source that is unreachable, throttled, or newly
@@ -221,7 +266,10 @@ class Command(BaseCommand):
             )
             return [], {"status": "skipped_no_credentials", "harvested": 0, "skipped_malformed": 0}
         try:
-            parsed, dropped_in_parse = asyncio.run(_fetch_parse(HARVEST_ADAPTERS[key]()))
+            adapter = (
+                HARVEST_ADAPTERS[key]() if category is None else category_sweep_adapter(category)
+            )
+            parsed, dropped_in_parse, scopes = asyncio.run(_fetch_parse(adapter))
         except Exception as exc:
             self.stderr.write(f"{key} failed: {exc!r}")
             return [], {
@@ -265,6 +313,8 @@ class Command(BaseCommand):
         }
         if len(usable) > len(entries):
             report["duplicates_dropped"] = len(usable) - len(entries)
+        if scopes is not None:
+            report["scopes"] = scopes
         return entries, report
 
     def _write(self, out_dir: Path, entries: list[dict[str, Any]], summary: dict[str, Any]) -> None:

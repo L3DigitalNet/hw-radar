@@ -218,8 +218,8 @@ def test_heartbeat_sources_get_fast_and_slow_repair_jobs(admit: Callable[..., No
 
 
 def test_ebay_gets_single_heartbeat_job_only(admit: Callable[..., None]) -> None:
-    # eBay's Browse poll IS both heartbeat and full fetch (natively-both source),
-    # so a separate poll-ebay repair job would double-poll.
+    # For the drive sweep alone, eBay's Browse poll IS both heartbeat and full
+    # fetch (natively-both source), so a separate poll-ebay job would double-poll.
     admit(("ebay", "drive"))
     schedules = [
         _mem_schedule(
@@ -233,6 +233,30 @@ def test_ebay_gets_single_heartbeat_job_only(admit: Callable[..., None]) -> None
     scheduler = build_scheduler(BucketRegistry(), schedules)
     assert scheduler.get_job("poll-heartbeat-ebay") is not None
     assert scheduler.get_job("poll-ebay") is None
+
+
+@pytest.mark.parametrize("category", ["cpu", "gpu", "ram"])
+def test_admitted_ebay_sweep_category_gets_the_full_lane_job(
+    admit: Callable[..., None], category: str
+) -> None:
+    # Category sweeps never run on the heartbeat path (its probe is the drive
+    # GET and its fired run skips sweeps), so the scheduled full lane is the
+    # only thing that collects an admitted eBay category.
+    admit(("ebay", category))
+    schedules = [
+        _mem_schedule(
+            "ebay",
+            heartbeat_enabled=True,
+            cheap_signal=CheapSignal.EBAY_BROWSE,
+            heartbeat_interval_s=120,
+            full_interval_s=600,
+        )
+    ]
+    scheduler = build_scheduler(BucketRegistry(), schedules)
+    full = scheduler.get_job("poll-ebay")
+    assert full is not None
+    assert full.trigger.interval.total_seconds() == 600
+    assert scheduler.get_job("poll-heartbeat-ebay") is not None
 
 
 def test_heartbeat_disabled_source_gets_single_full_job(admit: Callable[..., None]) -> None:

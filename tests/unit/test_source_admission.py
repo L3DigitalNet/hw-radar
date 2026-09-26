@@ -142,6 +142,21 @@ def test_ebay_runs_only_the_admitted_category_sweep(
     assert _categories_requested(seen) == gpu_ids
 
 
+def test_category_harvest_adapter_requests_only_that_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # harvest_corpus --category: a focused harvest must not spend Browse calls
+    # on the drive GET or on other categories' sweeps.
+    seen = _record_ebay_requests(monkeypatch)
+
+    asyncio.run(ebay.category_sweep_adapter("cpu").fetch())
+
+    cpu = [s for s in ebay.CATEGORY_SWEEPS if s.slug == "cpu"]
+    assert [(r.url.params["category_ids"], r.url.params["q"]) for r in seen] == [
+        (s.category_id, s.q) for s in cpu
+    ]
+
+
 def test_ebay_drive_cell_alone_runs_only_the_legacy_drive_get(
     monkeypatch: pytest.MonkeyPatch, admit: Callable[..., None]
 ) -> None:

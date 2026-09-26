@@ -36,7 +36,7 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
-from hw_radar.acquisition.admission import scheduling_block
+from hw_radar.acquisition.admission import admitted_categories, scheduling_block
 from hw_radar.acquisition.apify import jobs as apify_jobs
 from hw_radar.acquisition.apify.jobs import APIFY_POLL_SECONDS, apify_poll_tick, start_provider_run
 from hw_radar.acquisition.apify.reconcile import resolve_stale_monitoring_markers
@@ -62,6 +62,7 @@ from hw_radar.catalog.models import (
     SourceLaneState,
 )
 from hw_radar.catalog.models.provider import ImportState
+from hw_radar.matching.categories import DRIVE
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata import refresh as refdata_refresh
 
@@ -493,9 +494,22 @@ def build_scheduler(
             # CR-006: non-eBay heartbeat sources also need a slow full-pipeline
             # repair crawl at cadence_baseline_s — CDN edge cache floors probe
             # freshness, so the heartbeat alone can miss changes. eBay's Browse
-            # poll IS both heartbeat and full fetch (natively-both source), so a
-            # second poll-{key} job would just double-poll: it stays single-job.
-            if config.cheap_signal != CheapSignal.EBAY_BROWSE.value:  # .value: django-types quirk
+            # poll IS both heartbeat and full fetch for the DRIVE sweep, so for
+            # drive alone a second poll-{key} job would just double-poll.
+            #
+            # eBay's category sweeps are the exception: the heartbeat never runs
+            # them (the probe is the legacy drive GET, and the FULL run it fires
+            # skips them to protect the Browse quota — sources/ebay.py), so the
+            # scheduled full lane is their only path. Without this job an
+            # admitted eBay category would be silently never collected. The job
+            # builds sources.admitted_ebay_adapter per run, so it sweeps exactly
+            # the admitted categories (plus the drive GET if drive is admitted,
+            # which the eBay quota math already counts per scheduled run).
+            ebay_sweeps_admitted = bool(admitted_categories(key) - {DRIVE})
+            if (
+                config.cheap_signal != CheapSignal.EBAY_BROWSE.value  # .value: django-types quirk
+                or ebay_sweeps_admitted
+            ):
                 # The repair lane's interval is its own row's, which ramp_floor_s
                 # pins at cadence_baseline_s for heartbeat sources — the slow end
                 # CR-006 asks for, now stated by the lane row rather than by
