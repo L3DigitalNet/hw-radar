@@ -254,7 +254,9 @@ beside the 9354 OPN) now reviews at every rung, and pin counts ("4094-pin") are 
 "Unlocked" means the multiplier). Locked: "Dell Locked", "Lenovo Locked", "(*locked*)", "vendor/PSB
 locked", "<OEM> only". Unlocked: "Unlocked", "NO VENDOR LOCK", "not vendor locked", "non-locked".
 Unknown: branding alone ("AMD Dell EPYC 9354", "Pulled from Cisco UCS"), negated unlocks ("NOT
-UNLOCKED", "no longer unlocked"), wording that lies only in a reference span, or both states. Over
+UNLOCKED", "no longer unlocked"), wording that lies only in a reference span, both states, or an
+"Unlocked" beside lock wording some negator reaches ("Unlocked No Heatsink Dell Locked"). Negation
+is one 3-token window shared with the drive condition reader; five Codex review rounds hardened it. Over
 the 284 rows: 9 locked, 102 unlocked, 173 unknown. It lives on the listing, not `CpuSpec`, because
 PSB lock is a property of the unit and channel, not of the CPU model. The watch side is a typed
 column, `CpuRequirement.require_vendor_unlocked` (migration `0024`, default False): when required,

@@ -212,12 +212,14 @@ capacity, interface).
 
 Final rollup: `claude_draft` 291, `owner_confirmed` 303, `owner_corrected` 124.
 
-**Matcher changes (2026.09.2 → 2026.09.3)** driven by the rulings and three Codex review rounds:
+**Matcher changes (2026.09.2 → 2026.09.3)** driven by the rulings and five Codex review rounds:
 percentage-qualified "new" and "like-new" assert nothing; "new pull" is used; negated condition
-words are negative evidence; a lot/multipack listing (lot of/lot N/N-pack/qty/Npcs/item-tied Nx,
+words and recert channels are negative evidence (one 3-token negation window shared with the CPU
+lock reader, with a shared registry of negator-owning boilerplate such as "no warranty"); a listing
+that denies a condition and asserts none withdraws a stored or source-folded condition; a lot/multipack listing (lot of/lot N/N-pack/qty/Npcs/item-tied Nx,
 auction lot numbers excluded, memory kits excluded) reviews at every rung; WD-store listings get a
 source-proven factory channel unless the listing asserts or denies another condition; model priors
-re-decide on a newly asserted condition; contradicted variant aliases review; resolver and
+re-decide on a newly asserted condition; brand-contradicted automated priors re-decide; contradicted variant aliases review; resolver and
 eligibility read one offer extraction; review dedup keys on a stable reason fingerprint. The eval
 harness now admits grammar-decoder vendor keys (`hgst`) as label keys.
 

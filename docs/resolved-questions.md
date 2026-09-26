@@ -58,6 +58,7 @@
     - [OQ30 — Runtime Apify account reads (R25)](#oq30--runtime-apify-account-reads-r25)
     - [OQ31 — Existing local connectors whose Terms prohibit automated access](#oq31--existing-local-connectors-whose-terms-prohibit-automated-access)
     - [OQ32 — MS-1e ratification gate when two named sources are unusable](#oq32--ms-1e-ratification-gate-when-two-named-sources-are-unusable)
+    - [MS-1e and CPU audit rulings (2026-09-26)](#ms-1e-and-cpu-audit-rulings-2026-09-26)
 
 ---
 
@@ -725,3 +726,26 @@ found the accepted gate's five-source floor cannot pass with ServerPartDeals and
   carries a mirrored dated amendment note rather than a rewrite of its historical text.
 
 **My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-26 direction.)_
+
+### MS-1e and CPU audit rulings (2026-09-26)
+
+**✅ Resolved (owner, 2026-09-26) — packet questions, not OQs; applied in matcher `2026.09.3`.**
+Evidence: [MS-1e packet §7](evidence/2026-09-26-ms1e-expanded-audit-packet.md) and
+[CPU packet §9](evidence/2026-09-26-cpu-epyc-audit-packet.md).
+
+- **Drive Q1–Q3:** HC550/560/580 series labels use family "Ultrastar"; an explicitly named but
+  unseeded family counts at family grain (no fuzzy inference); HGST keeps manufacturer `hgst`.
+- **Q4:** lot/multipack listings never auto-accept (price-history integrity); label `none`.
+- **Q5:** wd-0057/wd-0061 are WD20EFPX/WD60EFPX variants (recertified, factory); wd-0066 is family
+  Gold (no near-model inference).
+- **Q6:** WD recertified-store listings carry `recert_channel=factory` as source provenance; generic
+  "recertified" keeps channel unknown; explicit "factory recertified" stays factory.
+- **Q7/Q8:** "New Pull" is used; "90%NEW" asserts nothing; 0F38467 is a retail PN (ebay-0376/0382
+  are WUH721818ALE6L4).
+- **CPU:** 55 rows confirmed, 5 corrected (cpu-0283 is EPYC 7763: price is not identity); explicit
+  condition resolves at variant grain; cpu-0082 fixed narrowly; a locked CPU keeps its model
+  identity; vendor lock is explicit-wording listing evidence (`locked`/`unlocked`/unknown), not a
+  `CpuSpec` field; the F6 watch must require unlocked and unknown never satisfies it.
+- **HC550:** the empty "Ultrastar DC HC550" family left by the monthly refresh stays.
+- Follow-ups raised: [OQ33](open-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels) (legacy family names) and
+  [OQ34](open-questions.md#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family) (CPU `auto_accept` scope).
