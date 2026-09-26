@@ -59,14 +59,15 @@ Last updated: 2026-09-26
 
 ## Standing Backlog
 
-- MS-1e drive-matcher ratification: owner audit applied 2026-09-26 (366/366 at
-  matcher `2026.09.3`, floors met); the audit gate waits only on OQ33, so
-  ADR-0019 stays proposed; every admission-matrix cell is `NOT_ADMITTED`
+- MS-1e drive-matcher ratification: done 2026-09-26 (composite PASS, 366/366,
+  ADR-0019 accepted); the corpus runs as a CI gate. CPU auto-accept is scoped
+  to AMD EPYC (OQ34, `CategoryRules.ratified_families`); every
+  admission-matrix cell is `NOT_ADMITTED`
 - MS-2 multi-category watch core (re-baselined by ADR-0021/ADR-0022, replacing
   the old MS-2a scoring-substrate sequencing): Slices A–F code-complete and
   deployed (migrations 0021–0024 in production, release `ded1000`); F5a
-  synthetic Actor proof executed 2026-09-25; F6 (eBay x CPU x EPYC) blocked on
-  OQ34 plus the per-cell live checklist;
+  synthetic Actor proof executed 2026-09-25; F6 (eBay x CPU x EPYC) waits on
+  the `2026.09.4` release plus the per-cell live checklist;
   OQ25–OQ29 resolved 2026-09-25; OQ24 part (b) (production merchant source)
   resolved 2026-09-26 — none is admitted now, F5b deferred, not a blocker.
   ADR-0011's detailed drive-scoring design is accepted but deferred from

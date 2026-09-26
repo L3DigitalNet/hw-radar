@@ -53,20 +53,21 @@ Instructions for AI agents:
   owner-approved F-01 value).
 - [ ] Promote the synthetic Actor build to the `prod` tag (MS2-D-43 *Deploy*) only if a production
   smoke is ever wanted; the synthetic Actor is not a production collection source.
-- [ ] MS-1e drive-matcher ratification: owner-audited corpus measures 366/366 at `2026.09.3`
-  (floors met, rung-0 PASS); the audit gate waits only on OQ33 (8 legacy-family rows, 7 sampled).
-  After the owner answers: relabel those rows, re-measure on the pinned refdata, and flip ADR-0019
-  only on a composite PASS. Re-measure under a new digest after the 2026-10-01 refresh.
+- [ ] The drive corpus is now a CI gate (`test_ms1_ratification_gate`, refdata digest pinned): a
+  committed drive-seed change fails it until the corpus is re-measured and its digest re-pinned.
+- [ ] Historical-family recall (OQ33): the matcher returns `none` on the 8 legacy-family rows
+  (Constellation, RE, Pipeline HD, ...). Add support only on the historical family itself, with
+  reference evidence; never a successor remap (Constellation is not Exos, RE is not Gold).
 - [ ] Add category-specific validation corpora/gates before auto-accepting GPU/RAM/CPU matches;
   drive-corpus precision does not validate other categories. F4 harvest done 2026-09-25: eBay,
   1,888 unlabeled entries (GPU 851, RAM 991, CPU 16, drive 30) in the git-ignored
   `.harvest/f4-ebay/` on the workstation; regenerate with `manage.py harvest_corpus --source ebay
   --out .harvest/f4-ebay`. Labeling and ratification are owner work (R4); CPU coverage is thin
   because the pilot sweep queries only "EPYC 7302".
-- [ ] CPU `auto_accept` flip waits on OQ34 (category-wide vs EPYC-scoped). The owner-audited EPYC
-  corpus passes the identity gate (105/105, audit PASS; packet §9).
-- [ ] F6 (eBay x CPU x EPYC) is blocked on OQ34 plus the per-cell live checklist
-  (`docs/handoff/deployed.md`); its watch must set `require_vendor_unlocked`.
+- [ ] Ratify further CPU families only with their own owner-audited corpus (Intel Xeon first): add
+  the family key to `categories.CPU_RATIFIED_FAMILIES`; EPYC-only today (OQ34, matcher 2026.09.4).
+- [ ] F6 (eBay x CPU x EPYC) waits on the matcher `2026.09.4` release plus the per-cell live
+  checklist (`docs/handoff/deployed.md`); its watch must set `require_vendor_unlocked`.
 - [ ] Residual latent CPU matcher gap: Ryzen/Core "or" alternatives are unflagged because their
   lines are unseeded (cannot alias-hit). (Model priors now upgrade on a new condition: 2026.09.3.)
 - [ ] Deliberately admit each `(source, category)` cell in the admission matrix

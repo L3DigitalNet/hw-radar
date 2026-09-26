@@ -1,11 +1,10 @@
 # MS-1e expanded drive corpus: owner audit packet (2026-09-26)
 
-Status (updated 2026-09-26, matcher `2026.09.3`): **owner-audited; composite FAIL on one open
-owner question.** The owner ruled on Q1–Q8 and delegated the stratified audit (§7). Measured
-precision is 366/366 with every source floor met and rung-0 green; the audit gate fails only
-because 7 sampled rows name legacy or rebranded family lines, a question the rulings do not
-settle ([OQ33](../open-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)).
-ADR 0019 stays `proposed`. Sections 1–6 below are the pre-ruling packet, kept as the record.
+Status (updated 2026-09-26, session 9): **ratified — composite PASS; ADR 0019 accepted.** The
+owner ruled on Q1–Q8 and delegated the stratified audit (§7), then resolved the last open row
+question ([OQ33](../resolved-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels):
+historical family identity wins). §8 records the labels and the authorizing full-suite run.
+Sections 1–6 below are the pre-ruling packet and §7 the pre-OQ33 measurement, kept as the record.
 
 Files:
 
@@ -234,7 +233,7 @@ refdata pinned at `0f2db1a7…c6ce`, plus `tests/db/test_rung0_regression.py` in
 | Correct | 366 |
 | Precision | 100.0% (≥ 99.5% PASS) |
 | False positives | 0 |
-| False negatives (label family/model/variant, outcome none/review) | 192 |
+| False negatives (label family/model/variant, outcome none/review) | 196 (corrected 2026-09-26 s9; first published as 192) |
 | Reviews | 10 |
 | eBay floor | met (132 qualifying) |
 | WD recertified floor | met (22) |
@@ -246,5 +245,59 @@ refdata pinned at `0f2db1a7…c6ce`, plus `tests/db/test_rung0_regression.py` in
 
 All 7 open rows resolve to `none`, so no answer to OQ33 can change precision: labeling them either
 way passes the audit gate, and at most adds recall misses. The false negatives are recall, not
-ratification: 184 are family-grain labels (mostly title-named Exos lines with unseeded MPNs, since
-`ST…NM…` alone no longer implies Exos) that the matcher leaves unresolved.
+ratification: 188 are family-grain labels the matcher leaves unresolved (mostly title-named Exos
+lines with unseeded MPNs, since `ST…NM…` alone no longer implies Exos); 4 are model/variant labels
+left unresolved and 4 are reviews. (First published as 192 and 184; every s8 measurement run,
+M3–M7, reported 196 and 188. Precision and every gate verdict are unaffected.)
+
+## 8. OQ33 applied and ratification (2026-09-26)
+
+**Owner ruling** ([OQ33](../resolved-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)):
+a listing that explicitly and unambiguously names a historical product family is labeled with the
+family that product was sold under; a later rename, acquisition or successor line does not change it.
+The eight rows were relabeled after the §7 measurement. Their blind-draft notes are kept, with an
+appended `OWNER OQ33` note:
+
+| Row | Manufacturer | Family (grain `family`) | Not remapped to |
+| --- | --- | --- | --- |
+| ebay-0446 | `western_digital` | Red (WD30EFRX) | Red Plus |
+| ghd-0085 | `western_digital` | RE | Gold |
+| ghd-0062 | `seagate` | Enterprise Capacity 3.5 | Exos |
+| ghd-0039 | `seagate` | Enterprise Performance | — |
+| ghd-0033 | `seagate` | Constellation ES | Exos |
+| ghd-0038 | `seagate` | Constellation ES.2 | Exos |
+| ghd-0011 | `seagate` | Pipeline HD | — |
+| ebay-0017 | `seagate` | Barracuda ES.2 | — |
+
+All eight are `owner_corrected`. The rollup is 283 draft / 303 confirmed / 132 corrected, and the
+manifest records matcher `2026.09.3` as the version the labels were audited against. No matcher
+change: the matcher still returns `none` on these rows, which is a recall miss, not a false merge.
+Historical-family recall is a TODO, attached to the historical family itself.
+
+The corpus moved to [`tests/fixtures/matching_corpus/corpus.jsonl`](../../tests/fixtures/matching_corpus/corpus.jsonl),
+the path `test_ms1_ratification_gate` reads, so the gate now runs on every suite run.
+
+**Measurement** (`test_ms1e_corpus_measurement`, production refdata pinned at `0f2db1a7…c6ce`):
+
+| Metric | Result |
+| --- | ---: |
+| Rows | 718 |
+| Auto-accepts | 366 |
+| Correct | 366 |
+| Precision | 100.0% (≥ 99.5% PASS) |
+| False positives | 0 |
+| False negatives | 204 (196 + the 8 relabeled rows; recall only) |
+| eBay floor | met (132) |
+| WD recertified floor | met (22) |
+| goHardDrive floor | met (9) |
+| Audit gate | PASS — 144-row sample, 0 unaudited, 0 unaudited disagreements, rollup consistent |
+| Rung-0 suite | PASS (6/6) |
+| Composite | **PASS** |
+
+**Authorizing run** (design §6 step 4): one full `scripts.check` suite run at `982c29a`. It gave
+3206 passed and 2 skips (the opt-in measurements). `test_ms1_ratification_gate` (precision, pinned
+refdata, source floor, audit and corpus gate) and `tests/db/test_rung0_regression.py` were both
+green in that run. Coverage was 95%, and lint, types, `pip-audit` and the migration check were
+clean. [ADR 0019](../adr/adr-0019-listing-catalog-matching-layer.md#ratified--2026-09-26-composite-gate-pass)
+is accepted on this record.
+

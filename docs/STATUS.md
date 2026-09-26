@@ -16,13 +16,12 @@
   Actors selectively; third-party Actors by measured exception) with a hard **$20/month**
   Hardware Radar Apify ceiling and a $12/month initial operating target. [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md)
   broadens v1 to HDD/SSD + GPU/accelerator + RAM + CPU first-class categories.
-- **MS-1e drive ratification (s8, 2026-09-26):** owner Q1-Q8 rulings + stratified audit applied;
-  matcher `2026.09.3` measures 366/366 = 100% (FP 0, FN 192), floors ebay 132 / wd 22 / ghd 9, rung-0
-  PASS. Audit gate blocked only by OQ33 (7 sampled legacy-family rows); ADR 0019 stays `proposed`.
-  OQ32 source floor: metadata-declared >=3 sources (eBay/WD/goHardDrive), against production refdata.
-- **CPU EPYC corpus (s8):** owner audit 55 confirmed / 5 corrected; would-accept 105/105, audit PASS.
-  `auto_accept` stays False pending OQ34 (category-wide vs EPYC scope). Vendor lock is listing
-  evidence; watches can require unlocked (migration `0024`; unknown never passes).
+- **Drive matcher ratified (s9, 2026-09-26): ADR 0019 accepted.** OQ33 relabels 8 legacy-family
+  rows (historical family wins); composite PASS in one full run: 366/366 = 100% (FP 0, FN 204),
+  floors ebay 132 / wd 22 / ghd 9, audit PASS, rung-0 PASS. The corpus is now a CI gate.
+- **CPU (s9): AMD EPYC is the only ratified CPU family** (OQ34; matcher `2026.09.4`, on dev). EPYC
+  auto-accepts, 105/105 under production rules; Xeon and other families review `family_not_ratified`.
+  Vendor lock is listing evidence; watches can require unlocked (migration `0024`; unknown never passes).
 - **MS-2 plan** (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`) Slices A-F
   are code-complete and deployed; review lineage in `docs/handoff/specs-plans.md`. Production
   stays fail-closed for Apify: no `APIFY` variable is rendered, no ledger authority or run exists.
@@ -33,8 +32,8 @@
   ~21:09Z (see `docs/handoff/state.md`).
 - **Delist rule amendment (ADR 0020, 2026-09-26):** no eBay scope (legacy drive or category) may
   stale-delist unless the sweep is provably complete.
-- **Admission matrix (2026-09-26):** every cell `NOT_ADMITTED`; eBay x drive waits on OQ33, eBay x
-  CPU on OQ34, plus the per-cell live checklist (`docs/handoff/deployed.md`).
+- **Admission matrix (2026-09-26):** every cell `NOT_ADMITTED`; each waits on its per-cell live
+  checklist (`docs/handoff/deployed.md`). eBay x CPU (EPYC) is the F6 candidate.
 - **Owner decisions:** session 2 (2026-09-24) — HR Actors live in this repo under `actors/`;
   OQ23 (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12, no PAYG). 2026-09-25 — OQ25-OQ29
   (scoped runtime token; $5.00/cycle external liability; MS-2 exits on F5a; $1.00/cycle operator
@@ -42,7 +41,8 @@
   2026-09-26 — OQ31/OQ32 (retirement + admission matrix + ratification floor); ADR 0020 amendment
   (delist completeness); matcher `2026.09.2` implemented (5 Codex rounds); release `478baf0`
   deployed with prod CPU refdata seed; s8 MS-1e Q1-Q8 + CPU audit rulings applied
-  (matcher `2026.09.3`). Open: OQ33, OQ34.
+  (matcher `2026.09.3`); s9 OQ33 (historical family identity) + OQ34 (EPYC-only CPU ratification).
+  No question is open.
   See `docs/resolved-questions.md`.
 - Verified account state (2026-09-25, operator key, outside the app): Apify STARTER, prepaid credit
   $19, usage limit $19, base price $19, cycle anchor 2026-09-05T00:00Z, retention 31 d; no settings changed.

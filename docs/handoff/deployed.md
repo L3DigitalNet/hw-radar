@@ -62,12 +62,12 @@ drives only, so its GPU/RAM/CPU cells are `NOT_APPLICABLE` and are not shown as 
 
 | Source × category | Terms/policy | Connector/API | Retention | Completeness | Refdata seeded (prod) | Corpus ratified | Identifier quality | Condition/shipping | Cost/budget | Cell state |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| eBay × drive | Official Browse API | Legacy keyword sweep, live | `ebay_listing_observation` ≤6h, delete-on-delist; never stale-delists an unprovably-complete scope (ADR 0020 amendment, 2026-09-26) | not verified | Yes (MS-1 drive seed) | ADR-0019 pending — owner-audited 366/366 at `2026.09.3`, floors met; audit gate blocked only by OQ33 | not verified | 0% condition coverage (pilot, 2026-09-25) | No direct cost (unmetered) | `NOT_ADMITTED` |
-| eBay × CPU | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above; same amendment applies | Single-page only provable (F1) | Yes — CPU refdata now seeded in prod (2026-09-26) | Owner-audited EPYC corpus: would-accept 105/105, audit PASS; `auto_accept` False pending OQ34 scope; F6 watch must set `require_vendor_unlocked` | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
+| eBay × drive | Official Browse API | Legacy keyword sweep, live | `ebay_listing_observation` ≤6h, delete-on-delist; never stale-delists an unprovably-complete scope (ADR 0020 amendment, 2026-09-26) | not verified | Yes (MS-1 drive seed) | Ratified 2026-09-26 — ADR-0019 accepted (composite PASS, 366/366) | not verified | 0% condition coverage (pilot, 2026-09-25) | No direct cost (unmetered) | `NOT_ADMITTED` |
+| eBay × CPU | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above; same amendment applies | Single-page only provable (F1) | Yes — CPU refdata now seeded in prod (2026-09-26) | AMD EPYC ratified (OQ34): 105/105 under production rules, matcher `2026.09.4`; other CPU families review; F6 watch must set `require_vendor_unlocked` | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
 | eBay × GPU | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above | Single-page only provable (F1) | No — 0 rows in production | Harvested unlabeled (F4: 851 GPU entries); not ratified | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
 | eBay × RAM | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above | Single-page only provable (F1) | No — 0 rows in production | Harvested unlabeled (F4: 991 RAM entries); not ratified | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
-| WD-recertified × drive | not verified | Live connector, deployed | not verified | not verified | Yes (MS-1 drive seed) | ADR-0019 pending (same gate as eBay×drive) | SKU carries no part number (MS-1e finding F2) | not verified | No direct cost (unmetered) | `NOT_ADMITTED` |
-| goHardDrive × drive | not verified | Live connector; URL/selector drift fixed 2026-09-25 (`2c8bce6`) | not verified | not verified | Yes (MS-1 drive seed) | ADR-0019 pending (same gate as eBay×drive) | not verified | not verified | No direct cost (unmetered) | `NOT_ADMITTED` |
+| WD-recertified × drive | not verified | Live connector, deployed | not verified | not verified | Yes (MS-1 drive seed) | Ratified (ADR-0019 accepted 2026-09-26) | SKU carries no part number (MS-1e finding F2) | not verified | No direct cost (unmetered) | `NOT_ADMITTED` |
+| goHardDrive × drive | not verified | Live connector; URL/selector drift fixed 2026-09-25 (`2c8bce6`) | not verified | not verified | Yes (MS-1 drive seed) | Ratified (ADR-0019 accepted 2026-09-26) | not verified | not verified | No direct cost (unmetered) | `NOT_ADMITTED` |
 | ServerPartDeals × (all) | Terms prohibit automated access (OQ31) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | `RETIRED` |
 | Seagate-recertified × drive | Terms prohibit automated access (OQ31) | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a | `RETIRED` |
 
@@ -114,6 +114,7 @@ least one resolved listing has a non-`none` grain (`detail_json` on the run, or 
 `listing_resolution` rows), before admitting the next cell — a run stuck at `grain=none` means the
 resolver isn't matching and needs investigation first.
 
-The MS-1e owner-in-the-loop drive-matcher ratification (design §6) must complete and `ADR-0019`
-flip to accepted before any drive cell is admitted; every `x drive` cell above gates on it (MS-2
-plan risk R5). Non-drive cells gate on their own category corpus (for CPU, OQ34).
+The MS-1e drive-matcher ratification (design §6) completed 2026-09-26 and `ADR-0019` is accepted,
+so the `x drive` cells (MS-2 plan risk R5) now wait only on their own per-cell checklists and an
+owner decision to admit them. Non-drive cells gate on their own category corpus: CPU is ratified for
+AMD EPYC only (OQ34); GPU/RAM have none yet.

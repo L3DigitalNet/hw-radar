@@ -20,8 +20,8 @@ shape belongs in repo docs; private fleet details belong outside this repo.
 MS-0, MS-1a..MS-1e, and MS-2 Slices A–F (multi-category watch core, ADRs 0021–0022) are
 deployed: drive matching, GPU/RAM/CPU categories with `match | no_match | unknown`
 evaluation, and hybrid acquisition under a hard $20/month Apify ceiling. Every
-admission-matrix cell is `NOT_ADMITTED`, so all sources ship disabled; the drive audit gate
-waits on OQ33, CPU auto-accept on OQ34. ADR-0011 drive scoring is accepted but deferred.
+admission-matrix cell is `NOT_ADMITTED`, so all sources ship disabled. The drive matcher is
+ratified (ADR-0019); CPU auto-accepts AMD EPYC only (OQ34). ADR-0011 scoring is deferred.
 
 Hardware Radar's Apify Actors are built and managed in this repository under
 `actors/<name>/`, not in the separate `apify-actors` repository.

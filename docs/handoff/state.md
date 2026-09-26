@@ -2,10 +2,10 @@
 
 ## Current focus
 
-- Prod `ded1000` (matcher 2026.09.3, migration 0024, evaluator ms2c.3); sources off; fail-closed for Apify.
-- Owner gates: OQ33 (legacy drive families; last ADR-0019 audit blocker), OQ34 (CPU auto_accept scope).
+- ADR 0019 accepted (composite PASS); OQ33/OQ34 resolved; matcher 2026.09.4 (EPYC-only CPU) on dev.
+- Next: release 2026.09.4, then SA-004 checklist for eBay x CPU, admit only that cell, run live F6.
+- F6 watch must set require_vendor_unlocked; unknown lock never passes.
 - F5a: run the proof-env tick after 2026-10-02 21:10Z; verify 0/0; handoff only if paid admission wanted.
-- F6 (eBay x CPU x EPYC) blocked on OQ34 + per-cell checklist; its watch must set require_vendor_unlocked.
 
 ## Active incidents
 

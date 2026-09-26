@@ -44,7 +44,7 @@ evaluation, and Hardware Radar's first self-owned Apify Actor project
 non-production proof environment on 2026-09-25). The provider-run and Apify spend-ledger
 infrastructure behind it is deployed too, with Apify admission deliberately left unconfigured in
 production. eBay GPU/RAM/CPU category sweeps and a pilot measurement report (`pilot_report`) are deployed;
-every source x category cell stays `NOT_ADMITTED` pending OQ33/OQ34 and the per-cell live checklist.
+every source x category cell stays `NOT_ADMITTED` until its per-cell live checklist passes.
 
 ## Documentation
 
