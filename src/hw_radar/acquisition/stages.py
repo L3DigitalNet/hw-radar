@@ -489,8 +489,10 @@ def apply_absence(
       also swept the NULL scope applies that scope in its own call, which
       records or breaks the NULL continuity from the NULL sweep's evidence.
       Breaking it here as well would clear the continuous_since that call
-      just recorded, so the legacy drive lane's continuity would restart on
-      every run and its stale-absence path would never open.
+      just recorded, so the NULL lane's continuity would restart on every run
+      and no NULL-scope stale-absence path could ever open. (eBay's legacy
+      NULL scope itself opts out of stale absence; its continuity is still
+      recorded, and this rule holds for any NULL scope that does not.)
     - A gated complete scope raises that scope's complete-sweep watermark in
       the same transaction as its ABSENT_FROM_SWEEP marks (MS2-D-35),
       complete-empty and zero-delist sweeps included.

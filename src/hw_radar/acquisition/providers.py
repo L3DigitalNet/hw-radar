@@ -71,7 +71,7 @@ def gate_delist_scope(
     - partial_failure / failed: None.
 
     Either incomplete path also needs the scope's own `stale_absence_allowed`:
-    a scope that opted out (eBay category sweeps) is gated to None whenever it
+    a scope that opted out (every eBay scope) is gated to None whenever it
     is not complete, so no elapsed continuity can turn it into ABSENT_STALE.
     Continuity is unaffected — counts_toward_sweep_continuity reads evidence
     only, so such a sweep still records that its scope was polled.

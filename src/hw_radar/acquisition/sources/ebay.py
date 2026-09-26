@@ -48,12 +48,15 @@ unchanged while one live item slides across the boundary unseen. No check on
 the pages we got can rule that out, and a false complete sweep delists a live
 listing on the spot and redacts it (IR-002). A multi-page sweep is therefore
 incomplete (`multi_page_unprovable`): its observations and continuity still
-count, but its absences prove nothing. Category scopes set
-stale_absence_allowed=False, so an incomplete sweep never delists, however
-long a listing goes unseen (the legacy drive sweep keeps its grace/stale
-path); the 6h expires_policy stops showing such an offer without claiming it
-ended. One page is a single ranking snapshot, so there is no boundary to fall
-through.
+count, but its absences prove nothing. Every eBay scope — each category scope
+and the legacy NULL drive scope (review r3 R3-F) — sets
+stale_absence_allowed=False, so an incomplete sweep never delists, however long
+a listing goes unseen; the 6h expires_policy stops showing such an offer
+without claiming it ended. One page is a single ranking snapshot, so there is
+no boundary to fall through. The legacy sweep is one page too, but its query
+normally matches more than the 200 items that page holds (`total` above what
+was seen), so it is incomplete on most runs and delists only on the rare run
+that provably enumerated its result set.
 
 Category sweeps never cost the drive sweep: the legacy GET runs first with its
 own error semantics, and every category page runs under a wall-clock deadline
@@ -125,18 +128,17 @@ SEARCH_PARAMS = {"q": "recertified enterprise hard drive", "limit": "200"}
 # Mint the token this many seconds before its stated expiry so a request never
 # rides an about-to-expire token across the eBay boundary.
 _TOKEN_SKEW_S = 300
-# CR-004 absence grace for a TRUNCATED legacy drive sweep (category scopes
-# carry it too but never use it: they opt out of stale absence). Deliberately the same 6h as
-# _expires_in_6h: DR-008 says an eBay observation older than 6h may not be shown,
-# so a listing that has missed every sweep across that whole window has no
-# defensible claim to still be live, whatever Browse's ranking did to it.
-#
-# "Missed every sweep" is the load-bearing clause, and this constant alone cannot
-# enforce it: 6h of wall clock with nothing polling is not 6h of misses. The
-# pipeline's delist stage supplies the other half by requiring the full lane to
-# have been sweeping continuously for this long (SourceLaneState.continuous_since),
-# so raising or lowering the value here changes the freshness bar only — it can
-# never turn a polling outage into a mass delist.
+# CR-004 absence grace for a TRUNCATED sweep. Every eBay scope carries it, but
+# none uses it: all of them, the legacy drive scope included, set
+# stale_absence_allowed=False, so gate_delist_scope drops an incomplete eBay
+# sweep before the grace is ever read. The earlier rationale — that a listing
+# missing every sweep for the 6h DR-008 window (_expires_in_6h) has no claim to
+# still be live — does not hold for a truncated Browse sweep: a live listing
+# ranked past the fetched page misses every sweep for as long as it stays live
+# (review r3 R3-F). Opting a scope back onto the stale path therefore needs a
+# new argument that its misses are evidence, not just a different value here.
+# The pipeline's continuity requirement (SourceLaneState.continuous_since)
+# would still apply, so even then an outage could never become a mass delist.
 DELIST_ABSENCE_GRACE = timedelta(hours=6)
 
 # Browse item_summary/search paging limits (module docstring has the source).
@@ -403,8 +405,9 @@ def _legacy_verdict(pages: list[RawItem], skipped: int) -> str | None:
 
     Every page must carry no `next` href and a `total` no larger than the
     summaries it held. Browse's `total` is an estimate for broad queries, so for
-    SEARCH_PARAMS' sweep this is normally not proven and the absence-grace path
-    applies — the intended conservative default, not an oversight. A parse drop
+    SEARCH_PARAMS' sweep this is normally not proven, and an unproven legacy
+    sweep delists nothing (its scope opts out of stale absence) — the intended
+    conservative default, not an oversight. A parse drop
     also forfeits the claim: a summary we could not read is not a listing that
     ended.
     """
@@ -811,6 +814,16 @@ class EbayAdapter:
             observed_at=batch.fetched_at,
             complete=why_not is None,
             absence_grace=DELIST_ABSENCE_GRACE,
+            # Same owner invariant as the category scopes (review r3 R3-F): an
+            # unprovably complete sweep never delists. The legacy keyword
+            # search is one 200-item page of a Best Match ranking over a
+            # result set Browse normally reports as larger, so a live listing
+            # ranked past that page misses every sweep for as long as it stays
+            # live; six hours of continuous misses there says nothing about
+            # whether it ended. Evidence expiry (_expires_in_6h) hides such an
+            # offer instead. Continuity is still recorded for this scope —
+            # counts_toward_sweep_continuity reads run evidence, not this flag.
+            stale_absence_allowed=False,
         )
         return ScopeSweepReport(
             scope_key=None, scope=scope, pages=len(pages), reason=why_not or "complete"
@@ -821,10 +834,12 @@ class EbayAdapter:
 
         Semantics (CR-004 / IR-002 delete-on-delist): the Browse search returns
         only active, buyable items, so a key the sweep omitted is a delist
-        CANDIDATE — never a certainty. Absence is believed immediately only when
-        the page provably enumerated the entire result set; otherwise the listing
-        must go unseen for DELIST_ABSENCE_GRACE first. Both marks are reversible
-        on re-sight, so the false-positive cost is a temporarily hidden offer.
+        CANDIDATE — never a certainty. Absence is believed only when the page
+        provably enumerated the entire result set; an incomplete sweep delists
+        nothing however long a listing goes unseen (stale_absence_allowed=False),
+        and the 6h evidence expiry hides that offer instead. The mark is
+        reversible on re-sight, but IR-002 redaction runs first, so a false
+        positive destroys merchant content until the listing is seen again.
 
         Returns None when there is nothing to conclude from. Covers the legacy
         NULL scope only; the pipeline prefers delist_scopes(), which adds one

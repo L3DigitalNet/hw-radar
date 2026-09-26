@@ -73,8 +73,8 @@ SECOND_ITEM = {
 }
 SWEEP_BOTH: dict[str, object] = {"itemSummaries": [US_ITEM, SECOND_ITEM], "total": 2}
 SWEEP_COMPLETE_ONE: dict[str, object] = {"itemSummaries": [US_ITEM], "total": 1}
-# Same page, but the source says 50 items match: absence here proves nothing on
-# its own, so only the freshness-window grace can retire a listing.
+# Same page, but the source says 50 items match: absence here proves nothing,
+# and the legacy scope opts out of stale absence, so this sweep never delists.
 SWEEP_TRUNCATED_ONE: dict[str, object] = {"itemSummaries": [US_ITEM], "total": 50}
 DELISTED_KEY = "v1|110500000003|0"
 
@@ -343,27 +343,67 @@ def _age_out_the_absent_listing(age: timedelta) -> None:
     )
 
 
-def test_ebay_truncated_sweep_needs_the_absence_grace(loop: asyncio.AbstractEventLoop) -> None:
-    # One page of a 50-item result set: absence is pagination/ranking churn until
-    # the listing has missed every sweep for the whole 6h freshness window.
+def _null_scope_outcome(run: ScraperRun) -> dict[str, object]:
+    scopes = cast("list[dict[str, object]]", run.detail_json["scopes"])
+    return next(outcome for outcome in scopes if outcome["scope_key"] is None)
+
+
+def test_ebay_truncated_sweep_never_stale_delists(loop: asyncio.AbstractEventLoop) -> None:
+    # Was the grace-path test: a truncated legacy sweep used to mark ABSENT_STALE
+    # once the listing was 6h unseen across 6h of continuous polling. Review r3
+    # R3-F: one page of a 50-item result set cannot see a live listing ranked
+    # past it, so it misses every sweep for as long as it stays live and the
+    # owner invariant (an unprovably complete scope never delists) forbids the
+    # mark. Both preconditions the stale path used to need are met here, so the
+    # only thing keeping the listing is the legacy scope's opt-out.
     _run_ebay(loop, _mock_body(SWEEP_BOTH))
+    _age_out_the_absent_listing(DELIST_ABSENCE_GRACE + timedelta(minutes=1))
+    lane = _full_lane()
+    since = timezone.now() - DELIST_ABSENCE_GRACE - timedelta(hours=1)
+    lane.continuous_since = since
+    lane.save(update_fields=["continuous_since"])
 
     run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+
     assert run.detail_json["listings_delisted"] == 0
     assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
+    outcome = _null_scope_outcome(run)
+    assert outcome["complete"] is False
+    assert outcome["reason"] == "total_exceeds_seen"
+    # Opting out of stale absence must not stop the lane recording that it
+    # polled: continuity is read from run evidence, not from the scope's flag.
+    assert outcome["continuity"] == "recorded"
+    assert _full_lane().continuous_since == since
 
-    _age_out_the_absent_listing(DELIST_ABSENCE_GRACE + timedelta(minutes=1))
-    # The grace is measured in polling time, so the lane must also have been
-    # sweeping across the window; these runs are milliseconds apart, so the
-    # continuity run is backdated to stand in for a lane that has been up all day.
+
+def test_ebay_incomplete_legacy_sweeps_never_delist_past_the_grace(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    # R3-F regression: a NULL-scope listing continuously ranked beyond the one
+    # fetched page. Three incomplete sweeps, each run with the listing unseen
+    # far past the grace and the lane polling continuously for longer still,
+    # must never delist it; only a provably complete sweep may, and does.
+    _run_ebay(loop, _mock_body(SWEEP_BOTH))
     lane = _full_lane()
-    lane.continuous_since = timezone.now() - DELIST_ABSENCE_GRACE - timedelta(hours=1)
+    since = timezone.now() - 4 * DELIST_ABSENCE_GRACE
+    lane.continuous_since = since
     lane.save(update_fields=["continuous_since"])
-    run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
 
+    for _ in range(3):
+        _age_out_the_absent_listing(3 * DELIST_ABSENCE_GRACE)
+        run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
+        assert run.detail_json["listings_delisted"] == 0
+        absent = Listing.objects.get(source_listing_key=DELISTED_KEY)
+        assert absent.delisted_at is None
+        assert absent.delist_reason != DelistReason.ABSENT_STALE
+        assert _null_scope_outcome(run)["continuity"] == "recorded"
+    assert _full_lane().continuous_since == since
+
+    run, _ = _run_ebay(loop, _mock_body(SWEEP_COMPLETE_ONE))
     assert run.detail_json["listings_delisted"] == 1
-    gone = Listing.objects.get(source_listing_key=DELISTED_KEY)
-    assert gone.delist_reason == DelistReason.ABSENT_STALE
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delist_reason == (
+        DelistReason.ABSENT_FROM_SWEEP
+    )
 
 
 def test_ebay_polling_pause_suspends_stale_absence(loop: asyncio.AbstractEventLoop) -> None:
@@ -372,6 +412,9 @@ def test_ebay_polling_pause_suspends_stale_absence(loop: asyncio.AbstractEventLo
     # on the first truncated page looks 6h+ stale purely because nothing polled.
     # With delete-on-delist plus IR-002 redaction that would destroy merchant
     # content wholesale, so the sweep must decline to mark ABSENT_STALE at all.
+    # Since R3-F the legacy scope's stale-absence opt-out also forbids that mark,
+    # so the no-delist assertion is doubly guarded; what this test still pins on
+    # its own is that the pause restarts the lane's continuity run.
     _run_ebay(loop, _mock_body(SWEEP_BOTH))
     _age_out_the_absent_listing(timedelta(hours=30))
     pause = timedelta(hours=24)
@@ -405,12 +448,16 @@ def test_ebay_complete_sweep_delists_through_a_pause(loop: asyncio.AbstractEvent
     )
 
 
-def test_ebay_slow_cadence_waits_for_continuity(loop: asyncio.AbstractEventLoop) -> None:
-    # A lane polling slower than the grace (8h interval vs a 6h grace) makes ONE
-    # missed sweep look stale, so the wall-clock rule alone would delist on a
-    # single ranking miss. The 8h gap is inside the cadence-derived tolerance
-    # (2 x interval), so continuity survives it — and the mark still waits until
-    # the lane has actually been sweeping for a full grace window.
+def test_ebay_slow_cadence_keeps_continuity_without_stale_delist(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    # Was the slow-cadence stale-path test. A lane polling slower than the
+    # grace (8h interval vs a 6h grace) keeps its continuity run across an 8h
+    # gap, which is inside the cadence-derived tolerance (2 x interval) — that
+    # half still holds and is pinned here. The other half, a truncated sweep
+    # marking ABSENT_STALE once the run is a full grace long, is gone with
+    # R3-F: the legacy scope opts out of stale absence, so no amount of
+    # continuity delists from an incomplete sweep.
     _run_ebay(loop, _mock_body(SWEEP_BOTH))
     _age_out_the_absent_listing(timedelta(hours=8))
     lane = _full_lane()
@@ -433,10 +480,8 @@ def test_ebay_slow_cadence_waits_for_continuity(loop: asyncio.AbstractEventLoop)
     lane.save(update_fields=["continuous_since"])
     run, _ = _run_ebay(loop, _mock_body(SWEEP_TRUNCATED_ONE))
 
-    assert run.detail_json["listings_delisted"] == 1
-    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delist_reason == (
-        DelistReason.ABSENT_STALE
-    )
+    assert run.detail_json["listings_delisted"] == 0
+    assert Listing.objects.get(source_listing_key=DELISTED_KEY).delisted_at is None
 
 
 def test_ebay_relisting_revives_the_same_row(loop: asyncio.AbstractEventLoop) -> None:
@@ -478,8 +523,9 @@ def test_ebay_probe_run_never_delists(loop: asyncio.AbstractEventLoop) -> None:
 
 
 def test_ebay_parse_drop_forfeits_the_completeness_claim() -> None:
-    # A summary we could not parse is not a listing that ended: last_parse_skipped
-    # downgrades the sweep to the grace path even when the page looks complete.
+    # A summary we could not parse is not a listing that ended: a parse drop
+    # makes the sweep incomplete (so it delists nothing) even when the page
+    # looks complete.
     adapter = EbayAdapter()
     body: dict[str, object] = {"itemSummaries": [US_ITEM, {"itemId": "no-price"}], "total": 2}
     batch = RawBatch(

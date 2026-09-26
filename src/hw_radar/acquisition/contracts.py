@@ -187,8 +187,9 @@ class DelistScope:
         this scope is believed only from a complete sweep: an unprovably
         complete scope never delists (owner invariant; review r2 N1), and its
         stale offers are hidden by evidence expiry instead, which asserts
-        nothing about whether the listing ended. eBay category sweeps pass
-        False; the default keeps every other adapter's truncated-sweep path.
+        nothing about whether the listing ended. Every eBay scope passes False
+        (category sweeps and the legacy NULL drive sweep); the default keeps
+        every other adapter's truncated-sweep path.
         Enforced by gate_delist_scope and again by stages.apply_delist, the
         only ABSENT_STALE writer.
     """
