@@ -33,8 +33,9 @@ Semantics (MS2-D-08):
   family agreement set (family grain). A review, none, or error edge — or no
   edge at all — supplies no catalog evidence, so those clauses are `unknown`.
   Under today's conservative new-category acceptance (auto_accept off for
-  gpu/ram/cpu) that means gpu/ram/cpu listings are usually `unknown`; that is
-  the intended outcome, not a defect.
+  gpu/ram; CPU auto-accepts only the ratified AMD EPYC family, OQ34) that means
+  gpu/ram and non-EPYC CPU listings are usually `unknown`; that is the intended
+  outcome, not a defect.
 - A LISTING-tier attribute (extracted from the title by the category's rules
   module) can only ever produce `no_match`, and only when it positively
   contradicts the requirement with confidence >= the category policy's

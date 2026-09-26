@@ -154,15 +154,17 @@ def xeon(db: None) -> ProductModel:
 
 @pytest.fixture
 def auto_accept_on(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Test-only registration: gpu/ram/cpu with auto_accept=True and everything
-    else — including the acceptance policy — exactly as registered."""
+    """Test-only registration: gpu/ram/cpu with auto_accept=True and no family
+    scope, everything else — including the acceptance policy — exactly as
+    registered. The veto cases below use a Xeon target, which the production
+    CPU scope would stop first (OQ34; test_resolver_family_ratification.py)."""
     for slug in ("gpu", "ram", "cpu"):
         rules = categories.rules_for(slug)
         assert rules is not None and rules.acceptance is not None
         monkeypatch.setitem(
             categories._REGISTRY,  # pyright: ignore[reportPrivateUsage] - the test-only registration the plan prescribes
             slug,
-            lambda rules=rules: replace(rules, auto_accept=True),
+            lambda rules=rules: replace(rules, auto_accept=True, ratified_families=None),
         )
     yield
 
@@ -230,7 +232,6 @@ def _edge_count(listing: Listing) -> int:
     [
         ("gpu", "a100", "A100", _A100_TITLE),
         ("ram", "samsung_rdimm", "M393A4K40DB3-CWE", _RAM_TITLE),
-        ("cpu", "xeon", "Xeon Gold 6448Y", _CPU_TITLE),
     ],
 )
 def test_rung1_authoritative_hit_is_review_while_auto_accept_off(
@@ -256,11 +257,19 @@ def test_rung1_authoritative_hit_is_review_while_auto_accept_off(
 
 
 def test_registered_acceptance_settings() -> None:
-    for slug in ("gpu", "ram", "cpu"):
+    for slug in ("gpu", "ram"):
         rules = categories.rules_for(slug)
         assert rules is not None
         assert rules.auto_accept is False
+        assert rules.ratified_families is None
         assert rules.acceptance == categories.NEW_CATEGORY_ACCEPTANCE
+    # OQ34: CPU auto-accepts only the ratified AMD EPYC family.
+    cpu = categories.rules_for("cpu")
+    assert cpu is not None
+    assert cpu.auto_accept is True
+    assert cpu.acceptance == categories.NEW_CATEGORY_ACCEPTANCE
+    assert cpu.ratified_families is not None
+    assert cpu.ratified_families.keys == frozenset({categories.FamilyKey("amd", "epyc")})
     for slug in ("nic", "hba", "motherboard", "server"):
         rules = categories.rules_for(slug)
         assert rules is not None

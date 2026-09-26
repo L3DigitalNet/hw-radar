@@ -61,4 +61,12 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               automated priors are re-decided. Edges stamped
 #               2026.09.2 are re-decided (C.3.5): e.g. "90%NEW" variant(new) priors
 #               and single-unit accepts of lot titles.
-MATCHER_VERSION = "2026.09.3"
+#   2026.09.4 — family-scoped category ratification (OQ34, owner 2026-09-26):
+#               CategoryRules.ratified_families narrows auto-accept to named
+#               (manufacturer, family) keys, at rung 1 and for inherited rung-0
+#               automated priors. CPU auto-accept is on for AMD EPYC only (its
+#               owner-audited corpus); an authoritative Xeon or other CPU hit
+#               that passes every other gate reviews with `family_not_ratified`.
+#               EPYC condition variants inherit the model's family. Drive, GPU
+#               and RAM decisions are unchanged.
+MATCHER_VERSION = "2026.09.4"
