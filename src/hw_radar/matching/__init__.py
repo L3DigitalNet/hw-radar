@@ -69,4 +69,8 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               that passes every other gate reviews with `family_not_ratified`.
 #               EPYC condition variants inherit the model's family. Drive, GPU
 #               and RAM decisions are unchanged.
+#               2026.09.4 also (Codex s9 r1): an invalid stored family key
+#               reviews as unratified, never an error edge; the review
+#               fingerprint names the family; rung 0 trusts an automated prior
+#               only at a policy grain.
 MATCHER_VERSION = "2026.09.4"
