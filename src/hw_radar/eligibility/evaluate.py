@@ -1289,7 +1289,12 @@ def _offer_facts(listing: Listing, snapshot: OfferSnapshot | None, canonical: st
         quantity=vocab.extract(canonical).quantity,
         stock_status=None if snapshot is None else snapshot.stock_status,
         is_international=listing.is_international,
-        condition=vocab.offer_terms(canonical).condition,
+        # With the source's declared terms folded in, exactly as the resolver
+        # does, so a WD-store listing's condition here is the one its variant
+        # was materialized from.
+        condition=vocab.with_source_offer_terms(
+            vocab.offer_terms(canonical), listing.source_site.normalized_name
+        ).condition,
     )
 
 

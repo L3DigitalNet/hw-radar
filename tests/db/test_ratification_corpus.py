@@ -128,6 +128,7 @@ REVIEW_REASON_KEYS = (
     "conflicting_alias_models",
     "prior_model_not_named",
     "review_only_alias_conflict",
+    "lot",
     "cross_category",
     "acceptance_policy",
     "auto_accept_disabled",

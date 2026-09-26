@@ -426,7 +426,14 @@ def extract(title: str) -> ExtractedAttributes:
         vendor_lock=_vendor_lock(title),
     )
     brand = _brand(identity)
-    return replace(vocab.offer_terms(title), brand=brand, category_attrs=payload)
+    # quantity feeds ladder.decide's lot review (a "Lot of 4" CPU listing is
+    # not a single-unit offer); read from the one vocab table, like drive.
+    return replace(
+        vocab.offer_terms(title),
+        brand=brand,
+        category_attrs=payload,
+        quantity=vocab.extract_quantity(title),
+    )
 
 
 def with_structured_mpn(extracted: ExtractedAttributes, structured_mpn: str) -> ExtractedAttributes:

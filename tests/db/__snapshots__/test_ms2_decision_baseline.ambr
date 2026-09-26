@@ -360,7 +360,7 @@
       tuple(
         'recertified',
         'unknown',
-        'unknown',
+        'factory',
         'unknown',
       ),
     ),

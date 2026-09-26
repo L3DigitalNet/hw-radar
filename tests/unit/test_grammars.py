@@ -92,6 +92,23 @@ def test_hgst_lineage_family_only() -> None:
 
 
 @pytest.mark.parametrize(
+    ("token", "vendor"),
+    [
+        # Owner ruling Q3 (2026-09-26): the HGST-era HUS/HUH prefixes stay HGST,
+        # WD's WUS/WUH re-issues are Western Digital; all are Ultrastar.
+        ("hus726060ale610", "hgst"),
+        ("huh721212ale604", "hgst"),
+        ("wus721010ale6l4", "western_digital"),
+        ("wuh721818ale6l4", "western_digital"),
+    ],
+)
+def test_ultrastar_prefix_vendor(token: str, vendor: str) -> None:
+    result = decode(token)
+    assert result is not None
+    assert (result.vendor, result.family_name) == (vendor, "ultrastar")
+
+
+@pytest.mark.parametrize(
     ("token", "family", "capacity_tb", "generation"),
     [
         ("mg08aca16te", "mg enterprise capacity", 16, "08"),

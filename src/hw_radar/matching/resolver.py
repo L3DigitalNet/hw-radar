@@ -74,7 +74,7 @@ from hw_radar.catalog.models import (
     RetentionClass,
     WarrantyChannel,
 )
-from hw_radar.matching import MATCHER_VERSION, categories, ladder
+from hw_radar.matching import MATCHER_VERSION, categories, ladder, vocab
 from hw_radar.matching.normalize import canonicalize_listing_text, canonicalize_title
 from hw_radar.matching.rules import basic, cpu, gpu, ram
 from hw_radar.matching.types import (
@@ -727,6 +727,10 @@ def _run_ladder(
     extracted = rules.extract(canonical)
     if rules.fold_structured is not None and structured_mpn is not None:
         extracted = rules.fold_structured(extracted, structured_mpn)
+    # Source-proven offer terms (the WD store's factory recert) are folded in
+    # before anything reads the offer fields: _variant_reconsideration and
+    # _materialize must see the same variant the eligibility evaluator does.
+    extracted = vocab.with_source_offer_terms(extracted, listing.source_site.normalized_name)
     candidates = rules.extract_candidates(
         canonical,
         structured_mpn=structured_mpn,

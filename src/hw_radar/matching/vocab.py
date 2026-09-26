@@ -18,7 +18,8 @@ catalog contradicts the equivalence."""
 from __future__ import annotations
 
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import Final
 
 from hw_radar.matching.normalize import (
     DRIVE_REFERENCE_PHRASE,
@@ -78,7 +79,21 @@ _CONDITIONS: tuple[tuple[re.Pattern[str], str, str | None, float], ...] = (
     (re.compile(r"\brefurb(?:ished)?\b|\brenewed\b"), "refurbished", None, 0.85),
     (re.compile(r"\bopen box\b"), "open_box", None, 0.9),
     (re.compile(r"\bserver pull\b|\bpull(?:ed)?\b|\bused\b"), "used", None, 0.8),
-    (re.compile(r"\bfactory sealed\b|(?<!like )\bnew\b"), "new", None, 0.8),
+    # "new" asserts nothing in three positions, each excluded here rather than
+    # left to the table order:
+    # - "like new" (a cosmetic grade);
+    # - after a percentage ("90%new", "95% new"): seller marketing for a used
+    #   drive (owner ruling Q7, MS-1e ebay-0261), not a condition, and it must
+    #   not fall through to any other condition either;
+    # - before "pull"/"pulled": "new pull" is a used server pull (Q7). The used
+    #   rule above also claims it, but only because it happens to come first;
+    #   the lookahead keeps a reordering from turning pulls into new drives.
+    (
+        re.compile(r"\bfactory sealed\b|(?<!like )(?<!%)(?<!% )\bnew\b(?![- ]pull)"),
+        "new",
+        None,
+        0.8,
+    ),
 )
 
 _PACKAGING: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -94,10 +109,26 @@ _WARRANTY_CHANNELS: tuple[tuple[re.Pattern[str], str], ...] = (
 
 # Quantity: digit-FIRST forms only. The 'xN' form (e.g. 'x16') is deliberately
 # unsupported — it collides with Seagate family names (Exos X16/X18/X24).
+# Ordered, first match wins, so an explicit lot form outranks a stray "Nx".
+#
+# Two readers with different bars. Eligibility divides the price by any
+# quantity at or above its policy confidence (lot pricing). ladder.decide
+# reviews every accept whose quantity is above 1 at LOT_MIN_CONFIDENCE or
+# more (owner ruling Q4: a lot is not a single-unit offer). Every form at that
+# bar was checked against all 718 MS-1e drive and 284 CPU corpus titles and
+# matched only real multi-unit offers or an explicit quantity of 1. The "Nx"
+# form sits below it on purpose: "32x 3.25ghz" is a CPU thread count (corpus
+# cpu-0010) and "2x amd epyc" a board bundle, so as a veto it would review
+# single-unit listings; "(lot of 4x)" is claimed by the lot form instead.
+LOT_MIN_CONFIDENCE: Final = 0.9
 _QUANTITIES: tuple[tuple[re.Pattern[str], float], ...] = (
-    (re.compile(r"\blot of (\d{1,3})\b"), 0.95),
+    (re.compile(r"\blot of (\d{1,3})x?\b"), 0.95),
+    # "Lot 10 Supermicro Seagate ..." (MS-1e ebay-0282/0288).
+    (re.compile(r"\blot (\d{1,3})x?\b"), 0.9),
     (re.compile(r"\b(\d{1,3})[- ]pack\b"), 0.9),
     (re.compile(r"\bqty:? ?(\d{1,3})\b"), 0.9),
+    # "2pcs AMD EPYC ...", "1pcs new Seagate ..." (cpu-0260, ebay-0296).
+    (re.compile(r"\b(\d{1,3}) ?pcs?\b"), 0.9),
     (re.compile(r"\b(\d{1,3})\s?x\b"), 0.7),
 )
 
@@ -261,7 +292,9 @@ def _condition(title: str) -> tuple[Attribute[str] | None, Attribute[str] | None
     return None, None
 
 
-def _quantity(title: str) -> Attribute[int] | None:
+def extract_quantity(title: str) -> Attribute[int] | None:
+    """The listing's stated unit count, or None when it states none. Public for
+    the category rules modules, so every category reads the one table above."""
     for pattern, confidence in _QUANTITIES:
         m = pattern.search(title)
         if m:
@@ -323,6 +356,70 @@ def offer_terms(title: str) -> ExtractedAttributes:
     return _offer_fields(mask_reference_spans(title))
 
 
+@dataclass(frozen=True)
+class SourceOfferProvenance:
+    """Offer terms a source proves for every listing it carries, whatever the
+    title says or omits. Values are the catalog TextChoices literals, like the
+    title-derived ones."""
+
+    condition: str
+    recert_channel: str
+
+
+# Per-source provenance, keyed by SourceSite.normalized_name (the connector's
+# `site_key`; test_vocab_owner_rulings.test_declared_sources_are_registered_adapters
+# pins every key to a registered adapter). The WD recertified store sells only WD's own
+# `-recertified` product codes (acquisition/sources/wd.py filters on that
+# suffix), so its listings are factory recertifications (owner ruling Q6)
+# although the store titles say only "Recertified". The generic text rule is
+# deliberately untouched: a marketplace "recertified" still asserts no channel.
+# Seagate's recertified store is not declared: no ruling covers it yet.
+SOURCE_OFFER_PROVENANCE: Final[dict[str, SourceOfferProvenance]] = {
+    "wd-recertified": SourceOfferProvenance(condition="recertified", recert_channel="factory"),
+}
+
+
+def with_source_offer_terms(extracted: ExtractedAttributes, source_key: str) -> ExtractedAttributes:
+    """`extracted` with the source's declared offer terms folded in; unchanged
+    for a source with no declaration.
+
+    The title stays authoritative when it contradicts the declaration: a store
+    title asserting another condition ("Used", "For parts") keeps that
+    condition and gets NO declared channel, since the store's claim evidently
+    does not describe this item and a factory channel on a used or broken
+    drive would file it under a sellable variant it is not. The same holds
+    for a title channel other than the declared one. A title that states no
+    condition gets the declared one.
+
+    The ONE fold both offer-term readers apply: the resolver before the ladder
+    (so _materialize and _variant_reconsideration see the factory variant) and
+    eligibility's offer facts (so the condition clause reads the same
+    condition). A reader that skipped it would disagree with the variant."""
+    declared = SOURCE_OFFER_PROVENANCE.get(source_key)
+    if declared is None:
+        return extracted
+    condition, channel = extracted.condition, extracted.recert_channel
+    if condition is not None and condition.value != declared.condition:
+        return extracted
+    if channel is not None and channel.value != declared.recert_channel:
+        return extracted
+    source_text = f"source:{source_key}"
+    return replace(
+        extracted,
+        condition=condition
+        or Attribute(
+            value=declared.condition, confidence=0.95, layer="source", source_text=source_text
+        ),
+        recert_channel=channel
+        or Attribute(
+            value=declared.recert_channel,
+            confidence=0.95,
+            layer="source",
+            source_text=source_text,
+        ),
+    )
+
+
 def _offer_fields(masked: str) -> ExtractedAttributes:
     # Caller passes mask_reference_spans output. condition, packaging,
     # recert_channel and warranty_channel are VARIANT identity:
@@ -352,8 +449,9 @@ def extract(title: str) -> ExtractedAttributes:
         # match to review but can never create or select an identity. Masking
         # them instead would let an over-reaching span hide the listing's own
         # contradicting capacity or interface, trading a visible review for a
-        # silent accept. quantity is neither identity nor veto (eligibility
-        # reads it for lot pricing) and keeps its historical unmasked read.
+        # silent accept. quantity is in the same position: its only matching
+        # use is ladder.decide's lot review, which can only demote, and
+        # eligibility's lot pricing keeps its historical unmasked read.
         capacity_bytes=_capacity(title),
         interface=_first_pattern(title, _INTERFACES, 0.9),
         link_speed_gbps=_link_speed(title),
@@ -363,7 +461,7 @@ def extract(title: str) -> ExtractedAttributes:
         sector_format=_sector(title),
         recording_tech=_recording(title),
         security=_security(title),
-        quantity=_quantity(title),
+        quantity=extract_quantity(title),
         # Brand satisfies the rung-1 brand gate, so it is identity evidence
         # and reads the masked text like the offer terms.
         brand=_first_pattern(masked, _BRANDS, 0.9),
