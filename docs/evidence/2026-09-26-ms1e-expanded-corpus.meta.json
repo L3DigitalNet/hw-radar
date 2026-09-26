@@ -17,9 +17,9 @@
     "wd-recertified"
   ],
   "audit_rollup": {
-    "claude_draft": 682,
+    "claude_draft": 583,
     "owner_confirmed": 23,
-    "owner_corrected": 13
+    "owner_corrected": 112
   },
   "refdata_drive_digest": "0f2db1a790c5eb0ba6d4f2e3673b8d10163518c98a917c7e338b02498ed4c6ce"
 }
