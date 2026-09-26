@@ -276,7 +276,8 @@ VENDOR_UNLOCKED: Final = "unlocked"
 # scope mask (_LOCK_REFERENCE), not the identity mask: lock words describe the
 # unit on sale unless they sit inside a span citing another product
 # ('replacement for an unlocked processor', 'compatible with Dell locked
-# servers'), where they describe that product and are no evidence at all.
+# servers'), where they describe that product and never make a reading
+# (they can still veto one: see _vendor_lock).
 # Deliberately NOT masked: the CPU-local 'oem version of' span. Titles put the
 # offered part's unlock inside it ('7T83 ... OEM Version of EPYC 7763
 # unlocked'), and a retail EPYC has no PSB lock, so lock wording there can
@@ -301,15 +302,21 @@ VENDOR_UNLOCKED: Final = "unlocked"
 # one makes a locked CPU eligible: every doubtful shape resolves to unknown.
 _LOCK_OEMS = r"(?:dell|lenovo|hpe?|cisco)"
 _LOCK_QUALIFIER = rf"(?:(?:vendor|psb|{_LOCK_OEMS})[-\s]+)"
-# The shared reference phrases plus lock-local ones. The lock-local phrases are
-# not registered in normalize, so canonicalize_title erases the commas after
-# them and their span runs to the end of the title or the enclosing ')': wider
-# than the clause, which can only turn lock wording into unknown, never into
-# a reading.
-_LOCK_REFERENCE = re.compile(
-    reference_phrase_pattern().pattern + r"|\bfor\s+use\s+(?:with|in)\b|\bworks?\s+with\b"
+# The shared reference phrases plus lock-local ones. The lock-local phrases
+# are registered in normalize._CATEGORY_REFERENCE_PHRASES (reference_phrase_
+# pattern enforces it) so canonicalize_title keeps their clause punctuation
+# and a span ends at the clause it opened; unregistered, the span ran on
+# through a later 'NOT UNLOCKED' (Codex s8 r2 A). Boundaries alone cannot
+# make masking safe (a title with no punctuation still runs the span to the
+# end), which is why _vendor_lock also reads contradictions unmasked.
+_LOCK_REFERENCE = reference_phrase_pattern("works with", "work with", "for use with", "for use in")
+# A lock qualifier or an article may stand between the negator and the word:
+# 'NOT VENDOR-UNLOCKED', 'not PSB unlocked', 'not an unlocked CPU'. Requiring
+# adjacency let the bare 'unlocked' after the qualifier read as an unlock
+# (Codex s8 r2 #9).
+_NEGATED_UNLOCK = re.compile(
+    rf"\b(?:not|non|never|isn\s?t)[-\s]+(?:an?\s+)?{_LOCK_QUALIFIER}?un-?locked\b"
 )
-_NEGATED_UNLOCK = re.compile(r"\b(?:not|non|never|isn\s?t)[-\s]+un-?locked\b")
 _UNLOCKED_WORDING = re.compile(
     r"\bun-?locked\b"
     r"|\bno[-\s]+(?:(?:vendor|psb)[-\s]+)?lock(?:ed)?\b"
@@ -346,6 +353,21 @@ def _marker(pattern: re.Pattern[str], text: str) -> Attribute[str] | None:
     return Attribute(value=m.group(0), confidence=0.9, layer=LAYER, source_text=m.group(0))
 
 
+# Pin counts are socket context, not models, and some fit the model shapes:
+# 'SP3 4094-pin' read 4094 as the sole EPYC model and vetoed the OPN's 7763
+# (Codex s8 r2 C), and 'Gold 6338 4189-pin' reads as a coordinated second
+# Xeon. Blanked before any model scan: a number followed by 'pin(s)', or an
+# AMD socket name followed by that socket's own pin count ('SP5 6096',
+# 'Socket SP3 (4094)'). Only the socket's own counts, never any number after a
+# socket word: 'EPYC SP3 7763' names the model right after the socket. LGA
+# counts need nothing here; _SOCKETS already takes 'LGA 4677' whole.
+_PIN_COUNT = re.compile(
+    r"\b\d{3,4}[-\s]?pins?\b"
+    r"|\b(?:socket\s+)?(?:sp[3-6]|s?trx4|tr4|swrx8|str5|am[45])[-\s]*"
+    r"\(?(?:1331|1718|4094|4844|6096)\b\)?"
+)
+
+
 def _epyc_models(identity: str) -> set[str]:
     """The distinct EPYC model numbers an EPYC title names; empty for a title
     without 'epyc'.
@@ -356,7 +378,7 @@ def _epyc_models(identity: str) -> set[str]:
     """
     if _EPYC_NAME.search(identity) is None:
         return set()
-    unsocketed = identity
+    unsocketed = _blank(_PIN_COUNT, identity)
     for pattern in _SOCKETS:
         unsocketed = pattern.sub(lambda m: " " * len(m.group(0)), unsocketed)
     return {m.group(0) for m in _EPYC_MODEL.finditer(unsocketed)}
@@ -400,6 +422,7 @@ def _line_models(identity: str) -> set[str]:
     strings. EPYC is _epyc_models' job: its number shape is broader than the
     name phrase, so reading the EPYC phrase here too could count one model
     twice under two spellings."""
+    identity = _blank(_PIN_COUNT, identity)
     models = {
         _model_key(m.group("num"))
         for _vendor, pattern in _NAMES
@@ -454,19 +477,41 @@ def _blank(pattern: re.Pattern[str], text: str) -> str:
     return pattern.sub(lambda m: " " * len(m.group(0)), text)
 
 
+def _lock_wording(
+    text: str,
+) -> tuple[re.Match[str] | None, re.Match[str] | None, re.Match[str] | None]:
+    """(negated unlock, unlocked, locked) wording found in `text`, each read
+    after blanking the forms that contain it (see the scan-order note)."""
+    negated = _NEGATED_UNLOCK.search(text)
+    text = _blank(_NEGATED_UNLOCK, text)
+    unlocked = _UNLOCKED_WORDING.search(text)
+    locked = _LOCKED_WORDING.search(_blank(_UNLOCKED_WORDING, text))
+    return negated, unlocked, locked
+
+
 def _vendor_lock(title: str) -> Attribute[str] | None:
     """The unit's stated vendor lock; None when the title states neither, or
     both (a self-contradicting title is unknown, not whichever came first).
     A negated unlock never yields unlocked: it is unknown, or locked when
     explicit lock wording also stands. See _LOCK_REFERENCE for the scope."""
-    text = mask_reference_spans(title, _LOCK_REFERENCE)
-    negated = _NEGATED_UNLOCK.search(text)
-    text = _blank(_NEGATED_UNLOCK, text)
-    unlocked = _UNLOCKED_WORDING.search(text)
-    locked = _LOCKED_WORDING.search(_blank(_UNLOCKED_WORDING, text))
+    negated, unlocked, locked = _lock_wording(mask_reference_spans(title, _LOCK_REFERENCE))
+    # The reading comes from the masked text; the veto from the whole title.
+    # A reference mask may only ever turn a reading into unknown: wording it
+    # hides can remove evidence FOR a reading, never evidence AGAINST one. An
+    # over-wide span ('Unlocked works with Dell R7525 NOT UNLOCKED', no
+    # punctuation to end it) would otherwise hide the negation and leave a
+    # confident unlocked that satisfies require_vendor_unlocked. The cost is
+    # that lock wording about a cited product ('Unlocked, compatible with Dell
+    # locked servers') makes the unit's own reading unknown: a review, where
+    # the other error makes a locked CPU eligible.
+    any_negated, any_unlocked, any_locked = _lock_wording(title)
     if unlocked is not None and locked is None and negated is None:
+        if any_negated is not None or any_locked is not None:
+            return None
         m, value = unlocked, VENDOR_UNLOCKED
     elif locked is not None and unlocked is None:
+        if any_unlocked is not None:
+            return None
         m, value = locked, VENDOR_LOCKED
     else:
         return None

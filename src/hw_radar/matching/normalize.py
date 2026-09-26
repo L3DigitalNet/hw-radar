@@ -74,7 +74,21 @@ _REFERENCE_PHRASES: tuple[str, ...] = (
 #       title compatible or look-alike stock "FIT FOR Seagate Exos ..." (MS-1e
 #       ebay-0263, ebay-0463). Drive-local, not shared: the CPU and other
 #       categories' masking (and so their pinned decisions) stay unchanged.
-_CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of", "fit for", "suitable for")
+#   "works with", "work with", "for use with", "for use in" — rules/cpu.py
+#       _LOCK_REFERENCE only (vendor-lock scope, never identity). Unregistered,
+#       their erased commas let the lock span swallow a later "NOT UNLOCKED"
+#       clause and keep an earlier "Unlocked" as the reading (Codex s8 r2 A).
+#       Registering them changes the canonical text of drive titles carrying
+#       them (punctuation kept as " - "), not drive masking.
+_CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = (
+    "oem version of",
+    "fit for",
+    "suitable for",
+    "works with",
+    "work with",
+    "for use with",
+    "for use in",
+)
 
 # Words that open a reference span only as the FIRST token of the canonical
 # title, registered like _CATEGORY_REFERENCE_PHRASES and for the same reason.
