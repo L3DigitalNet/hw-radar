@@ -677,7 +677,7 @@ def test_malformed_category_summary_is_a_parse_drop_not_a_run_failure(
 
 def test_scheduled_adapter_sweeps_every_category() -> None:
     # harvest_corpus's entry carries every sweep; the poller's is matrix-filtered
-    # (tests/db/test_source_admission.py).
+    # (tests/db/test_source_admission_db.py).
     adapter = HARVEST_ADAPTERS["ebay"]()
     assert isinstance(adapter, EbayAdapter)
     batch = RawBatch(source="ebay", fetched_at=timezone.now(), items=[])
