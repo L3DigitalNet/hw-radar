@@ -16,7 +16,8 @@ Claude draft (`audit_status: claude_draft`). Nothing here ratifies or admits any
 - The committed meta still reads `"matcher_version": "unevaluated"` and has no
   `ratification_sources`, exactly as hashed. The evaluation copy set `matcher_version` to
   `2026.09.2` and `ratification_sources` to `["ebay"]`; labels were not touched.
-- Evaluated against: `MATCHER_VERSION` 2026.09.2, a clean migrated DB plus `import_refdata`
+- Evaluated twice against: `MATCHER_VERSION` 2026.09.2 (the second run after the §3 matcher
+  fixes, same version string because 2026.09.2 is unreleased), a clean migrated DB plus `import_refdata`
   (production seeds; CPU seed `src/hw_radar/refdata/seeds/amd-epyc.json`, 4 models: EPYC 9354,
   9654, 7763, 7742).
 
@@ -46,17 +47,17 @@ variation of multi-variation listings. eBay URLs are trimmed to `https://www.eba
 
 Only a bare, retail, seeded model is a positive. Everything else is `none`.
 
-| rule | label | rows | matcher (would-accept run) |
-| --- | --- | --- | --- |
-| **C1** exact seeded model, bare CPU → `model` grain, `variant: null` | model | 104 | 82 agree; 4 accepted at **variant** grain; 18 missed |
-| **C1-withheld** reads as C1, price implausible (cpu-0283, $399 for a 7763) | none | 1 | accepted → disagrees |
-| **C2** P-variant (9354P, 9654P …): a distinct 1P SKU with its own OPN | none | 47 | 47 agree (none) |
-| **C3** engineering/qualification sample (ES, QS, `-04` OPN suffix) | none | 14 | 14 agree (review, `veto: sample`) |
-| **C4** OEM/cloud variant sold "as" a seeded model (7B13, 7J13, 7T83, 7K83 …) | none | 93 | 93 agree (none) |
-| **C5** multi-model listing | none | 2 | 2 agree |
-| **C6** bundle, motherboard, or configurator/CTO item | none | 10 | 6 agree; **4 accepted** |
-| **C7** unseeded EPYC model (7542, 7642, 7452, 9275F, 7D13) | none | 11 | 11 agree |
-| **C8** accessory (SP5 carrier frame) | none | 2 | 2 agree |
+| rule | label | rows | matcher, first run | matcher, after fixes (§3) |
+| --- | --- | --- | --- | --- |
+| **C1** exact seeded model, bare CPU → `model` grain, `variant: null` | model | 104 | 82 agree; 4 at **variant** grain; 18 missed | 99 agree; 4 at **variant** grain; 1 missed |
+| **C1-withheld** reads as C1, price implausible (cpu-0283, $399 for a 7763) | none | 1 | accepted → disagrees | accepted → disagrees |
+| **C2** P-variant (9354P, 9654P …): a distinct 1P SKU with its own OPN | none | 47 | 47 agree (none) | 47 agree (none) |
+| **C3** engineering/qualification sample (ES, QS, `-04` OPN suffix) | none | 14 | 14 agree (review, `veto: sample`) | 14 agree (review, `veto: sample`) |
+| **C4** OEM/cloud variant sold "as" a seeded model (7B13, 7J13, 7T83, 7K83 …) | none | 93 | 93 agree (none) | 93 agree (none) |
+| **C5** multi-model listing | none | 2 | 2 agree | 2 agree |
+| **C6** bundle, motherboard, or configurator/CTO item | none | 10 | 6 agree; **4 accepted** | 10 agree (4 review, `veto: bundle`) |
+| **C7** unseeded EPYC model (7542, 7642, 7452, 9275F, 7D13) | none | 11 | 11 agree | 11 agree |
+| **C8** accessory (SP5 carrier frame) | none | 2 | 2 agree | 2 agree |
 
 Rule-audit notes:
 
@@ -70,92 +71,105 @@ Rule-audit notes:
   so it treats them as the retail model.
 - **C1-withheld is a price judgement.** Price is not a matcher input, so no matcher can agree with
   it. It is withheld conservatively, not asserted wrong.
-- **C6 is the only rule with a matcher-side precision problem** (see §4).
 - **The drive family-grain rule does not apply to CPU.** CPU has no grammar decode (no rung 2),
   and its AcceptancePolicy admits only `catalog_authoritative` aliases at model or variant grain.
   The drive R2 question (is a provisional family attach correct?) cannot arise here.
 
-## 3. Provisional metrics (PROVISIONAL: `claude_draft` labels, not owner-approved)
+## 3. Matcher changes after the first measurement
 
-Production behavior (orchestrator run, `auto_accept=False`): **0 accepts**, 105 review at rung 1,
-179 none. The 105 reviews split into 91 `auto_accept_disabled` (would-accepts) and 14
-`veto: ["sample"]`.
+The first would-accept run (91 accepts, 82 correct) exposed two matcher defects, and a Codex
+review found two more. All four were fixed in `src/hw_radar/matching/rules/cpu.py`, with a
+generic `CategoryRules.fold_structured` hook in `categories.py` and `resolver.py` for the fourth.
+`MATCHER_VERSION` stays 2026.09.2 (unreleased); its history comment records the change.
+**No label, id, or corpus byte was changed:** the re-run used the same hashed JSONL.
+
+1. **Board/bundle veto.** A CPU listing whose reference-masked title makes it a motherboard,
+   mainboard, barebone, combo, kit, or bundle, or that bundles N CPUs ("with 2x", "2x CPUs"),
+   vetoes as `bundle` and goes to review. "Server", "board", and "workstation" are deliberately
+   not markers, because bare-CPU titles say "Server CPU" and "for 7002/7003 Series Boards".
+2. **EPYC codenames.** A first-party codename (Naples, Rome, Milan, Milan-X, Genoa, Genoa-X,
+   Bergamo, Siena, Turin) between "EPYC" and the number is skipped when forming the name
+   candidate. The P-variant and multi-model guards still apply ("EPYC Genoa 9354P" is not 9354).
+3. **Multi-model ambiguity at rung 0 (Codex N3).** A title naming two EPYC models is recorded
+   as `multi_model` and vetoes, so an accepted listing re-observed as "7763 / 7742" goes to review
+   instead of inheriting its prior.
+4. **Structured-MPN samples (Codex N4).** A sample marking in the merchant's structured MPN
+   (`100-000000314-04`) sets the `sample` veto even when the title is retail.
+
+Fixes 3 and 4 do not change any row of this corpus. Every row carries only a title, and no
+multi-model title had a prior. They are pinned by `tests/db/test_resolver_cpu_identity.py`.
+
+## 4. Provisional metrics (PROVISIONAL: `claude_draft` labels, not owner-approved)
+
+Production behavior (`auto_accept=False`) accepts nothing. Every would-accept below is a review
+with `auto_accept_disabled` in production.
 
 Would-accept measurement (`auto_accept` forced True for `cpu` inside the test only; policy, guard,
-and vetoes unchanged):
+and vetoes unchanged), before and after §3:
 
-| metric | value |
-| --- | --- |
-| Labels | model 104 (9354: 44, 9654: 12, 7763: 45, 7742: 3); none 180 |
-| Outcomes | 91 accept at rung 1 (87 model, 4 variant grain); 14 review; 179 none (no edge) |
-| Correct would-accepts (strict grain + target) | **82 / 91** |
-| Provisional precision | **90.11 %** |
-| False positives: label `none` | 5: cpu-0207, -0248, -0269, -0279 (board bundles), cpu-0283 (C1-withheld) |
-| False positives: different model | 0 |
-| Right model, wrong grain (variant vs model label) | 4: cpu-0013, -0071, -0149, -0180 |
-| False negatives (label model, no accept) | 18 (§4) |
-| Model recall (right model, any grain) | 86 / 104 (82.7 %) |
-| Reviews by reason | `veto: ["sample"]` 14 (all C3, all correct); no other reason |
-| Harness verdicts (drive-shaped, for completeness) | precision INSUFFICIENT_CORPUS (< 100 accepts); audit gate FAIL (all drafts); rollup consistent |
+| metric | first run | after fixes |
+| --- | --- | --- |
+| Labels | model 104, none 180 | same |
+| Outcomes | 91 accept (87 model, 4 variant); 14 review; 179 none | 104 accept (100 model, 4 variant); 18 review; 162 none |
+| Correct would-accepts (strict grain + target) | 82 / 91 | **99 / 104** |
+| Provisional precision | 90.11 % | **95.19 %** |
+| False positives: label `none` | 5 (4 board bundles, cpu-0283) | **1** (cpu-0283, C1-withheld) |
+| False positives: different model | 0 | 0 |
+| Right model, wrong grain (variant vs model label) | 4 | 4 (cpu-0013, -0071, -0149, -0180) |
+| False negatives (label model, no accept) | 18 | **1** (cpu-0082) |
+| Model recall (right model, any grain) | 86 / 104 (82.7 %) | 103 / 104 (99.0 %) |
+| Reviews by reason | `veto: sample` 14 | `veto: sample` 14; `veto: bundle` 4 |
+| Harness verdicts (drive-shaped) | precision INSUFFICIENT_CORPUS; audit FAIL | precision FAIL (≥ 100 accepts clears the floor, but 95.19 % < the drive 99.5 % bar); audit FAIL (all drafts) |
 
-Per seeded model:
+Exactly 21 rows changed outcome between the runs: 17 codename rows went from none to a correct
+model accept, and the 4 board bundles went from accept to review.
+
+Per seeded model, after fixes:
 
 | model | labeled model | would-accepted (right model) | missed |
 | --- | --- | --- | --- |
-| EPYC 9354 | 44 | 31 | 13 (12 "EPYC Genoa 9354", cpu-0082) |
-| EPYC 9654 | 12 | 11 | 1 (cpu-0027 "EPYC GENOA 9654") |
-| EPYC 7763 | 45 | 41 | 4 ("EPYC Milan 7763") |
-| EPYC 7742 | 3 | 3 | 0 |
+| EPYC 9354 | 44 | 43 | cpu-0082 |
+| EPYC 9654 | 12 | 12 | — |
+| EPYC 7763 | 45 | 45 | — |
+| EPYC 7742 | 3 | 3 | — |
 
-Vendor-locked handling (10 rows): 9 would-accept at the seeded model (cpu-0008, -0041, -0044,
--0048, -0052, -0156, -0282 at model grain; cpu-0013, -0149 at variant grain). cpu-0166 is missed,
-but only because of the "EPYC Milan" codename, not the lock.
+Vendor-locked handling (10 rows): all 10 now would-accept at the seeded model (cpu-0013 and
+cpu-0149 at variant grain). The matcher has no lock signal.
 
-Sensitivity (labels unchanged, computed after evaluation):
+Sensitivity after fixes (labels unchanged):
 
 | owner rule | would-accepts | correct | precision |
 | --- | --- | --- | --- |
-| as drafted (locked = model; variant grain wrong) | 91 | 82 | 90.11 % |
-| variant grain on the right model counts as correct | 91 | 86 | 94.51 % |
-| vendor-locked rows excluded | 82 | 75 | 91.46 % |
-| both of the above | 82 | 77 | 93.90 % |
+| as drafted (locked = model; variant grain wrong) | 104 | 99 | 95.19 % |
+| variant grain on the right model counts as correct | 104 | 103 | 99.04 % |
+| vendor-locked rows excluded | 94 | 91 | 96.81 % |
+| both of the above | 94 | 93 | 98.94 % |
 
-Under every rule the 4 board bundles remain false positives.
+Under every rule cpu-0283 stays the one false positive.
 
-## 4. Every disagreement (27)
+## 5. Every disagreement after the fixes (6)
 
 Notation: `grain/outcome@rung → model`. `none/none` means no candidate and no edge.
 
 | id | item | price | title (abridged) | matcher | label | cause |
 | --- | --- | --- | --- | --- | --- | --- |
-| cpu-0207 | 336073823424 | 3529.00 | Supermicro H12DSi-N6 Motherboard With 2x AMD EPYC 7763 … | model/accept@1 → epyc7763 | none (C6) | **matcher FP**: no bundle/board veto for CPU |
-| cpu-0248 | 127877501027 | 6143.00 | same title | model/accept@1 → epyc7763 | none (C6) | same |
-| cpu-0269 | 127877603096 | 6143.00 | same title | model/accept@1 → epyc7763 | none (C6) | same |
-| cpu-0279 | 206289606775 | 6143.00 | same title | model/accept@1 → epyc7763 | none (C6) | same |
 | cpu-0283 | 800713259235 | 399.00 | AMD EPYC 7763 … 280W CPU 100-000000312 | model/accept@1 → epyc7763 | none (C1-withheld, AMBIGUOUS) | price outlier; the title alone is C1 |
 | cpu-0013 | 327036584378 | 2297.56 | AMD Dell EPYC 9354 32C … SP5 CPU +NEW+ | variant(new)/accept@1 → epyc9354 | model 9354 (AMBIGUOUS locked) | grain: C1 has no variant rule |
 | cpu-0071 | 800679680666 | 1967.54 | Used AMD EPYC 9354 … 100-000000798 … | variant(used)/accept@1 → epyc9354 | model 9354 | grain |
 | cpu-0149 | 168355766922 | 950.00 | AMD EPYC 7763 100-000000312 CPU (*locked*) (*Pulled from Cisco UCS …*) | variant(used)/accept@1 → epyc7763 | model 7763 (AMBIGUOUS locked) | grain |
-| cpu-0180 | 188858072994 | 2799.00 | New AMD EPYC Milan 7763 … CPU 100-000000312 | variant(new)/accept@1 → epyc7763 | model 7763 | grain (found via the OPN) |
-| cpu-0073, -0077, -0087, -0088, -0090, -0092, -0097, -0120, -0121, -0125, -0126, -0127 | (JSONL) | 1980.00–3313.09 | AMD EPYC Genoa 9354 280W 3.25GHz 32-Core … | none/none | model 9354 | **recall**: a codename between "EPYC" and the number yields no candidate |
-| cpu-0082 | 168390896730 | 1705.00 | AMD EPYC GENOA SP5 ZEN4 9354 … 100-000000798Open | none/none | model 9354 | codename, and the OPN is fused with "Open" |
-| cpu-0027 | 115850432637 | 3150.00 | AMD EPYC GENOA 9654 CPU SP5 … Unlocked | none/none | model 9654 | codename |
-| cpu-0166 | 407014509038 | 1096.99 | Dell Locked AMD EPYC Milan 7763 CPU … | none/none | model 7763 (AMBIGUOUS locked) | codename |
-| cpu-0226, -0241, -0266 | (JSONL) | 2195.99–2998.00 | AMD EPYC Milan 7763 CPU 64 Cores SP3 … | none/none | model 7763 | codename |
+| cpu-0180 | 188858072994 | 2799.00 | New AMD EPYC Milan 7763 … CPU 100-000000312 | variant(new)/accept@1 → epyc7763 | model 7763 | grain |
+| cpu-0082 | 168390896730 | 1705.00 | AMD EPYC GENOA SP5 ZEN4 9354 … 100-000000798Open | none/none | model 9354 | recall: "SP5 ZEN4" sits between the codename and the number, and the OPN is fused with "Open" |
 
-The recall misses are safe (no wrong price history) but cost 18 of 104 positives. Fixing the
-codename gap or adding a CPU bundle veto is a matcher change with a `matcher_version` bump. It is
-not part of this packet.
-
-## 5. AMBIGUOUS rows (11)
+## 6. AMBIGUOUS rows (11)
 
 - Vendor-locked, labeled at model grain (10): cpu-0008, cpu-0013, cpu-0041, cpu-0044, cpu-0048,
   cpu-0052, cpu-0149, cpu-0156, cpu-0166, cpu-0282.
 - Price outlier withheld to `none` (1): cpu-0283.
 
-## 6. Audit sample (reproducible)
+## 7. Audit sample (reproducible)
 
-`select_audit_sample(ids, "cpu-epyc-draft-2026-09-26")` → ceil(0.20 × 284) = **57** ids:
+`select_audit_sample(ids, "cpu-epyc-draft-2026-09-26")` → ceil(0.20 × 284) = **57** ids. The
+sample depends only on the id set and `corpus_version`, so the matcher fixes did not change it:
 
 `cpu-0123, cpu-0032, cpu-0198, cpu-0052, cpu-0043, cpu-0212, cpu-0273, cpu-0133, cpu-0149,
 cpu-0216, cpu-0167, cpu-0119, cpu-0051, cpu-0169, cpu-0026, cpu-0260, cpu-0172, cpu-0175,
@@ -165,20 +179,25 @@ cpu-0195, cpu-0130, cpu-0176, cpu-0029, cpu-0250, cpu-0064, cpu-0223, cpu-0229, 
 cpu-0003, cpu-0085, cpu-0084, cpu-0115, cpu-0268, cpu-0060, cpu-0141, cpu-0069, cpu-0161,
 cpu-0011, cpu-0215, cpu-0253`
 
-Every disagreement of the would-accept run (27): `cpu-0013, cpu-0027, cpu-0071, cpu-0073,
-cpu-0077, cpu-0082, cpu-0087, cpu-0088, cpu-0090, cpu-0092, cpu-0097, cpu-0120, cpu-0121,
-cpu-0125, cpu-0126, cpu-0127, cpu-0149, cpu-0166, cpu-0180, cpu-0207, cpu-0226, cpu-0241,
-cpu-0248, cpu-0266, cpu-0269, cpu-0279, cpu-0283`.
+Every disagreement after the fixes (6): `cpu-0013, cpu-0071, cpu-0082, cpu-0149, cpu-0180,
+cpu-0283`.
 
-The owner audits the union, **80 entries** (cpu-0013, cpu-0071, cpu-0097, and cpu-0149 are in
-both sets). The sample depends only on the id set and `corpus_version`. Relabeling under the same
-`corpus_version` keeps it; adding rows redraws it. Under production behavior (`auto_accept=False`)
-every one of the 104 model labels also disagrees, because nothing accepts. The would-accept
-disagreements are the ones that decide the flip.
+The owner audits the union, **60 entries** (cpu-0013, cpu-0071, and cpu-0149 are in both sets):
 
-## 7. Owner action
+`cpu-0003, cpu-0011, cpu-0013, cpu-0021, cpu-0026, cpu-0029, cpu-0032, cpu-0033, cpu-0043,
+cpu-0051, cpu-0052, cpu-0053, cpu-0055, cpu-0060, cpu-0062, cpu-0064, cpu-0069, cpu-0071,
+cpu-0082, cpu-0084, cpu-0085, cpu-0093, cpu-0097, cpu-0102, cpu-0115, cpu-0119, cpu-0123,
+cpu-0129, cpu-0130, cpu-0133, cpu-0137, cpu-0141, cpu-0149, cpu-0156, cpu-0161, cpu-0167,
+cpu-0169, cpu-0172, cpu-0175, cpu-0176, cpu-0180, cpu-0195, cpu-0198, cpu-0199, cpu-0212,
+cpu-0215, cpu-0216, cpu-0223, cpu-0229, cpu-0234, cpu-0236, cpu-0250, cpu-0251, cpu-0253,
+cpu-0260, cpu-0262, cpu-0268, cpu-0272, cpu-0273, cpu-0283`
 
-> **Audit:** the 80 ids in §6 and rules C1–C8 (§2). For each audited line in
+Optional: the 21 rows whose outcome the fixes changed (§4) now agree with their labels. They
+are worth a glance because a label error there would be hidden by the agreement.
+
+## 8. Owner action
+
+> **Audit:** the 60 ids in §7 and rules C1–C8 (§2). For each audited line in
 > `docs/evidence/2026-09-26-cpu-epyc-draft-corpus.jsonl`, set `label.audit_status` to
 > `owner_confirmed` when the draft stands, or `owner_corrected` when you change `expected_grain`
 > or `expected_target`. Then make `audit_rollup` in the `.meta.json` equal the new per-status
@@ -186,8 +205,7 @@ disagreements are the ones that decide the flip.
 >
 > **Decide:** (1) the vendor-locked rule: count locked parts as the seeded model, or exclude them
 > from the corpus; (2) whether C1 rows with a title condition word are variant-grain labels
-> (§2); (3) whether the board-bundle false positives (cpu-0207/-0248/-0269/-0279) and the codename
-> recall gap need a matcher fix and `matcher_version` bump before any flip.
+> (§2); (3) whether the §3 matcher fixes are acceptable as landed.
 >
 > **Ratify:** a reviewed code change that sets `auto_accept=True` in `_cpu_rules`
 > (`src/hw_radar/matching/categories.py`), made only on audited evidence. Collection comes later:
