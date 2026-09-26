@@ -1,0 +1,402 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "manufacturer_name": "Seagate",
+  "manufacturer_key": "seagate",
+  "family_name": "Exos",
+  "provenance": {
+    "source_kind": "first_party_datasheet",
+    "sources": [
+      {
+        "url": "https://www.seagate.com/content/dam/seagate/migrated-assets/www-content/datasheets/pdfs/exos-x18-channel-DS2045-4-2106US-en_US.pdf",
+        "title": "Seagate Exos X18 datasheet DS2045.4-2106US",
+        "retrieved": "2026-09-26"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "ST18000NM000J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e/4Kn (FastFormat)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM000J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM001J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM001J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM000J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM000J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM001J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM001J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST14000NM000J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "14",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST14000NM000J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST14000NM004J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "14",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST14000NM004J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST14000NM005J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "14",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST14000NM005J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM000J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM000J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM001J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM001J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST10000NM018G",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST10000NM018G", "is_primary": true}]
+    },
+    {
+      "model_number": "ST10000NM020G",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e/4Kn"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST10000NM020G", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM004J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM004J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM005J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM005J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM007J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM007J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM004J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM004J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM005J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM005J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST16000NM007J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST16000NM007J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST14000NM007J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "14",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST14000NM007J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM004J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM004J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM005J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM005J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST12000NM007J",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST12000NM007J", "is_primary": true}]
+    },
+    {
+      "model_number": "ST10000NM013G",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "Standard", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST10000NM013G", "is_primary": true}]
+    },
+    {
+      "model_number": "ST10000NM014G",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST10000NM014G", "is_primary": true}]
+    },
+    {
+      "model_number": "ST10000NM016G",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X18",
+        "spec_json": {"security_variant": "SED-FIPS", "sector_format_stated": "512e(512/520/528)/4Kn(4096/4160/4224)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST10000NM016G", "is_primary": true}]
+    }
+  ]
+}

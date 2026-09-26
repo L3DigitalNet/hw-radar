@@ -17,7 +17,12 @@ Invariants:
   REPEATED IDENTICAL errors write no new edge; distinct new errors do.
 - Rung 0 prior = the listing's denorm fields (last accepted state): MS-1a
   persist upserts on (source_site, source_listing_key), so a re-observation IS
-  the same row.
+  the same row. Exceptions, both re-decided by rungs 1-2 instead of
+  inherited: an automated (rung 1-2) accept decided under an older
+  MATCHER_VERSION (the new edge records `reconsidered_from_matcher_version`),
+  and one whose identity-bearing identifiers changed since, or were never
+  recorded (`reconsidered_prior`, see _prior_reconsideration). Manual accepts
+  always inherit.
 - Single normalizer: all alias joins ride matching.normalize (ADR-0019 rule 1).
 - Lazy alias learning (rule 7): dual-labeled listings emit listing_derived OEM
   aliases at MODEL grain max; house SKUs become source-local aliases.
@@ -70,7 +75,7 @@ from hw_radar.catalog.models import (
     WarrantyChannel,
 )
 from hw_radar.matching import MATCHER_VERSION, categories, ladder
-from hw_radar.matching.normalize import canonicalize_title
+from hw_radar.matching.normalize import canonicalize_listing_text, canonicalize_title
 from hw_radar.matching.rules import basic, cpu, gpu, ram
 from hw_radar.matching.types import (
     DecodeResult,
@@ -118,18 +123,36 @@ def _hard_attrs_from_spec(spec: DriveSpec | None) -> ladder.HardAttrs:
     )
 
 
+def _family_key(family: ProductFamily | None) -> tuple[str, str] | None:
+    if family is None:
+        return None
+    return (family.manufacturer.normalized_name, family.normalized_name)
+
+
+def _drive_model_attrs(model: ProductModel | None) -> ladder.HardAttrs:
+    # The family rides along even when the model has no DriveSpec: the title
+    # family veto needs only the family, never the spec row.
+    attrs = _hard_attrs_from_spec(_spec_of(model))
+    return replace(attrs, family=_family_key(model.product_family if model else None))
+
+
 def _family_agreement_attrs(family_id: int | None) -> ladder.HardAttrs:
     """C.3.2 agreement set: a family-grain target vetoes only on fields where
-    ALL known specs under the family agree; disagreeing fields stay unknown."""
+    ALL known specs under the family agree; disagreeing fields stay unknown.
+    The family's own identity is always known, specs or not (a rung-2
+    provisional family has none)."""
 
     if family_id is None:
         return ladder.HardAttrs()
+    family = _family_key(
+        ProductFamily.objects.select_related("manufacturer").filter(pk=family_id).first()
+    )
     specs = [
         _hard_attrs_from_spec(spec)
         for spec in DriveSpec.objects.filter(product_model__product_family_id=family_id)
     ]
     if not specs:
-        return ladder.HardAttrs()
+        return ladder.HardAttrs(family=family)
 
     def agreed[T](values: set[T | None]) -> T | None:
         return next(iter(values)) if len(values) == 1 else None
@@ -140,6 +163,7 @@ def _family_agreement_attrs(family_id: int | None) -> ladder.HardAttrs:
         form_factor=agreed({a.form_factor for a in specs}),
         sector_format=agreed({a.sector_format for a in specs}),
         security=agreed({a.security for a in specs}),
+        family=family,
     )
 
 
@@ -236,7 +260,7 @@ _NO_SPEC = _SpecReader(
 # every resolution in it, and a reader without rules is dead code.
 _SPEC_READERS: Final[dict[str, _SpecReader]] = {
     categories.DRIVE: _SpecReader(
-        model_attrs=lambda model: _hard_attrs_from_spec(_spec_of(model)),
+        model_attrs=_drive_model_attrs,
         family_attrs=_family_agreement_attrs,
     ),
     gpu.SLUG: _satellite_reader(GpuSpec, "gpu_spec", _gpu_hard),
@@ -351,9 +375,9 @@ def _alias_hits(
         .filter(Q(source_site__isnull=True) | Q(source_site_id=source_site_id))
         .select_related(
             "product_variant__product_model__manufacturer",
-            "product_variant__product_model__product_family",
+            "product_variant__product_model__product_family__manufacturer",
             "product_model__manufacturer",
-            "product_model__product_family",
+            "product_model__product_family__manufacturer",
             "product_family__manufacturer",
         )
     )
@@ -403,6 +427,8 @@ def _alias_hits(
                 candidate_kind=candidate.kind,
                 candidate_vendor=candidate.vendor_hint,
                 candidate_structured=candidate.from_structured_field,
+                candidate_normalized=candidate.normalized,
+                candidate_review_only=candidate.review_only,
             )
         )
     return hits
@@ -467,6 +493,140 @@ def _prior_basis(listing: Listing) -> _AcceptanceBasis | None:
     return _AcceptanceBasis(
         method=str(method), source_kind=source_kind if isinstance(source_kind, str) else None
     )
+
+
+# Methods whose accept is a rule-derived, automated decision (rungs 1-2). Their
+# correctness is only as good as the matcher_version that produced them; a
+# MANUAL accept is an owner decision and no rule change may overturn it.
+_AUTOMATED_METHODS: Final = frozenset(
+    {ResolutionMethod.EXACT_ALIAS.value, ResolutionMethod.MPN_DECODE.value}
+)
+
+
+# Evidence key of an automated accept's ladder.identity_identifiers list.
+_IDENTIFIERS_KEY: Final = "identity_identifiers"
+
+
+def _automated_origin(listing: Listing) -> ListingResolution | None:
+    """The edge whose automated decision the listing's accepted state rests on;
+    None when that decision was not automated, so the prior always inherits.
+
+    The origin is the latest non-error accept edge that is NOT a rung-0
+    `source_alias` edge: a rung-0 edge only re-stamps an inherited target, so its
+    own matcher_version and inputs say nothing about which rules chose that
+    target (and denorm is only ever set by an accept, so no fresh decision sits
+    between the origin and later rung-0 edges). No origin edge at all — denorm
+    written outside the resolver — is not provably automated and stays
+    inheritable."""
+    origin = cast(
+        "ListingResolution | None",
+        listing.resolutions.filter(evidence__outcome=ladder.Outcome.ACCEPT.value)  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no reverse-FK manager stub
+        .exclude(evidence__has_key="error")
+        .exclude(method=ResolutionMethod.SOURCE_ALIAS.value)
+        .order_by("-resolved_at", "-pk")
+        .first(),
+    )
+    if origin is None or origin.method not in _AUTOMATED_METHODS:
+        return None
+    return origin
+
+
+def _prior_reconsideration(
+    origin: ListingResolution, identifiers: list[str]
+) -> dict[str, object] | None:
+    """Why an automated prior must be re-decided rather than inherited, as the
+    provenance to record on the new edge; None when it may be inherited.
+
+    C.3.5: a MATCHER_VERSION bump is a re-resolution experiment, so an accept
+    decided under older rules is re-decided. Without this, a rule fix (e.g.
+    2026.09.2's ST…NM… no longer implying Exos) could never undo a false merge
+    the old rules made — rung 0 would re-accept it on every re-observation.
+
+    Same version, the accept is only valid for the identifiers it was decided
+    on (round-4 R4-A). Rung 0 reads no candidates, so a title edited from a
+    seeded ST12000NE0008 to an unseeded ST12000NE0009 kept the seeded model,
+    and a family-grain decode of NE0009 edited to Exos' ST12000NM0008 kept
+    IronWolf Pro, both inside one matcher version. Comparing the whole
+    identifier set is the general rule the ladder's prior_model_not_named only
+    approximated: it saw hits naming another model, never a vanished or
+    unseeded identifier nor a family prior. An unchanged set (cosmetic edits
+    included) inherits, so re-polls never flap. An automated edge with no
+    recorded set predates the rule and is re-decided once; the re-decision
+    records the set. Every 2026.09.1 edge is re-decided by the version check
+    first, so only pre-fix 2026.09.2 edges reach that branch."""
+
+    if origin.matcher_version != MATCHER_VERSION:
+        return {"reconsidered_from_matcher_version": origin.matcher_version}
+    recorded = origin.evidence.get(_IDENTIFIERS_KEY)
+    if not isinstance(recorded, list):
+        return {"reconsidered_prior": {"reason": "identifiers_unrecorded"}}
+    prior_identifiers = sorted(str(v) for v in cast("list[object]", recorded))
+    if prior_identifiers != identifiers:
+        return {
+            "reconsidered_prior": {
+                "reason": "identifiers_changed",
+                "prior_identifiers": prior_identifiers,
+            }
+        }
+    return None
+
+
+# Evidence key of an automated variant-grain accept's asserted variant
+# attributes (_asserted_variant_attributes), written by _apply and read by
+# _variant_reconsideration.
+_VARIANT_ATTRS_KEY: Final = "variant_attributes"
+
+
+def _asserted_variant_attributes(extracted: ExtractedAttributes) -> dict[str, str]:
+    """The ProductVariant sellable-identity fields (the columns of its unique
+    tuple, as _materialize fills them) the listing asserts, by field name.
+
+    Unasserted (None) fields are absent: UNKNOWN is not evidence against any
+    variant, so a title that stops naming its condition never re-decides."""
+    claimed = {
+        "condition": extracted.condition,
+        "packaging": extracted.packaging,
+        "recert_channel": extracted.recert_channel,
+        "warranty_channel": extracted.warranty_channel,
+    }
+    return {name: attr.value for name, attr in claimed.items() if attr is not None}
+
+
+def _variant_reconsideration(
+    origin: ListingResolution, variant_id: int, asserted: dict[str, str]
+) -> dict[str, object] | None:
+    """Why a variant-grain automated prior must be re-decided because the
+    listing now asserts a different sellable identity; None to inherit.
+
+    Rung 0 checks only the model's hard attributes, and an unchanged accept
+    returns before _materialize, so without this a drive listed "New" and
+    edited to "For spares or repair" stayed on the new-condition variant on
+    every poll (round-5 R5-A): identifiers alone cannot see a condition change.
+    Re-deciding lets the ladder rematerialize the variant the listing now
+    asserts, or review.
+
+    No flapping: a difference from the variant's tuple is ignored when the
+    origin decision recorded exactly these asserted attributes, i.e. the ladder
+    already chose this variant knowing them (a variant-grain alias can name a
+    variant whose tuple differs from the title). Without that check such a
+    listing would re-decide and append an edge on every poll. Legacy variant
+    edges without the record re-decide once, only when they contradict."""
+    variant = ProductVariant.objects.get(pk=variant_id)
+    prior_tuple: dict[str, str] = {
+        "condition": variant.condition,
+        "packaging": variant.packaging,
+        "recert_channel": variant.recert_channel,
+        "warranty_channel": variant.warranty_channel,
+    }
+    changed = sorted(name for name, value in asserted.items() if prior_tuple[name] != value)
+    if not changed or origin.evidence.get(_VARIANT_ATTRS_KEY) == asserted:
+        return None
+    return {
+        "reconsidered_prior": {
+            "reason": "variant_attributes_changed",
+            "prior_variant_attributes": {name: prior_tuple[name] for name in changed},
+        }
+    }
 
 
 def _apply_category_gates(
@@ -538,7 +698,7 @@ def _apply_category_gates(
 def _run_ladder(
     listing: Listing, *, reconsider: bool = False
 ) -> tuple[str, ExtractedAttributes, list[MpnCandidate], ladder.Verdict]:
-    canonical = canonicalize_title(f"{listing.title_raw} {listing.condition_label_raw}".strip())
+    canonical = canonicalize_listing_text(listing.title_raw, listing.condition_label_raw)
     attrs = _latest_snapshot_attrs(listing)
     hint = _category_hint(attrs)
     slug = categories.dispatch_category(hint)
@@ -563,10 +723,13 @@ def _run_ladder(
             ),
         )
     spec = _SPEC_READERS[slug]
+    structured_mpn = _structured_mpn(attrs)
     extracted = rules.extract(canonical)
+    if rules.fold_structured is not None and structured_mpn is not None:
+        extracted = rules.fold_structured(extracted, structured_mpn)
     candidates = rules.extract_candidates(
         canonical,
-        structured_mpn=_structured_mpn(attrs),
+        structured_mpn=structured_mpn,
         source_key=listing.source_site.normalized_name,
     )
     # reconsider (C.3.4 catalog-refresh re-run): prior=None bypasses rung 0 so
@@ -574,18 +737,43 @@ def _run_ladder(
     # listing re-accepts its prior forever and the catalog seed can never
     # upgrade it. The veto still runs; unchanged outcomes write no edge.
     prior = None if reconsider else _prior_from_listing(listing, spec)
+    alias_hits = _alias_hits(
+        candidates,
+        listing.source_site_id,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
+        spec,
+    )
+    identifiers = ladder.identity_identifiers(candidates, alias_hits, rules.decode)
+    origin = _automated_origin(listing) if prior is not None else None
+    reconsidered = _prior_reconsideration(origin, identifiers) if origin is not None else None
+    if (
+        reconsidered is None
+        and origin is not None
+        and prior is not None
+        and prior.target.grain is Grain.VARIANT
+        and prior.target.variant_id is not None
+    ):
+        # After the identifier check: an identifier change already re-decides,
+        # and its provenance is the more fundamental reason to record.
+        reconsidered = _variant_reconsideration(
+            origin, prior.target.variant_id, _asserted_variant_attributes(extracted)
+        )
+    if reconsidered is not None:
+        prior = None
+        provenance.update(reconsidered)
     verdict = ladder.decide(
         extracted,
         candidates,
         prior,
-        _alias_hits(
-            candidates,
-            listing.source_site_id,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
-            spec,
-        ),
+        alias_hits,
         _first_decode(candidates, rules.decode),
         veto=rules.veto,
+        distinct_mpn_guard=rules.distinct_mpn_guard,
     )
+    if verdict.outcome is ladder.Outcome.ACCEPT and verdict.rung != 0:
+        # The other half of _prior_reconsideration's contract: the set this
+        # decision rests on, compared before any later rung-0 inheritance.
+        # Recorded before the category gates, which only ever demote.
+        verdict = replace(verdict, evidence={**verdict.evidence, _IDENTIFIERS_KEY: identifiers})
     verdict = _apply_category_gates(listing, slug, rules, verdict)
     target = verdict.target
     if target is not None:
@@ -812,11 +1000,22 @@ def _apply(
         # Non-accept (incl. error) edges never materialize identity rows — this
         # also keeps the CR-001 fallback error-write free of _materialize.
         grain, family, model, variant, on_demand = ResolutionGrain.NONE, None, None, None, False
+    # A re-decision (version or identifiers, see _prior_reconsideration;
+    # variant attributes, see _variant_reconsideration) that lands on the same
+    # target still writes an edge: it records the decision under the current
+    # rules, identifiers and asserted attributes, which is what lets the NEXT
+    # re-observation inherit at rung 0 — skipping it would re-run the full
+    # ladder on every poll, and leave no diffable trace of the re-resolution.
+    reconsidered = (
+        "reconsidered_from_matcher_version" in verdict.evidence
+        or "reconsidered_prior" in verdict.evidence
+    )
     if (
         accepted
         and current is not None
         and "error" not in current.evidence
         and not category_changed
+        and not reconsidered
     ):
         new_targets = (
             family.pk if grain == ResolutionGrain.FAMILY and family is not None else None,
@@ -836,6 +1035,12 @@ def _apply(
         evidence["rung"] = verdict.rung
     if on_demand:
         evidence["variant_on_demand"] = True
+    if accepted and verdict.rung != 0 and grain == ResolutionGrain.VARIANT:
+        # _variant_reconsideration's record: the attributes this variant was
+        # decided on, so the next poll with the same assertions inherits it.
+        # Recorded here, not with the identifiers in _run_ladder, because only
+        # _materialize knows whether a model-grain verdict became a variant.
+        evidence[_VARIANT_ATTRS_KEY] = _asserted_variant_attributes(extracted)
     if is_error and locked.resolution_grain != ResolutionGrain.NONE:  # pyright: ignore[reportUnnecessaryComparison] - basedpyright misreads a TextChoices member's runtime (value, label) tuple as its static type in `if` (not `assert`) context
         evidence["denorm_preserved"] = True
     # CR-002 ordering: demote-old → insert-new → link-old. The one-current

@@ -18,15 +18,33 @@ _TB = 1_000_000_000_000
 _WD = re.compile(r"^wd(\d{2,4})([a-z]{4})$")
 _HGST = re.compile(r"^(wuh|wus|huh|hus|hdn)(\d{6})([a-z0-9]{4,8})$")
 
-# First two suffix letters → family, per WD family product pages.
+# First two suffix letters → family, per WD family product pages. Every name
+# must equal canonicalize_title() of the seed family_name for the same line
+# (refdata/seeds/wd-*.json): a mismatch splits one product line into a rung-2
+# provisional family and a seeded family (pinned by
+# tests/unit/test_grammar_seed_family_consistency.py).
+#
+# `ef` is deliberately absent: it spans two WD families. WD's first-party
+# documents list WD20/30/40/60EFAX as "WD Red" (SMR; WD Red product brief)
+# and EFPX/EFZX/EFZZ/EFGX/EFBX as "WD Red Plus" (CMR; WD Red Plus datasheet,
+# Sept 2025), while older CMR EFAX capacities and the EFRX line were sold as
+# Red before WD renamed its CMR drives Red Plus. `ef` → "red" decoded Red Plus
+# drives into a family WD does not sell them as. Only the full suffixes that
+# the Red Plus datasheet table lists are mapped (_EF_SUFFIX_FAMILIES); EFAX,
+# EFRX and any other `ef..` suffix decode with no family. Rejected: a
+# per-model list (catalog data belongs in the seeds, which give rung-1 exact
+# aliases) and a capacity split of EFAX (no first-party table states one).
 _SUFFIX_FAMILIES: dict[str, str] = {
-    "ef": "red",
     "kf": "red pro",
     "kr": "gold",
     "fr": "gold",
     "pu": "purple",
     "ez": "blue",
 }
+
+_EF_SUFFIX_FAMILIES: dict[str, str] = dict.fromkeys(
+    ("efpx", "efzx", "efzz", "efgx", "efbx"), "red plus"
+)
 
 _HGST_FAMILIES: dict[str, str] = {
     "wuh": "ultrastar",
@@ -41,7 +59,7 @@ def decode(token: str) -> DecodeResult | None:
     m = _WD.fullmatch(token)
     if m is not None:
         digits, suffix = m.group(1), m.group(2)
-        family = _SUFFIX_FAMILIES.get(suffix[:2])
+        family = _SUFFIX_FAMILIES.get(suffix[:2]) or _EF_SUFFIX_FAMILIES.get(suffix)
         if len(digits) == 2:
             capacity: int | None = int(digits) * _TB // 10  # WD20 → 2 TB
         elif len(digits) == 3:

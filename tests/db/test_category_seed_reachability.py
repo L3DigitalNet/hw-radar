@@ -54,6 +54,8 @@ _REACH: tuple[tuple[str, str, str], ...] = (
     ("cpu", "EPYC 9354", "AMD EPYC 9354 32-Core 3.25GHz SP5 Server Processor"),
     ("cpu", "EPYC 9354", "AMD 100-000000798 32-Core SP5 Tray CPU"),
     ("cpu", "EPYC 9654", "AMD EPYC 9654 96-Core 2.4GHz SP5 100-000000789 CPU"),
+    # Separator styling: 'EPYC-9654' reaches the same alias key as 'EPYC 9654'.
+    ("cpu", "EPYC 9654", "AMD EPYC-9654 96-Core 2.4GHz SP5 CPU"),
     ("cpu", "EPYC 7763", "AMD EPYC 7763 64-Core 2.45GHz SP3 Server CPU"),
     ("cpu", "EPYC 7763", "AMD 100-000000312 64-Core SP3 Tray Processor"),
     ("cpu", "EPYC 7763", "AMD 100-100000312WOF 64-Core SP3 Boxed Processor"),
@@ -326,3 +328,74 @@ def test_missing_identity_evidence_never_accepts_seed_model(
     edge = _resolve(listing)
     assert edge.evidence["outcome"] == "none"
     assert listing.product_model is None
+
+
+# --- EPYC near models (F6 pilot: exact authoritative identity only) --------------
+
+
+@pytest.mark.usefixtures("seeded", "auto_accept_on")
+@pytest.mark.parametrize(
+    "title",
+    [
+        # 1P SKU of a seeded 2P model: a different part.
+        "AMD EPYC 9354P 32-Core 3.25GHz SP5 Processor",
+        "AMD EPYC 9654P 96-Core SP5 CPU",
+        # Two models named; the second is unseeded, so a lone hit would look clean.
+        "AMD EPYC 7742/7702 64-Core SP3 Server CPU",
+        # Two seeded models: no pick between them.
+        "AMD EPYC 9654 / EPYC 9354 SP5 Processor",
+        # An OEM SKU citing the retail model it derives from.
+        "AMD 7J13 64-Core SP3 CPU OEM version of AMD EPYC 7763",
+        # A suffixed OPN whose stem is seeded (EPYC 7763's 100-000000312).
+        "AMD 100-000000312-04 64-Core SP3 Engineering Sample",
+    ],
+)
+def test_epyc_near_model_never_accepts_a_seeded_model(site: SourceSite, title: str) -> None:
+    assert _candidate_alias_models("cpu", title) == set()
+    listing = _hinted(site, "near", title, "cpu")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "none"
+    assert listing.product_model is None
+
+
+# --- engineering / qualification samples: different parts, never retail ---------
+
+
+@pytest.mark.usefixtures("seeded", "auto_accept_on")
+@pytest.mark.parametrize(
+    ("model_number", "title"),
+    [
+        ("EPYC 7763", "AMD EPYC 7763 QS 100-000000314-04 64-Core SP3"),
+        ("EPYC 7763", "AMD EPYC 7763 ES 64-Core 2.45GHz SP3 Server CPU"),
+        ("EPYC 9654", "AMD EPYC 9654 ES engineering sample 96-Core SP5"),
+        ("EPYC 9654", "AMD EPYC 9654 QS 96-Core 2.4GHz SP5 CPU"),
+    ],
+)
+def test_epyc_sample_title_reviews_instead_of_accepting_the_retail_model(
+    site: SourceSite, model_number: str, title: str
+) -> None:
+    # The retail name is still an exact alias hit on the seeded model; the
+    # sample veto is what turns that hit into a reviewable contradiction.
+    assert _candidate_alias_models("cpu", title) == {_seeded_model(model_number).pk}
+    listing = _hinted(site, "sample", title, "cpu")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["veto"] == ["sample"]
+    assert listing.product_model is None
+
+
+@pytest.mark.usefixtures("seeded", "auto_accept_on")
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Near-trigger tokens: 'es' inside words, sockets, memory, E-series.
+        "AMD EPYC 7763 64-Core SP3 for 7002/7003 Series Boards",
+        "AMD EPYC 7763 64-Core SP3 ESXi Tested Server CPU",
+        "AMD EPYC 9654 96-Core SP5 DDR5 Server Processor",
+    ],
+)
+def test_sample_false_trigger_titles_still_accept(site: SourceSite, title: str) -> None:
+    listing = _hinted(site, "retail", title, "cpu")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "accept"
+    assert listing.product_model is not None

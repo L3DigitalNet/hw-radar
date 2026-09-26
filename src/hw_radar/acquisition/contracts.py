@@ -182,6 +182,16 @@ class DelistScope:
         means the legacy NULL scope (collection_scope IS NULL), never "every
         scope": a complete sweep of one category must not delist the others.
         The default keeps every pre-scope adapter on the NULL scope unchanged.
+    stale_absence_allowed — whether an INCOMPLETE sweep of this scope may feed
+        the grace-plus-continuity stale path at all. False means absence from
+        this scope is believed only from a complete sweep: an unprovably
+        complete scope never delists (owner invariant; review r2 N1), and its
+        stale offers are hidden by evidence expiry instead, which asserts
+        nothing about whether the listing ended. Every eBay scope passes False
+        (category sweeps and the legacy NULL drive sweep); the default keeps
+        every other adapter's truncated-sweep path.
+        Enforced by gate_delist_scope and again by stages.apply_delist, the
+        only ABSENT_STALE writer.
     """
 
     seen_keys: frozenset[str]
@@ -189,6 +199,7 @@ class DelistScope:
     complete: bool
     absence_grace: timedelta
     scope_key: str | None = None
+    stale_absence_allowed: bool = True
 
 
 @runtime_checkable

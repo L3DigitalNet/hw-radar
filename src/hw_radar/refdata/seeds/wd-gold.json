@@ -1,0 +1,306 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "manufacturer_name": "Western Digital",
+  "manufacturer_key": "western_digital",
+  "family_name": "Gold",
+  "provenance": {
+    "source_kind": "first_party_datasheet",
+    "sources": [
+      {
+        "url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-gold/data-sheet-wd-gold-hdd.pdf",
+        "title": "WD Gold Enterprise Class SATA HDD datasheet (January 2025)",
+        "retrieved": "2026-09-26"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "WD261KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "26",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD261KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD242KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD242KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD241KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD241KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD221KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "22",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD221KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD203KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD203KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD202KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD202KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD181KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD181KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD161KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD161KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD142KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "14",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD142KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD122KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Air", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD122KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD121KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Helium", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD121KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD103KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Air", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD103KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD102KRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Air", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD102KRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD8005FRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "8",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Air", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD8005FRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD6004FRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "6",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Air", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD6004FRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD4004FRYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "4",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Air", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD4004FRYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD2005FBYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "512n",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Air", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD2005FBYZ", "is_primary": true}]
+    },
+    {
+      "model_number": "WD1005FBYZ",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "1",
+        "rpm": 7200,
+        "cache_mb": 128,
+        "sector_format": "512n",
+        "market_tier": "enterprise",
+        "model_family": "Gold",
+        "spec_json": {"drive_tech": "Air", "armorcache": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD1005FBYZ", "is_primary": true}]
+    }
+  ]
+}

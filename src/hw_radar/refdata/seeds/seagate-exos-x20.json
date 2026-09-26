@@ -1,0 +1,198 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "manufacturer_name": "Seagate",
+  "manufacturer_key": "seagate",
+  "family_name": "Exos",
+  "provenance": {
+    "source_kind": "first_party_datasheet",
+    "sources": [
+      {
+        "url": "https://www.seagate.com/files/www-content/datasheets/pdfs/exos-x20-channel-DS2080-2111GB-en_EM.pdf",
+        "title": "Seagate Exos X20 datasheet DS2080-2111GB",
+        "retrieved": "2026-09-26"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "ST20000NM007D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "Standard (FastFormat)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM007D", "is_primary": true}]
+    },
+    {
+      "model_number": "ST20000NM000D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM000D", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM003D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "Standard (FastFormat)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM003D", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM004D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM004D", "is_primary": true}]
+    },
+    {
+      "model_number": "ST20000NM002D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "Standard (FastFormat)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM002D", "is_primary": true}]
+    },
+    {
+      "model_number": "ST20000NM003D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM003D", "is_primary": true}]
+    },
+    {
+      "model_number": "ST20000NM005D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "SED-FIPS"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST20000NM005D", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM000D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": false,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "Standard (FastFormat)"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM000D", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM001D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "SED"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM001D", "is_primary": true}]
+    },
+    {
+      "model_number": "ST18000NM002D",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SAS 12Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "sector_format": "512e",
+        "recording_tech": "cmr",
+        "sed": true,
+        "market_tier": "enterprise",
+        "model_family": "Exos X20",
+        "spec_json": {"security_variant": "SED-FIPS"}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "ST18000NM002D", "is_primary": true}]
+    }
+  ]
+}

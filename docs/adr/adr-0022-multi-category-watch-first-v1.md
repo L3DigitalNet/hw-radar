@@ -173,7 +173,7 @@ Owner decisions of 2026-09-24 (session 2); the decision above is unchanged.
   high-value sources" of *Source breadth*.
 - An Actor-backed production merchant source joins the pilot set only after a
   per-source admission decision (`docs/research/source-admission/`;
-  [OQ24](../open-questions.md#oq24--production-actor-backed-merchant-source-admission)).
+  [OQ24](../resolved-questions.md#oq24--production-actor-backed-merchant-source-admission)).
   Existing local connectors are not grandfathered into an Actor path.
 - Whether MS-2 may exit on the synthetic proof while the Actor-backed pilot source
   waits on OQ24 is an open owner decision, recorded as risk R31 in the MS-2 plan.

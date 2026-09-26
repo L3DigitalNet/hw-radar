@@ -49,12 +49,15 @@
     - [OQ22 — Retention class and `expires_at` policy for resolver-learned (`listing_derived`) `ProductAlias` rows](#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows)
     - [OQ23 — Apify paid-plan base fee vs the $20/month Hardware Radar ceiling](#oq23--apify-paid-plan-base-fee-vs-the-20month-hardware-radar-ceiling)
     - [OQ24 (part a) — First Actor proof uses a controlled synthetic source](#oq24-part-a--first-actor-proof-uses-a-controlled-synthetic-source)
+    - [OQ24 — Production Actor-backed merchant source admission](#oq24--production-actor-backed-merchant-source-admission)
     - [OQ25 — Hardware Radar Apify credential and MCP tool scope](#oq25--hardware-radar-apify-credential-and-mcp-tool-scope)
     - [OQ26 — External-liability bound for the shared Apify account](#oq26--external-liability-bound-for-the-shared-apify-account)
     - [OQ27 — Retention class for non-first-party reference data](#oq27--retention-class-for-non-first-party-reference-data)
     - [OQ28 — Can MS-2 exit on the synthetic proof alone?](#oq28--can-ms-2-exit-on-the-synthetic-proof-alone)
     - [OQ29 — Operator allowance size](#oq29--operator-allowance-size)
     - [OQ30 — Runtime Apify account reads (R25)](#oq30--runtime-apify-account-reads-r25)
+    - [OQ31 — Existing local connectors whose Terms prohibit automated access](#oq31--existing-local-connectors-whose-terms-prohibit-automated-access)
+    - [OQ32 — MS-1e ratification gate when two named sources are unusable](#oq32--ms-1e-ratification-gate-when-two-named-sources-are-unusable)
 
 ---
 
@@ -568,7 +571,7 @@ _Recommendation ratified as presented (2026-07-04): `dependency-review-action` g
 
 ### OQ24 (part a) — First Actor proof uses a controlled synthetic source
 
-**✅ Resolved (owner, 2026-09-24, session 2) — no ADR of its own; [ADR 0021's 2026-09-24 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-24-actor-ownership-billing-cycle-budget-and-actor-proof-owner-clarification) records the split, and the MS-2 plan implements it as MS2-D-42 (task F5a).** Split from OQ24 ("Actor-proof source selection") under rule 3; the production-merchant fork stays open as [OQ24 in `open-questions.md`](open-questions.md#oq24--production-actor-backed-merchant-source-admission).
+**✅ Resolved (owner, 2026-09-24, session 2) — no ADR of its own; [ADR 0021's 2026-09-24 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-24-actor-ownership-billing-cycle-budget-and-actor-proof-owner-clarification) records the split, and the MS-2 plan implements it as MS2-D-42 (task F5a).** Split from OQ24 ("Actor-proof source selection") under rule 3; the production-merchant fork was owner-resolved 2026-09-26 as [OQ24 above](#oq24--production-actor-backed-merchant-source-admission).
 
 - **Decision:** the first Actor proof runs a controlled synthetic source through a **real** private Apify Actor built in this repository, so it exercises real compute, run lifecycle, dataset retrieval, delayed completion, cost accounting, and API behavior with no merchant legal decision.
 - **Path proven:** `APScheduler/provider admission → budget reservation → Actor start → remote execution → bounded output → completion polling → completeness report → dataset/output import → idempotency → event-time handling → listing identity handling → finalized usage reconciliation`.
@@ -576,6 +579,27 @@ _Recommendation ratified as presented (2026-07-04): `dependency-review-action` g
 - **Consequence:** Newegg's exclusion and every merchant question move to the narrowed OQ24.
 
 **My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-24 session-2 direction.)_
+
+### OQ24 — Production Actor-backed merchant source admission
+
+**✅ Resolved for the current milestone (owner, 2026-09-26) — no ADR of its own; the same-dated
+[ADR-0019 amendment](adr/adr-0019-listing-catalog-matching-layer.md#amendment--2026-09-26-family-grain-resolution-ratification-catalog-source-source-diversity-gate-and-matcher-trap-findings-owner-clarification)
+records the consequence for the ratification gate.** Closes the production-merchant fork of OQ24 left
+open after [OQ24 (part a)](#oq24-part-a--first-actor-proof-uses-a-controlled-synthetic-source) settled
+the Actor-proof source; raised by the MS-2 plan (MS2-D-44, task F5b) and sharpened by the 2026-09-25
+source-admission records (`docs/research/source-admission/`), none of which reached `eligible`.
+
+- **Decision:** "No production Actor-backed merchant source will be introduced now. F5b is deferred
+  until a future source-admission review identifies an actually eligible source."
+- No `permission-required` merchant (Micro Center, ServerMonkey, SabrePC) is treated as approved
+  merely by that recommendation. No merchant solicitation, Actor, or paid unblocker/proxy path is
+  pursued to move a candidate to `eligible`.
+- **Reopen only** on new source-admission evidence — a fresh admission record reaching `eligible`,
+  or a candidate's Terms materially changing. Not a standing open question in this file; a new OQ is
+  raised if and when new evidence arrives.
+- OQ24/F5b does not block F6 or MS-2 ([OQ28](#oq28--can-ms-2-exit-on-the-synthetic-proof-alone)).
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-26 direction.)_
 
 ### OQ25 — Hardware Radar Apify credential and MCP tool scope
 
@@ -612,7 +636,7 @@ _Recommendation ratified as presented (2026-07-04): `dependency-review-action` g
 
 **✅ Resolved (owner, 2026-09-25) — recorded here; [ADR 0021's 2026-09-25 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-25-credential-namespace-runtimeoperator-authority-split-and-policy-values-owner-clarification) carries the architectural rule.** Raised by the MS-2 session-2 review (R31).
 
-- **Decision: yes — the controlled synthetic Actor proof (task F5a) is sufficient for the Apify portion of MS-2 exit.** The production Actor-backed merchant pilot (task F5b) is not required to close MS-2; it stays source/legal-gated by [OQ24](open-questions.md#oq24--production-actor-backed-merchant-source-admission), which may remain open after MS-2 closes.
+- **Decision: yes — the controlled synthetic Actor proof (task F5a) is sufficient for the Apify portion of MS-2 exit.** The production Actor-backed merchant pilot (task F5b) is not required to close MS-2; it stayed source/legal-gated by [OQ24](#oq24--production-actor-backed-merchant-source-admission), owner-resolved 2026-09-26 (no production merchant source for now; F5b deferred).
 - MS-1e's owner-in-the-loop drive-matcher ratification remains a distinct gate: MS-2's deploys and the synthetic proof do not ratify ADR 0019.
 
 **My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-25 direction.)_
@@ -653,3 +677,51 @@ _Recommendation ratified as presented (2026-07-04): `dependency-review-action` g
 - A Codex bounded review of plan revision 12 (REVISION_REQUIRED, R12-01..R12-05) was resolved in the plan's rev-12 Codex follow-up. None of it changed this decision.
 
 **My Comments:** _(none recorded; the decision above is the owner's 2026-09-25 direction.)_
+
+### OQ31 — Existing local connectors whose Terms prohibit automated access
+
+**✅ Resolved (owner, 2026-09-26) — no ADR of its own; the same-dated
+[ADR-0019 amendment](adr/adr-0019-listing-catalog-matching-layer.md#amendment--2026-09-26-family-grain-resolution-ratification-catalog-source-source-diversity-gate-and-matcher-trap-findings-owner-clarification)
+carries the SA-004 replacement rule.** Raised by the 2026-09-25 terms review of the MS-1d connectors
+([`docs/research/2026-09-25-local-connector-terms-review.md`](research/2026-09-25-local-connector-terms-review.md)),
+which found the disabled local ServerPartDeals and Seagate-recertified connectors' current Terms
+prohibit the automated collection those connectors perform.
+
+- **Decision:** "ServerPartDeals and Seagate-recertified are retired from the currently enableable
+  acquisition set because their reviewed current Terms conflict with the automated collection those
+  connectors perform." Neither is enabled privately, and neither is routed through Apify — "Apify
+  does not change source-policy eligibility."
+- **Status:** retired / permission-required — not production-enableable under current Terms. Code
+  and history are preserved (no deletion).
+- **Re-admission:** materially changed Terms or written merchant permission may trigger a fresh
+  source-admission review; re-admission is never automatic.
+- **Consequence — SA-004 enable order replaced.** The global SA-004 enable order (`docs/handoff/deployed.md`)
+  is replaced by a source × category admission matrix: each (source, category) combination is admitted
+  independently, and unrelated sources or categories are never a prerequisite for one another. SA-004's
+  checks run per combination, immediately before that combination's enable bit changes.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-26 direction.)_
+
+### OQ32 — MS-1e ratification gate when two named sources are unusable
+
+**✅ Resolved (owner, 2026-09-26) — no ADR of its own; the same-dated
+[ADR-0019 amendment](adr/adr-0019-listing-catalog-matching-layer.md#amendment--2026-09-26-family-grain-resolution-ratification-catalog-source-source-diversity-gate-and-matcher-trap-findings-owner-clarification)
+carries the ratification-gate design change.** Raised by the 2026-09-25 MS-1e harvest and
+audit-packet preparation
+([`docs/evidence/2026-09-25-ms1e-audit-packet.md`](evidence/2026-09-25-ms1e-audit-packet.md)), which
+found the accepted gate's five-source floor cannot pass with ServerPartDeals and Seagate unusable
+([OQ31](#oq31--existing-local-connectors-whose-terms-prohibit-automated-access)).
+
+- **Decision:** "An ADR-0019 ratification corpus must declare at least three independent, currently
+  admissible validation sources in corpus metadata. Every declared source must produce at least one
+  correct owner-ratified family-or-better auto-accept in the same composite gate run."
+- **Current intended candidates:** eBay, WD recertified, and goHardDrive, each subject to its own
+  source-policy eligibility.
+- **Quality thresholds unchanged:** ≥ 100 auto-accepts, ≥ 99.5% precision, audit gate PASS, rung-0
+  regression PASS, one full-run composite PASS. "A source-diversity correction, not a quality
+  relaxation."
+- Supersedes the five-source per-source floor recorded in the MS-1e ratification design spec
+  (`docs/superpowers/specs/2026-07-06-ms1e-validation-corpus-ratification-design.md`, §5–§6), which
+  carries a mirrored dated amendment note rather than a rewrite of its historical text.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-26 direction.)_

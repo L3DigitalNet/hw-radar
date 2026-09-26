@@ -15,6 +15,11 @@ Three conventions the schema enforces rather than trusts:
 - **Source keys (SA-002).** `source` must be one of the five real adapter-registry
   keys; a parallel short-name namespace ("spd", "wd") would silently split the
   per-source floor in `report.py` and let a missing source look covered.
+- **Declared ratification sources (OQ32).** Which sources a corpus ratifies
+  against is corpus metadata (`CorpusMeta.ratification_sources`), not a Python
+  constant, and every entry must come from a declared source
+  (`validate_declared_sources`) — so no source can ride along undeclared or be
+  quietly dropped from the floor.
 - **One normalizer, both sides (SA-003).** Labels hold human display values
   ("Exos X18", "ST18000NM000J"); the normalized comparison keys are derived here
   through the PRODUCTION `canonicalize_title` / `normalize_alias_text`, so the
@@ -48,7 +53,10 @@ from hw_radar.matching.categories import CATEGORY_SLUG_MAX_LENGTH, CATEGORY_SLUG
 from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.types import Grain
 
-# The five harvestable sources. Counterpart: `acquisition.sources.ADAPTERS`, which
+# The five historically harvestable sources — kept whole so pre-OQ32 corpora (which
+# carry ServerPartDeals and Seagate entries) still load. Admissibility for a NEW
+# ratification is a separate, gate-time question (report.retired_source_keys).
+# Counterpart: `acquisition.sources.ADAPTERS`, which
 # additionally registers the fixture adapters in its FIXTURE_SOURCE_KEYS (`demo`,
 # `synthetic`) — their listings are fixtures and must never enter a precision
 # corpus. tests/unit/test_corpus_schema.py pins this set against the registry so
@@ -246,6 +254,17 @@ class CorpusMeta(BaseModel):
     source_counts: dict[SourceKey, int]
     matcher_version: str = Field(min_length=1)
     audit_rollup: dict[AuditStatus, int]
+    # OQ32: the independent validation sources this corpus ratifies against. The
+    # ONLY place the declared set comes from — there is deliberately no Python
+    # default set, so changing what a ratification covers is a visible manifest
+    # diff. Optional so pre-OQ32 manifests still load; an undeclared corpus can
+    # never pass the source floor (report.SourceFloorFindings).
+    ratification_sources: tuple[SourceKey, ...] | None = None
+    # Owner decision 2026-09-26: the refdata_pin.drive_seed_digest of the drive
+    # catalog the ratification was evaluated against. Optional so older manifests
+    # load; the corpus gate fails unless it is present AND equal to the digest of
+    # the catalog the run actually used.
+    refdata_drive_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
     @model_validator(mode="after")
     def _range_is_ordered(self) -> CorpusMeta:
@@ -324,6 +343,30 @@ def load_corpus(jsonl_path: Path) -> list[CorpusEntry]:
         seen_source_keys.add(source_key)
         entries.append(entry)
     return entries
+
+
+def validate_declared_sources(entries: Iterable[CorpusEntry], meta: CorpusMeta) -> None:
+    """Raise CorpusFormatError if any entry's source is absent from the manifest's
+    declared `ratification_sources`, naming every undeclared source.
+
+    A hard error rather than a floor miss: an undeclared source's entries still
+    move the precision denominator, so letting them ride along would ratify
+    evidence the manifest never claimed, and dropping them would silently shrink
+    the corpus (SA-005). A manifest that declares nothing (pre-OQ32) is not
+    checked here — it loads for measurement, and the source floor fails it.
+    """
+    if meta.ratification_sources is None:
+        return
+    declared = set(meta.ratification_sources)
+    counts: dict[str, int] = {}
+    for entry in entries:
+        if entry.source not in declared:
+            counts[entry.source] = counts.get(entry.source, 0) + 1
+    if counts:
+        detail = ", ".join(f"{source} ({counts[source]} entries)" for source in sorted(counts))
+        raise CorpusFormatError(
+            f"corpus entries come from sources not declared in ratification_sources: {detail}"
+        )
 
 
 def load_meta(path: Path) -> CorpusMeta:

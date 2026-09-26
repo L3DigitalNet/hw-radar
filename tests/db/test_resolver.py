@@ -25,7 +25,7 @@ from hw_radar.catalog.models import (
     RetentionClass,
     SourceSite,
 )
-from hw_radar.matching import vocab
+from hw_radar.matching import MATCHER_VERSION, vocab
 from hw_radar.matching.normalize import normalize_alias_text
 from hw_radar.matching.resolver import CatalogResolver
 
@@ -189,14 +189,14 @@ def test_rung2_decode_materializes_provisional_family_once(
     site: SourceSite, seagate: Manufacturer
 ) -> None:
     resolver = CatalogResolver()
-    a = _listing(site, "l4", "Seagate 20TB ST20000NM007D Recertified Enterprise")
-    b = _listing(site, "l5", "Seagate 20TB ST20000NM007D Renewed")
+    a = _listing(site, "l4", "Seagate 20TB ST20000NE000 Recertified NAS")
+    b = _listing(site, "l5", "Seagate 20TB ST20000NE000 Renewed")
     resolver.resolve_listing(a.pk)
     resolver.resolve_listing(b.pk)
     a.refresh_from_db()
     assert a.resolution_grain == ResolutionGrain.FAMILY
-    assert a.product_family is not None and a.product_family.normalized_name == "exos"
-    assert ProductFamily.objects.filter(normalized_name="exos").count() == 1  # reused
+    assert a.product_family is not None and a.product_family.normalized_name == "ironwolf pro"
+    assert ProductFamily.objects.filter(normalized_name="ironwolf pro").count() == 1  # reused
     edge = _edge(a, superseded_by__isnull=True)
     assert edge.method == ResolutionMethod.MPN_DECODE
     assert edge.evidence["provisional"] is True
@@ -390,20 +390,20 @@ def test_veto_on_reobservation_demotes_and_keeps_one_current(
 
 def test_rung0_prior_blocks_upgrade_without_reconsider(site: SourceSite) -> None:
     """The trap this task exists for: family-grain prior short-circuits rung 1."""
-    listing = _listing(site, "up-1", "seagate exos st16000nm002c 16tb sata")
+    listing = _listing(site, "up-1", "seagate ironwolf pro st16000ne000 16tb sata")
     CatalogResolver().resolve_listing(listing.pk)  # rung 2 → provisional family
     listing.refresh_from_db()
     assert listing.resolution_grain == ResolutionGrain.FAMILY
-    _seed_alias_for("ST16000NM002C")  # helper below: catalog alias + model + spec
+    _seed_alias_for("ST16000NE000")  # helper below: catalog alias + model + spec
     CatalogResolver().resolve_listing(listing.pk)  # normal poll: rung 0 sticks
     listing.refresh_from_db()
     assert listing.resolution_grain == ResolutionGrain.FAMILY
 
 
 def test_reconsider_upgrades_family_grain_via_seeded_alias(site: SourceSite) -> None:
-    listing = _listing(site, "up-2", "seagate exos st16000nm002c 16tb sata")
+    listing = _listing(site, "up-2", "seagate ironwolf pro st16000ne000 16tb sata")
     CatalogResolver().resolve_listing(listing.pk)
-    _seed_alias_for("ST16000NM002C")
+    _seed_alias_for("ST16000NE000")
     CatalogResolver().resolve_listing(listing.pk, reconsider=True)
     listing.refresh_from_db()
     assert listing.resolution_grain == ResolutionGrain.MODEL
@@ -427,7 +427,7 @@ def test_reconsider_same_outcome_stamps_freshness_without_new_edge(
 
 
 def test_unchanged_rung0_accept_stamps_freshness(site: SourceSite) -> None:
-    listing = _listing(site, "fresh-2", "seagate exos st16000nm002c 16tb sata")
+    listing = _listing(site, "fresh-2", "seagate ironwolf pro st16000ne000 16tb sata")
     CatalogResolver().resolve_listing(listing.pk)
     edge = _edge(listing, is_current=True)
     stamp_before = edge.last_evaluated_at
@@ -459,13 +459,13 @@ def test_reconsider_accept_rehit_same_target_stamps_without_new_edge(
 
 
 def test_rung2_decode_capacity_contradiction_vetoes_to_review(site: SourceSite) -> None:
-    """Rung-2 family branch: WD20EFRX decodes to family 'red' at 2 TB
+    """Rung-2 family branch: WD20EFZX decodes to family 'red plus' at 2 TB
     (community-corroborated). A title asserting a different capacity is a
     decoder-vs-extracted contradiction, so the decode must NOT be adopted as a
     provisional family — it vetoes to REVIEW (ADR-0019 rule 3: never guess
     against contradicting evidence). This is the only rung where the veto
     compares the DECODER's capacity, not a catalog spec's."""
-    listing = _listing(site, "cap-veto-1", "WD Red 8TB WD20EFRX SATA NAS Hard Drive")
+    listing = _listing(site, "cap-veto-1", "WD Red Plus 8TB WD20EFZX SATA NAS Hard Drive")
     CatalogResolver().resolve_listing(listing.pk)
     edge = _edge(listing, is_current=True)
     assert edge.grain == ResolutionGrain.NONE  # not accepted as a provisional family
@@ -495,3 +495,81 @@ def test_listing_delete_is_blocked_by_supersede_chain(
 
     with pytest.raises(ProtectedError):
         listing.delete()  # cascade to a protected edge → blocked, by design
+
+
+def test_comparison_only_mpn_persists_no_edge_to_the_cited_model(site: SourceSite) -> None:
+    """MS-1e ebay-0021 (owner-confirmed false positive): a white-label drive
+    'Comparable to ST16000NM002G' names a Seagate MPN it is NOT. Even with that
+    MPN seeded as a catalog-authoritative alias — the strongest rung-1 bait —
+    the listing must resolve to nothing: no model, variant, or family edge,
+    because a false merge poisons the cited model's price history (ADR-0019)."""
+    cited = _seed_alias_for("ST16000NM002G")
+    listing = _listing(
+        site,
+        "ref-1",
+        'WL OEM 16TB 7.2K RPM SAS 12Gb/s 3.5" HDD - Comparable to ST16000NM002G',
+    )
+    CatalogResolver().resolve_listing(listing.pk)
+    listing.refresh_from_db()
+    assert listing.resolution_grain == ResolutionGrain.NONE
+    assert listing.product_family is None
+    assert listing.product_model is None
+    assert listing.product_variant is None
+    edge = _edge(listing, is_current=True)
+    assert edge.grain == ResolutionGrain.NONE
+    assert edge.evidence["outcome"] == "none"
+    assert edge.product_model is None and edge.product_variant is None
+    assert edge.product_family is None
+    assert not ProductVariant.objects.filter(product_model=cited).exists()
+    assert not ProductFamily.objects.exists()  # no provisional family materialized
+
+
+def test_direct_listing_of_the_same_mpn_still_resolves(site: SourceSite) -> None:
+    """Control for the comparison case: the same seeded MPN as the listing's own
+    identity keeps the normal rung-1 path."""
+    model = _seed_alias_for("ST16000NM002G")
+    listing = _listing(site, "ref-2", "Seagate Exos X16 16TB SAS ST16000NM002G Recertified")
+    CatalogResolver().resolve_listing(listing.pk)
+    listing.refresh_from_db()
+    assert listing.resolution_grain == ResolutionGrain.VARIANT
+    assert listing.product_variant is not None
+    assert listing.product_variant.product_model == model
+
+
+# MS-1e ghd-0006 verbatim: an owner-confirmed false merge under matcher 2026.09.1,
+# which auto-accepted this Constellation ES listing at rung 2 as Seagate/Exos.
+_GHD_0006 = (
+    "Seagate Constellation ES.3 ST1000NM0001 1TB 7200 RPM 128MB Cache SAS 6Gb/s "
+    '3.5" Enterprise Internal Hard Drive (Refurbished) - 3 Year Warranty'
+)
+
+
+def test_seagate_nm_mpn_without_catalog_alias_persists_no_family(site: SourceSite) -> None:
+    listing = _listing(site, "ghd-0006", _GHD_0006)
+    CatalogResolver().resolve_listing(listing.pk)
+    listing.refresh_from_db()
+    assert listing.resolution_grain == ResolutionGrain.NONE
+    assert listing.product_family is None
+    edge = _edge(listing, is_current=True)
+    assert edge.grain == ResolutionGrain.NONE
+    assert edge.product_family is None
+    assert edge.evidence["outcome"] == "none"
+    assert not ProductFamily.objects.exists()  # no provisional 'exos' materialized
+    # The edge is stamped with the matcher that stopped asserting nm → Exos, so
+    # a re-resolution diff can tell these apart from 2026.09.1 edges.
+    assert edge.matcher_version == MATCHER_VERSION == "2026.09.2"
+
+
+def test_exact_catalog_alias_still_resolves_an_nm_mpn_at_rung1(site: SourceSite) -> None:
+    """Grammar no longer names a family for ST…NM…, so identity for Exos drives
+    comes only from the catalog: an exact alias must still win at rung 1."""
+    model = _seed_alias_for("ST16000NM001G")
+    listing = _listing(site, "exos-alias", "Seagate Exos X16 16TB ST16000NM001G SATA")
+    CatalogResolver().resolve_listing(listing.pk)
+    listing.refresh_from_db()
+    assert listing.resolution_grain == ResolutionGrain.MODEL
+    assert listing.product_model == model
+    edge = _edge(listing, is_current=True)
+    assert edge.method == ResolutionMethod.EXACT_ALIAS
+    assert edge.evidence["rung"] == 1
+    assert edge.matcher_version == MATCHER_VERSION

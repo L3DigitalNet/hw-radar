@@ -27,13 +27,13 @@ def test_every_alias_is_normalize_alias_text_of_its_raw_form() -> None:
 
 def test_repo_seed_corpus_totals() -> None:
     docs = load_seed_documents()
-    # Drive-scoped assertions are unchanged from before the MS-2 multi-category
-    # corpus landed (B4c) — kept exact so a drive-seed regression still fails
-    # here, independent of how the non-drive corpus grows.
+    # Drive-scoped assertions stay separate from the whole-corpus numbers and
+    # exact, so a drive-seed regression fails here independent of how the
+    # non-drive corpus grows; a drive seed addition updates them in its commit.
     drive = [d for d in docs if d.category == "drive"]
     assert {d.manufacturer_key for d in drive} == {"seagate", "western_digital"}
-    assert sum(len(d.models) for d in drive) == 15
-    assert sum(len(m.aliases) for d in drive for m in d.models) == 17
+    assert sum(len(d.models) for d in drive) == 268
+    assert sum(len(m.aliases) for d in drive for m in d.models) == 284
 
     # Whole-corpus snapshot (B4c): exact per this task's committed seed set.
     # A future seed addition updates these four numbers in the same commit.
@@ -45,9 +45,9 @@ def test_repo_seed_corpus_totals() -> None:
         "nvidia",
         "micron",
     }
-    assert sum(len(d.models) for d in docs) == 34
-    assert sum(len(m.aliases) for d in docs for m in d.models) == 52
+    assert sum(len(d.models) for d in docs) == 287
+    assert sum(len(m.aliases) for d in docs for m in d.models) == 319
     by_category: dict[str, int] = {}
     for doc in docs:
         by_category[doc.category] = by_category.get(doc.category, 0) + len(doc.models)
-    assert by_category == {"drive": 15, "cpu": 9, "gpu": 8, "ram": 2}
+    assert by_category == {"drive": 268, "cpu": 9, "gpu": 8, "ram": 2}

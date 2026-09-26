@@ -1,21 +1,23 @@
 """MS-1 acceptance GATE (spec §19, minus MS-1e ratification).
 
-This is an integration suite, not new product code: it drives the five landed
-connectors end-to-end through the real `run_source` pipeline and asserts the
-spec's cross-cutting acceptance invariants against persisted DB state.
+This is an integration suite, not new product code: it drives the three
+collectable connectors end-to-end through the real `run_source` pipeline and
+asserts the spec's cross-cutting acceptance invariants against persisted DB
+state. ServerPartDeals and Seagate Recertified are retired (OQ31): the gate now
+pins that run_source refuses them, and their parsers are covered offline by
+their own DB test modules.
 
 The synthetic request/response bodies are copied verbatim from each connector's
 own DB test (OQ8: never captured live — no real creds, no live network) so this
 file is self-contained and the acceptance contract does not silently drift from
 a sibling test module's private fixtures. Origin per source:
-  - serverpartdeals: tests/db/test_source_serverpartdeals.py (Shopify products.json)
   - goharddrive:     tests/fixtures/ms1d/goharddrive_category.html (Scrapy file://)
   - wd-recertified:  tests/db/test_source_wd.py (two-step OCC search+product)
-  - seagate:         tests/db/test_source_seagate.py (bootstrap-JSON HTML)
   - ebay:            tests/db/test_source_ebay.py (OAuth token + Browse)
 
-The five cases:
-  1. >=1 normalized listing per source on a synthetic run (all 5 adapters).
+The cases:
+  0. Retired sources (OQ31) are refused by run_source before any run row.
+  1. >=1 normalized listing per source on a synthetic run (every active adapter).
   2. FX stamping (FR-004): a non-USD eBay item carries fx_rate/fx_pair/
      fx_rate_date + non-null usd_item_price and is_international; a USD item
      stamps identity (rate 1.0, USD/USD).
@@ -24,7 +26,7 @@ The five cases:
   4. Per-grain counts (E1 contract): detail_json["grain_counts"] sums to
      records_valid for every run.
   5. Live CatalogResolver integration (CR-007): the catalog is seeded IN-TEST
-     (import_refdata) and a ServerPartDeals listing whose title carries a seeded
+     (import_refdata) and an eBay listing whose title carries a seeded
      Exos MPN resolves through the REAL CatalogResolver to a non-`none` grain —
      proving the adapter->resolver->grain path resolves, not merely executes.
 """
@@ -40,7 +42,8 @@ import httpx
 import pytest
 from django.core.management import call_command
 
-from hw_radar.acquisition.contracts import NullResolver
+from hw_radar.acquisition.admission import RetiredSourceError
+from hw_radar.acquisition.contracts import ListingResolver, NullResolver
 from hw_radar.acquisition.pipeline import run_source
 from hw_radar.acquisition.sources.ebay import (
     _TOKEN_CACHE,  # pyright: ignore[reportPrivateUsage]
@@ -75,26 +78,6 @@ GOHD_FIXTURE = (
 _NONE_GRAIN = str(ResolutionGrain.NONE)
 _MODEL_GRAIN = str(ResolutionGrain.MODEL)
 _VARIANT_GRAIN = str(ResolutionGrain.VARIANT)
-
-# --- serverpartdeals: synthetic Shopify products.json (two variants) ---------
-SPD_PRODUCTS: dict[str, object] = {
-    "products": [
-        {
-            "title": "Seagate Exos X20 20TB Recertified",
-            "handle": "exos-x20-20tb-recert",
-            "variants": [
-                {"id": 111, "sku": "ST20000NM002D-RECERT", "price": "279.99", "available": True}
-            ],
-        },
-        {
-            "title": "WD Ultrastar DC HC560 20TB Recertified",
-            "handle": "hc560-20tb-recert",
-            "variants": [
-                {"id": 222, "sku": "WUH722020BLE-RECERT", "price": "289.99", "available": False}
-            ],
-        },
-    ]
-}
 
 # --- wd-recertified: synthetic OCC search sweeps + per-product bodies ---------
 # The WD adapter now runs three independent search sweeps (consumer query +
@@ -146,17 +129,6 @@ WD_PRODUCTS: dict[str, dict[str, object]] = {
     },
 }
 
-# --- seagate: synthetic category page with a <script id="sku-bootstrap-data">
-SEAGATE_HTML = """
-<html><body>
-<div id="product-grid">Exos Recertified</div>
-<script id="sku-bootstrap-data" type="application/json">
-{"ST16000NM002C": {"final_price": 349.99, "stock_status": "IN_STOCK"},
- "ST18000NM004C": {"final_price": 419.99, "stock_status": "BACKORDER"}}
-</script>
-</body></html>
-"""
-
 # --- ebay: synthetic Browse item_summary/search (US + GBP shipping-from-GB) ---
 EBAY_SEARCH: dict[str, object] = {
     "itemSummaries": [
@@ -187,18 +159,20 @@ EBAY_TOKEN: dict[str, object] = {
 }
 GBP_USD_RATE = Decimal("1.270000")
 
-# Case 5: a ServerPartDeals product whose TITLE carries a seeded Exos MPN
-# (ST16000NM002C is a first-party alias in seagate-exos-recertified.json). The
-# resolver decodes the MPN token from title_raw and hits the seeded alias, so
-# this drives a real adapter->CatalogResolver->grain resolution, not a no-op.
-CATALOG_HIT_PRODUCTS: dict[str, object] = {
-    "products": [
+# Case 5: an eBay item whose TITLE carries a seeded Exos MPN (ST16000NM002C is a
+# first-party alias in seagate-exos-recertified.json). The resolver decodes the
+# MPN token from title_raw and hits the seeded alias, so this drives a real
+# adapter->CatalogResolver->grain resolution, not a no-op.
+CATALOG_HIT_SEARCH: dict[str, object] = {
+    "itemSummaries": [
         {
+            "itemId": "v1|110500000900|0",
             "title": "Seagate Exos ST16000NM002C 16TB SATA 512e Recertified Enterprise HDD",
-            "handle": "exos-st16000nm002c-16tb",
-            "variants": [
-                {"id": 900, "sku": "ST16000NM002C-RECERT", "price": "199.99", "available": True}
-            ],
+            "itemWebUrl": "https://www.ebay.com/itm/110500000900",
+            "price": {"value": "199.99", "currency": "USD"},
+            "shippingOptions": [{"shippingCost": {"value": "0.00", "currency": "USD"}}],
+            "itemLocation": {"country": "US"},
+            "seller": {"username": "diskdeals_us"},
         }
     ]
 }
@@ -229,15 +203,6 @@ def ebay_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     _TOKEN_CACHE.clear()
 
 
-def _spd_transport(body: dict[str, object]) -> httpx.MockTransport:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/robots.txt":
-            return httpx.Response(200, text="User-agent: *\nDisallow: /admin\n")
-        return httpx.Response(200, json=body)
-
-    return httpx.MockTransport(handler)
-
-
 def _wd_transport() -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -258,33 +223,16 @@ def _wd_transport() -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-def _seagate_transport() -> httpx.MockTransport:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/robots.txt":
-            return httpx.Response(200, text="User-agent: *\nCrawl-delay: 20\n")
-        return httpx.Response(200, text=SEAGATE_HTML, headers={"content-type": "text/html"})
-
-    return httpx.MockTransport(handler)
-
-
-def _ebay_transport() -> httpx.MockTransport:
+def _ebay_transport(search: dict[str, object] = EBAY_SEARCH) -> httpx.MockTransport:
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == "/identity/v1/oauth2/token":
             return httpx.Response(200, json=EBAY_TOKEN)
         if path == "/buy/browse/v1/item_summary/search":
-            return httpx.Response(200, json=EBAY_SEARCH)
+            return httpx.Response(200, json=search)
         return httpx.Response(404)
 
     return httpx.MockTransport(handler)
-
-
-def _run_serverpartdeals(loop: asyncio.AbstractEventLoop) -> ScraperRun:
-    adapter = ServerPartDealsAdapter(
-        client=httpx.AsyncClient(transport=_spd_transport(SPD_PRODUCTS))
-    )
-    run, _ = loop.run_until_complete(run_source(adapter, NullResolver()))
-    return run
 
 
 def _run_goharddrive(loop: asyncio.AbstractEventLoop) -> ScraperRun:
@@ -301,13 +249,11 @@ def _run_wd(loop: asyncio.AbstractEventLoop) -> ScraperRun:
     return run
 
 
-def _run_seagate(loop: asyncio.AbstractEventLoop) -> ScraperRun:
-    adapter = SeagateAdapter(client=httpx.AsyncClient(transport=_seagate_transport()))
-    run, _ = loop.run_until_complete(run_source(adapter, NullResolver()))
-    return run
-
-
-def _run_ebay(loop: asyncio.AbstractEventLoop) -> ScraperRun:
+def _run_ebay(
+    loop: asyncio.AbstractEventLoop,
+    search: dict[str, object] = EBAY_SEARCH,
+    resolver: ListingResolver | None = None,
+) -> ScraperRun:
     # Pre-seed the GBP->USD daily rate so fx.stamp hits cache — the GBP item
     # would otherwise trip _normalize into a live Frankfurter fetch.
     FxRateDaily.objects.get_or_create(
@@ -316,11 +262,11 @@ def _run_ebay(loop: asyncio.AbstractEventLoop) -> ScraperRun:
         quote="USD",
         defaults={"rate": GBP_USD_RATE},
     )
-    adapter = EbayAdapter(client=httpx.AsyncClient(transport=_ebay_transport()))
+    adapter = EbayAdapter(client=httpx.AsyncClient(transport=_ebay_transport(search)))
     run, _ = loop.run_until_complete(
         run_source(
             adapter,
-            NullResolver(),
+            resolver if resolver is not None else NullResolver(),
             retention_class=EbayAdapter.retention_class,
             expires_policy=EbayAdapter.expires_policy,
         )
@@ -332,10 +278,8 @@ def _run_ebay(loop: asyncio.AbstractEventLoop) -> ScraperRun:
 # SourceSite key each adapter resolves against.
 SourceRunner = Callable[[asyncio.AbstractEventLoop], ScraperRun]
 SOURCE_RUNNERS: list[tuple[str, SourceRunner]] = [
-    ("serverpartdeals", _run_serverpartdeals),
     ("goharddrive", _run_goharddrive),
     ("wd-recertified", _run_wd),
-    ("seagate-recertified", _run_seagate),
     ("ebay", _run_ebay),
 ]
 
@@ -346,6 +290,35 @@ def _grain_counts_of(run: ScraperRun) -> dict[str, int]:
     return cast("dict[str, int]", raw)
 
 
+def _no_network() -> httpx.AsyncClient:
+    # Injected so a regressed guard fails this test instead of reaching the live
+    # retired site (a default-constructed adapter would open a real client).
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"retired adapter sent {request.url}")
+
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.parametrize(
+    ("source_key", "factory"),
+    [
+        ("serverpartdeals", lambda: ServerPartDealsAdapter(client=_no_network())),
+        ("seagate-recertified", lambda: SeagateAdapter(client=_no_network())),
+    ],
+    ids=["serverpartdeals", "seagate-recertified"],
+)
+def test_case0_retired_sources_are_refused(
+    source_key: str,
+    factory: Callable[[], ServerPartDealsAdapter | SeagateAdapter],
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    """Case 0 (OQ31): run_source refuses a retired connector before any
+    ScraperRun row, so no acceptance path can collect from it."""
+    with pytest.raises(RetiredSourceError):
+        loop.run_until_complete(run_source(factory(), NullResolver()))
+    assert not ScraperRun.objects.filter(source_site__normalized_name=source_key).exists()
+
+
 @pytest.mark.parametrize(
     ("source_key", "runner"), SOURCE_RUNNERS, ids=[k for k, _ in SOURCE_RUNNERS]
 )
@@ -354,7 +327,7 @@ def test_case1_at_least_one_listing_per_source(
     runner: SourceRunner,
     loop: asyncio.AbstractEventLoop,
 ) -> None:
-    """Case 1: each of the five connectors, driven through run_source with a
+    """Case 1: each active connector, driven through run_source with a
     synthetic client/fixture, produces at least one persisted Listing."""
     run = runner(loop)
     assert run.status == RunStatus.SUCCESS
@@ -406,19 +379,19 @@ def test_case2_fx_stamping_non_usd_and_usd_identity(loop: asyncio.AbstractEventL
 def test_case3_append_not_duplicate(loop: asyncio.AbstractEventLoop) -> None:
     """Case 3 (DR-005): re-running the same source appends a second OfferSnapshot
     per listing and leaves the Listing rows untouched (no duplicate listings)."""
-    run1 = _run_serverpartdeals(loop)
+    run1 = _run_wd(loop)
     assert run1.status == RunStatus.SUCCESS
     listings_after_first = Listing.objects.filter(
-        source_site__normalized_name="serverpartdeals"
+        source_site__normalized_name="wd-recertified"
     ).count()
     assert listings_after_first >= 1
-    sample = Listing.objects.get(source_listing_key="exos-x20-20tb-recert:111")
+    sample = Listing.objects.get(source_listing_key="RWDBBGB0040HBK-NESN")
     assert OfferSnapshot.objects.filter(listing=sample).count() == 1
 
-    run2 = _run_serverpartdeals(loop)
+    run2 = _run_wd(loop)
     assert run2.status == RunStatus.SUCCESS
     assert (
-        Listing.objects.filter(source_site__normalized_name="serverpartdeals").count()
+        Listing.objects.filter(source_site__normalized_name="wd-recertified").count()
         == listings_after_first
     )  # unchanged: upsert on (source_site, source_listing_key)
     assert OfferSnapshot.objects.filter(listing=sample).count() == 2  # +1 appended
@@ -428,16 +401,13 @@ def test_case5_live_catalog_resolver_resolves_non_none_grain(
     loop: asyncio.AbstractEventLoop,
 ) -> None:
     """Case 5 (CR-007): the catalog is NOT migration-seeded — seed it in-test via
-    import_refdata, then run a ServerPartDeals listing whose title carries the
+    import_refdata, then run an eBay listing whose title carries the
     seeded Exos MPN ST16000NM002C through the REAL CatalogResolver. The run must
     succeed AND grain_counts must show a non-`none` grain, proving the
     adapter->resolver->grain path resolves rather than merely executing."""
     call_command("import_refdata")  # seeds the MS-1c corpus (Seagate Exos, WD Ultrastar)
 
-    adapter = ServerPartDealsAdapter(
-        client=httpx.AsyncClient(transport=_spd_transport(CATALOG_HIT_PRODUCTS))
-    )
-    run, _ = loop.run_until_complete(run_source(adapter, CatalogResolver()))
+    run = _run_ebay(loop, CATALOG_HIT_SEARCH, CatalogResolver())
     assert run.status == RunStatus.SUCCESS
     assert run.detail_json["resolver_errors"] == 0
 
@@ -449,7 +419,7 @@ def test_case5_live_catalog_resolver_resolves_non_none_grain(
     # resolves to model grain, upgraded to variant on demand once the
     # "Recertified" condition is normalized (C.3.3). Either grain reaches the
     # seeded Exos model — via the model FK (MODEL) or the variant FK (VARIANT).
-    listing = Listing.objects.get(source_listing_key="exos-st16000nm002c-16tb:900")
+    listing = Listing.objects.get(source_listing_key="v1|110500000900|0")
     assert listing.resolution_grain in (_MODEL_GRAIN, _VARIANT_GRAIN)
     resolved_model = listing.product_model or (
         listing.product_variant.product_model if listing.product_variant is not None else None

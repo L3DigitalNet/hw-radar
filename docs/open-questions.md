@@ -17,112 +17,12 @@
 
 ## Open questions
 
-Three decisions remain open. OQ24 was raised by the 2026-09-24 MS-2 multi-category watch-core
-plan and its session-2 owner review; OQ25–OQ29, the other five questions from that review, were
-owner-resolved 2026-09-25 and relocated to [`resolved-questions.md`](resolved-questions.md).
-OQ31 and OQ32 were raised 2026-09-25 by the source-terms review and the MS-1e harvest.
-
-### OQ24 — Production Actor-backed merchant source admission
-
-**From:** the MS-2 plan (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`,
-MS2-D-44, task F5b). **Decision needed:** which merchant source, if any, Hardware Radar may
-collect through its own private Apify Actor in production, decided per candidate from a
-source-admission record (`docs/research/source-admission/`) with a recommendation of
-`eligible | permission-required | exclude`.
-
-#### Agent notes
-
-- Narrowed 2026-09-24 (owner split). The first Actor proof no longer needs this answer: it uses
-  a controlled synthetic source, recorded in
-  [`resolved-questions.md`](resolved-questions.md#oq24-part-a--first-actor-proof-uses-a-controlled-synthetic-source).
-- Newegg is excluded: its Terms of Use prohibit automated access/scraping "for any purpose"
-  (retrieved 2026-09-24).
-- Other candidates (B&H, ServerPartDeals, refurbished server-parts sellers) each need an
-  admission record first. Robots permission is not contractual permission, and the absence of an
-  obvious prohibition is not permission. A source needing residential proxies, proxy rotation,
-  CAPTCHA solving, paid unblockers, or paid third-party Actors fails admission. Bounded-retention
-  sources also need a verified per-run storage expiry (plan risk R20).
-- Existing local connectors are not grandfathered into an Actor path; a conflict found for an
-  existing disabled connector is recorded separately.
-- 2026-09-25 admission records (`docs/research/source-admission/2026-09-25-*.md`); none reached
-  `eligible`, so no candidate is ready for F5b:
-
-  | Candidate | Categories | Terms on automated access | Recommendation |
-  | --- | --- | --- | --- |
-  | ServerPartDeals | drive, RAM, some GPU | prohibits scraping and "any automated use" | `exclude` |
-  | B&H Photo Video | GPU, RAM, CPU, drive | prohibits robots/spiders/scrapers "to … monitor the website" | `exclude` |
-  | Micro Center | GPU, RAM, CPU, drive | no scraping clause; licence is "personal, non-commercial" only | `permission-required` |
-  | ServerMonkey | drive, RAM, CPU (refurbished server parts) | terms and robots.txt unreadable to automated fetches (403) | `permission-required` |
-  | SabrePC | GPU, CPU, RAM, drive | terms page renders only in a browser; not read | `permission-required` |
-
-  Quick rejects: Amazon and Best Buy offer official APIs, so an Actor is the wrong tool; Newegg is
-  already excluded. `permission-required` means written permission from the merchant (or a
-  human read of the terms, for the two unreadable ones) before any record can become `eligible`.
-
-#### My Comments
-
-_(none yet)_
-
----
-
-### OQ31 — Existing local connectors whose Terms prohibit automated access
-
-**From:** the 2026-09-25 terms review of the MS-1d connectors
-([`docs/research/2026-09-25-local-connector-terms-review.md`](research/2026-09-25-local-connector-terms-review.md)).
-**Decision needed:** what happens to the disabled local ServerPartDeals and Seagate-recertified
-connectors, whose current Terms prohibit the automated collection they perform.
-
-#### Agent notes
-
-- ServerPartDeals Terms (retrieved 2026-09-25): prohibited uses include "(i) to spam, phish,
-  pharm, pretext, spider, crawl, or scrape" and "(l) to make any automated use of the Service";
-  Section 13 bars "reproduction of product listings, pricing data, or images for competitive
-  purposes".
-- Seagate website Terms (last updated 2024-07-24): users agree not to "use any robot, spider, site
-  search/retrieval application, or other manual or automatic device or process to retrieve, index,
-  'data mine,' …" any content, and site use is limited to "personal, non-commercial use".
-- goHardDrive and WD: no automated-access clause found (not the same as permission).
-- Both connectors are disabled in production and have never run there. Neither was harvested for
-  MS-1e on 2026-09-25.
-- Consequences if they stay unusable: the SA-004 enable order in `docs/handoff/deployed.md` starts
-  with ServerPartDeals, and the MS-1e ratification gate requires a family-grain hit from each of
-  five named sources, including both (see OQ32). The same order enables eBay last, after the other
-  four, yet eBay is the only source with GPU/RAM/CPU sweeps. With ServerPartDeals and Seagate
-  blocked, a category source cannot go live unless the owner also revises that order.
-- Options: (a) retire both connectors (remove from the registry and enable order; keep code history);
-  (b) keep them disabled pending written permission from each merchant; (c) owner accepts the risk
-  for a private, low-volume personal tool (not recommended: the clauses are explicit).
-  Recommendation: (b) now, falling back to (a) if no permission is sought.
-
-#### My Comments
-
-_(none yet)_
-
----
-
-### OQ32 — MS-1e ratification gate when two named sources are unusable
-
-**From:** the 2026-09-25 MS-1e harvest and audit-packet preparation
-([`docs/evidence/2026-09-25-ms1e-audit-packet.md`](evidence/2026-09-25-ms1e-audit-packet.md)).
-**Decision needed:** how the ADR 0019 drive-matcher ratification gate should treat the
-per-source floor and corpus size when ServerPartDeals and Seagate cannot be harvested (OQ31).
-
-#### Agent notes
-
-- The accepted gate (`src/hw_radar/matching/eval/report.py`, design §5) needs ≥100 auto-accepts,
-  precision ≥99.5%, a family-grain hit from every one of the five sources, a passing audit gate,
-  and a green rung-0 suite, all in one full test run.
-- With only eBay, goHardDrive, and WD usable, the five-source floor cannot pass by construction.
-  The audit packet reports the provisional metrics and the exact shortfall.
-- Options: (a) re-scope the floor to the sources that are usable (a design change the owner must
-  approve, recorded as an ADR 0019 note); (b) keep the gate unchanged and wait for OQ31 permissions;
-  (c) widen the harvest (e.g. more eBay drive queries) to reach the auto-accept minimum.
-
-#### My Comments
-
-_(none yet)_
-
----
+No decisions are currently open. OQ24, OQ31, and OQ32 — the production Actor-backed merchant
+source fork, the ServerPartDeals/Seagate Terms conflict, and the MS-1e ratification-gate floor —
+were owner-resolved 2026-09-26 and relocated to [`resolved-questions.md`](resolved-questions.md).
+OQ25–OQ29, five other questions from the same 2026-09-24 MS-2 session-2 review that raised OQ24,
+were owner-resolved 2026-09-25 and relocated there earlier. When a new question is raised, add it
+here per [How to maintain this document](#how-to-maintain-this-document).
 
 All five questions raised by the **2026-07-04 spec gap analysis**
 (OQ16–OQ20) were owner-resolved 2026-07-04 and relocated to
@@ -134,8 +34,10 @@ owner-resolved 2026-09-06 and relocated to
 [`resolved-questions.md`](resolved-questions.md#oq22--retention-class-and-expires_at-policy-for-resolver-learned-listing_derived-productalias-rows). OQ23 (Apify base fee vs the
 $20/month ceiling) was owner-resolved 2026-09-24 and relocated to
 [`resolved-questions.md`](resolved-questions.md#oq23--apify-paid-plan-base-fee-vs-the-20month-hardware-radar-ceiling);
-OQ24 was split the same day, with its first-proof half relocated there and only the
-production-source fork left open above. OQ25 (Apify credential and MCP tool scope), OQ26
+OQ24 was split the same day, with its first-proof half relocated there; the production-source
+fork was owner-resolved 2026-09-26 and relocated to
+[`resolved-questions.md`](resolved-questions.md#oq24--production-actor-backed-merchant-source-admission)
+(see above). OQ25 (Apify credential and MCP tool scope), OQ26
 (external-liability bound), OQ27 (retention class for non-first-party reference data), OQ28
 (MS-2 exit on the synthetic proof alone), and OQ29 (operator allowance size) were
 owner-resolved 2026-09-25 and relocated to

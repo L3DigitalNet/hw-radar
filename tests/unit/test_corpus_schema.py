@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from hw_radar.acquisition.sources import ADAPTERS, FIXTURE_SOURCE_KEYS
+from hw_radar.acquisition.sources import ADAPTERS, FIXTURE_SOURCE_KEYS, RETIRED_ADAPTERS
 from hw_radar.matching.eval.corpus import (
     CORPUS_SOURCE_KEYS,
     AuditStatus,
@@ -21,6 +21,7 @@ from hw_radar.matching.eval.corpus import (
     load_corpus,
     load_meta,
     select_audit_sample,
+    validate_declared_sources,
 )
 
 FIXTURE_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "matching_corpus"
@@ -121,9 +122,11 @@ def test_unknown_source_key_is_rejected(source: str) -> None:
 
 def test_source_whitelist_tracks_the_adapter_registry() -> None:
     """Cross-file contract with `acquisition.sources.ADAPTERS`: the corpus keys are
-    the real registry keys minus the fixture adapters (`demo`, `synthetic`), which
-    never harvest."""
-    assert frozenset(ADAPTERS) - FIXTURE_SOURCE_KEYS == CORPUS_SOURCE_KEYS
+    the real registry keys, schedulable plus OQ31-retired (whose historical
+    entries must stay loadable), minus the fixture adapters (`demo`,
+    `synthetic`), which never harvest."""
+    registry = frozenset(ADAPTERS) | frozenset(RETIRED_ADAPTERS)
+    assert registry - FIXTURE_SOURCE_KEYS == CORPUS_SOURCE_KEYS
     assert len(CORPUS_SOURCE_KEYS) == 5
 
 
@@ -253,6 +256,8 @@ def test_synthetic_meta_matches_the_fixture() -> None:
     for entry in entries:
         counts[entry.source] = counts.get(entry.source, 0) + 1
     assert meta.source_counts == counts
+    # validate_declared_sources would refuse the fixture otherwise.
+    assert set(meta.ratification_sources or ()) == set(counts)
     assert sum(meta.audit_rollup.values()) == len(entries)
     assert meta.harvested_to >= meta.harvested_from
 
@@ -344,3 +349,29 @@ def test_audit_status_values_are_the_design_set() -> None:
         "owner_confirmed",
         "owner_corrected",
     }
+
+
+def test_meta_without_oq32_fields_still_loads(tmp_path: Path) -> None:
+    """Pre-OQ32 manifests load for measurement; the gate, not the loader, fails them."""
+    meta = load_meta(_write_meta(tmp_path))
+    assert meta.ratification_sources is None
+    assert meta.refdata_drive_digest is None
+
+
+def test_meta_rejects_a_declared_source_outside_the_whitelist(tmp_path: Path) -> None:
+    with pytest.raises(CorpusFormatError):
+        load_meta(_write_meta(tmp_path, ratification_sources=["ebay", "amazon", "goharddrive"]))
+
+
+@pytest.mark.parametrize("digest", ["", "abc", "A" * 64, "g" * 64])
+def test_meta_rejects_a_malformed_refdata_digest(tmp_path: Path, digest: str) -> None:
+    with pytest.raises(CorpusFormatError):
+        load_meta(_write_meta(tmp_path, refdata_drive_digest=digest))
+
+
+def test_undeclared_entry_source_names_the_source(tmp_path: Path) -> None:
+    entries = load_corpus(SYNTHETIC_JSONL)
+    meta = load_meta(_write_meta(tmp_path, ratification_sources=["ebay", "goharddrive"]))
+    with pytest.raises(CorpusFormatError, match="serverpartdeals") as caught:
+        validate_declared_sources(entries, meta)
+    assert "ebay" not in str(caught.value)

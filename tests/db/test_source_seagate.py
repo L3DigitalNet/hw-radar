@@ -1,4 +1,5 @@
 import asyncio
+import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
 
@@ -6,10 +7,11 @@ import httpx
 import pytest
 
 from hw_radar.acquisition import http
+from hw_radar.acquisition.admission import RETIRED_REASON, RetiredSourceError
 from hw_radar.acquisition.contracts import NullResolver, RawBatch, RawItem
 from hw_radar.acquisition.pipeline import run_source
 from hw_radar.acquisition.sources.seagate import CATEGORY_URL, MIN_INTERVAL_S, SeagateAdapter
-from hw_radar.catalog.models import Listing, OfferSnapshot, RunStatus, StockStatus
+from hw_radar.catalog.models import Listing, ScraperRun, StockStatus
 
 pytestmark = pytest.mark.django_db(transaction=True, serialized_rollback=True)
 
@@ -39,43 +41,68 @@ def loop() -> Iterator[asyncio.AbstractEventLoop]:
     lo.close()
 
 
-def _mock() -> httpx.MockTransport:
+def _recording_client() -> tuple[httpx.AsyncClient, list[httpx.Request]]:
+    # Answers every request as the real site would, so a missing guard shows up
+    # as a recorded request (and a successful run) rather than a transport error
+    # that could be mistaken for the refusal.
+    seen: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
         if request.url.path == "/robots.txt":
-            # www.seagate.com allows the category page but publishes a
-            # Crawl-delay we must respect (MIN_INTERVAL_S documents the floor).
             return httpx.Response(200, text="User-agent: *\nCrawl-delay: 20\n")
         return httpx.Response(200, text=SYNTHETIC_HTML, headers={"content-type": "text/html"})
 
-    return httpx.MockTransport(handler)
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler)), seen
 
 
-def test_seagate_persists_two_skus(loop: asyncio.AbstractEventLoop) -> None:
-    adapter = SeagateAdapter(client=httpx.AsyncClient(transport=_mock()))
-    run, _ = loop.run_until_complete(run_source(adapter, NullResolver()))
-    assert run.status == RunStatus.SUCCESS
-    assert run.records_valid == 2
-    assert run.records_fetched == 1  # single category-page GET
-    listings = Listing.objects.filter(source_site__normalized_name="seagate-recertified")
-    assert listings.count() == 2
-
-    in_stock = OfferSnapshot.objects.get(listing__source_listing_key="ST16000NM002C")
-    assert in_stock.stock_status == StockStatus.IN_STOCK
-    backorder = OfferSnapshot.objects.get(listing__source_listing_key="ST18000NM004C")
-    assert backorder.stock_status != StockStatus.IN_STOCK
-    assert backorder.stock_status == StockStatus.OUT_OF_STOCK
+# OQ31: the adapter is retained only for its offline parser. Every network entry
+# point must refuse before a request, whoever calls it.
 
 
-def test_probe_returns_heartbeat_readings(loop: asyncio.AbstractEventLoop) -> None:
-    # HeartbeatProbe contract (migration 0011 flips heartbeat_enabled=True for
-    # this source): probe() must reuse fetch()+parse() to yield one cheap
-    # reading per SKU, with no DB writes.
-    adapter = SeagateAdapter(client=httpx.AsyncClient(transport=_mock()))
-    readings = loop.run_until_complete(adapter.probe())
-    assert {r.source_sku for r in readings} == {"ST16000NM002C", "ST18000NM004C"}
-    backorder = next(r for r in readings if r.source_sku == "ST18000NM004C")
-    assert backorder.stock_status == StockStatus.OUT_OF_STOCK
-    assert all(r.endpoint == CATEGORY_URL for r in readings)
+def test_fetch_refuses_retired_source_without_a_request(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    client, seen = _recording_client()
+    with pytest.raises(RetiredSourceError, match="seagate-recertified is retired / permission"):
+        loop.run_until_complete(SeagateAdapter(client=client).fetch())
+    assert seen == []
+
+
+def test_probe_refuses_retired_source_without_a_request(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    client, seen = _recording_client()
+    with pytest.raises(RetiredSourceError, match=re.escape(RETIRED_REASON)):
+        loop.run_until_complete(SeagateAdapter(client=client).probe())
+    assert seen == []
+
+
+def test_run_source_refuses_before_a_run_row_or_request(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    client, seen = _recording_client()
+    runs_before = ScraperRun.objects.count()
+    with pytest.raises(RetiredSourceError):
+        loop.run_until_complete(run_source(SeagateAdapter(client=client), NullResolver()))
+    assert ScraperRun.objects.count() == runs_before
+    assert not Listing.objects.filter(source_site__normalized_name="seagate-recertified").exists()
+    assert seen == []
+
+
+def test_parse_reads_the_synthetic_category_page() -> None:
+    # The happy-path parse the retired live-run test used to cover end to end,
+    # including the non-IN_STOCK mapping SKU B pins.
+    batch = RawBatch(
+        source="seagate-recertified",
+        fetched_at=datetime.now(UTC),
+        items=[RawItem(url=CATEGORY_URL, content_type="text/html", payload_text=SYNTHETIC_HTML)],
+    )
+    parsed = {p.source_listing_key: p for p in SeagateAdapter().parse(batch)}
+    assert set(parsed) == {"ST16000NM002C", "ST18000NM004C"}
+    assert parsed["ST16000NM002C"].stock_status == StockStatus.IN_STOCK
+    assert parsed["ST18000NM004C"].stock_status == StockStatus.OUT_OF_STOCK
+    assert all(p.url == CATEGORY_URL for p in parsed.values())
 
 
 def test_min_interval_s_documents_crawl_delay_floor() -> None:

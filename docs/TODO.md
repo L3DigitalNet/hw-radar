@@ -50,17 +50,16 @@ Instructions for AI agents:
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
   categories and both local + self-owned-Apify provider paths. F1–F3 landed 2026-09-25 (eBay
   category sweeps, `pilot_report`; evidence `docs/evidence/2026-09-25-f1-f3-pilot.md`). Remaining:
-  measure a sustained pilot (more than one run per source), which needs the owner's per-source
-  enablement. Only eBay, goHardDrive, and WD are usable local sources while OQ31 is open, and no
-  Actor-backed merchant is admitted yet (OQ24).
+  measure a sustained pilot (more than one run per source), which needs the owner's per-cell
+  enablement. Only eBay, goHardDrive, and WD are usable local sources — ServerPartDeals and
+  Seagate are retired (OQ31) — and no Actor-backed merchant is admitted yet (OQ24, F5b deferred).
 - [ ] Capture listing condition: the pilot measured 0% condition coverage on every source (eBay
   Browse `condition`/`conditionId` is not mapped). Condition feeds the drive matcher's variant
   grain, so change it only with a `matcher_version` bump after, or together with, the MS-1e
   ratification.
-- [ ] Seed GPU/RAM/CPU reference rows in production (`import_refdata`; production has 0 category
-  spec rows) before any category watch, and extend seeds to cover the chosen F6 product.
-- [ ] Extract the WD part number from the SKU key into `ParsedListing.attrs`; WD titles carry no
-  part number, so WD listings cannot resolve (MS-1e packet finding F2).
+- [ ] Seed CPU reference rows in production (`import_refdata --category cpu`; production has 0
+  category spec rows) before any CPU watch, and extend seeds to cover the chosen F6 EPYC models.
+  GPU/RAM production seeding is deferred until their own pilot/owner gate is scheduled.
 - [x] Coordinate one self-owned private Hardware Radar Actor as the integration proof. **F5a
   executed 2026-09-25** in a non-production proof environment (evidence:
   `docs/evidence/2026-09-25-f5a-synthetic-proof.md`): build `1.0.1`, eleven admitted runs over every
@@ -85,22 +84,22 @@ Instructions for AI agents:
   (`test_provider_switch_preserves_identity_history_and_watch_state`, AC-4).
 - [ ] MS-1e drive-matcher ratification: harvest and draft labels are done (2026-09-25,
   `docs/evidence/2026-09-25-ms1e-audit-packet.md`; provisional FAIL, 17 of 100 required
-  auto-accepts). Waiting on the owner: audit the 36 listed ids; decide the labeling rule (R2),
-  OQ32, whether the `ebay-0021` ("comparable to") and `ghd-0006` (Constellation read as Exos) traps
-  get a veto or grammar fix with a `matcher_version` bump, how to close the WD part-number-in-SKU
-  gap, and which catalog the in-repo gate evaluates against (fixture vs production refdata give
-  opposite answers). Then run the full verification gate and flip ADR-0019 only on a composite PASS.
+  auto-accepts). The `ebay-0021` ("comparable to") and `ghd-0006` (Constellation read as Exos)
+  traps are fixed (`matcher_version` 2026.09.2), the WD SKU→MPN gap is closed, and OQ32 settled the
+  gate on ≥3 declared ratification sources evaluated against production refdata. Waiting on the
+  owner: audit the remaining listed ids and decide the labeling rule (R2). Then run the full
+  verification gate and flip ADR-0019 only on a composite PASS.
 - [ ] Add category-specific validation corpora/gates before auto-accepting GPU/RAM/CPU matches;
   drive-corpus precision does not validate other categories. F4 harvest done 2026-09-25: eBay,
   1,888 unlabeled entries (GPU 851, RAM 991, CPU 16, drive 30) in the git-ignored
   `.harvest/f4-ebay/` on the workstation; regenerate with `manage.py harvest_corpus --source ebay
   --out .harvest/f4-ebay`. Labeling and ratification are owner work (R4); CPU coverage is thin
   because the pilot sweep queries only "EPYC 7302".
-- [ ] Deliberately enable each source × category combination only after its operational,
-  retention/ToS, completeness, match-quality, and cost gates pass. Before the first flip, an
-  operator must check the SA-004 list in `docs/handoff/deployed.md` against the live system (still
-  unchecked). The documented enable order puts eBay last, and eBay is the only category source,
-  so a GPU/RAM/CPU watch also needs the owner to revise that order (recorded with OQ31).
+- [ ] Deliberately admit each `(source, category)` cell in the admission matrix
+  (`src/hw_radar/acquisition/admission.py`) only after its operational, retention/ToS,
+  completeness, match-quality, and cost gates pass, then flip the source's `enabled` bit. Before
+  the first flip, an operator must run the per-cell live checklist in `docs/handoff/deployed.md`
+  against the live system (still unchecked; every cell is `NOT_ADMITTED`).
 - [ ] Re-verify eBay category IDs (27386, 170083, 11210, 164, 56088) through the Taxonomy API
   quarterly and on eBay category-change notices (last 2026-09-25, tree 0, version 134).
 - [ ] Add the remaining SanDisk/WD real-corpus alias verification; blocked on the owner-gated
@@ -123,11 +122,11 @@ Instructions for AI agents:
   multi-category watch-first path is working and real history identifies which category-specific
   scoring work is valuable.
 - [ ] **Deferred with MS-2:** resolve eBay `feedbackScore` semantics before any future MS-2e plan.
-- [ ] **Blocked on owner (OQ24):** rule on the production Actor-backed merchant source.
-  Records from 2026-09-25 are in `docs/research/source-admission/`: ServerPartDeals and B&H are
-  `exclude`; Micro Center, ServerMonkey, and SabrePC are `permission-required`; Newegg was already
-  excluded. No candidate is `eligible`, so F5b cannot start. Plan finding R20: bounded-retention
-  sources need a verified per-run Apify storage expiry.
-- [ ] **Blocked on owner (OQ31):** decide on the ServerPartDeals and Seagate connectors, whose
-  terms prohibit automated access. Both stay disabled; the SA-004 enable order in
-  `docs/handoff/deployed.md` depends on the decision.
+- [ ] **Seagate segment-map research gap:** the `ne`/`vn`/`vx`/`dm` SKU segments are unresearched
+  for rebrand ambiguity (unlike the `nm` segment fixed in `matcher_version` 2026.09.2); Seagate
+  itself is retired (OQ31), but ghd/other sources may still emit these SKUs.
+- [ ] Drive recall now depends on first-party refdata: the ratification gate reads production
+  refdata via `import_refdata` (drive seed digest pin), not the unit-test `seeded_catalog`, so a
+  gap in the production drive seed is a gap in ratifiable coverage, not just in tests.
+- [ ] Before any Intel Xeon pilot, review the bare-number aliases in the Intel refdata seeds (e.g.
+  `6338`, `8358`) for collision risk against other manufacturers' bare model numbers.

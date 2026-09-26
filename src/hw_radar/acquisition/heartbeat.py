@@ -16,6 +16,7 @@ from typing import Protocol
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
+from hw_radar.acquisition.admission import ensure_not_retired
 from hw_radar.acquisition.classify import classify_exception
 from hw_radar.acquisition.contracts import ListingResolver, SourceAdapter, adapter_retention
 
@@ -213,7 +214,13 @@ async def run_heartbeat(
     offer_snapshots (the confirmation criterion: no fire, no snapshot). The fired
     run inherits the adapter's own retention (eBay -> ebay_listing_observation/6h;
     everyone else -> merchant_fact/indefinite). Returns a RunOutcome so the poller
-    applies lifecycle/auto-ramp exactly as it does for poll_source."""
+    applies lifecycle/auto-ramp exactly as it does for poll_source.
+
+    Raises RetiredSourceError for a retired source before probing."""
+    # Outside the try below on purpose: inside it, a retirement refusal would be
+    # classified as a probe failure and fed to backoff, so the heartbeat lane
+    # would keep retrying a source that must never be contacted.
+    ensure_not_retired(adapter.site_key)
     try:
         readings = await adapter.probe()
     except Exception as exc:  # a failed probe backs the source off like a full run

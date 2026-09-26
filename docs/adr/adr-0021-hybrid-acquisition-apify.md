@@ -237,7 +237,7 @@ compute, lifecycle, dataset retrieval, delayed completion, cost accounting, and
 API behavior without a merchant legal decision. A production Actor-backed
 merchant source is a separate source-admission decision per candidate
 (`docs/research/source-admission/`); it stays open as
-[OQ24](../open-questions.md#oq24--production-actor-backed-merchant-source-admission).
+[OQ24](../resolved-questions.md#oq24--production-actor-backed-merchant-source-admission).
 Existing local connectors are not grandfathered into an Actor path.
 
 **9. Operations.** Deployment is an explicit, reviewed operator or agent action
@@ -331,7 +331,7 @@ reserves for Actor builds and bounded operator inspection.
 **12. MS-2's Apify exit is the synthetic proof (resolves OQ28, sharpens item 8).** The
 controlled synthetic Actor proof (task F5a) is sufficient to close the Apify portion of MS-2.
 The production Actor-backed merchant pilot (task F5b) is not required to close MS-2; it stays
-source/legal-gated by [OQ24](../open-questions.md#oq24--production-actor-backed-merchant-source-admission),
+source/legal-gated by [OQ24](../resolved-questions.md#oq24--production-actor-backed-merchant-source-admission),
 which may remain open after MS-2 closes.
 
 ## Amendment — 2026-09-25 (s5): The runtime reads no account state (owner decision, R25)

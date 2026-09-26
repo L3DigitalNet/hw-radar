@@ -8,7 +8,14 @@ import pytest
 from hw_radar.acquisition.contracts import NullResolver, RawBatch, RawItem
 from hw_radar.acquisition.pipeline import run_source
 from hw_radar.acquisition.sources.wd import WdAdapter
-from hw_radar.catalog.models import Listing, OfferSnapshot, RunStatus, StockStatus
+from hw_radar.catalog.models import (
+    Listing,
+    ListingResolution,
+    OfferSnapshot,
+    RunStatus,
+    StockStatus,
+)
+from hw_radar.matching.resolver import CatalogResolver
 
 pytestmark = pytest.mark.django_db(transaction=True, serialized_rollback=True)
 
@@ -215,3 +222,76 @@ def test_parse_skips_malformed_variants() -> None:
     )
     parsed = WdAdapter().parse(batch)
     assert [p.source_listing_key for p in parsed] == ["RWDBBGB0040HBK-NESN"]
+
+
+# Observed 2026-09-25 shapes: a bare internal drive whose title carries no part
+# number (so any MPN the resolver sees can only have come from the store key),
+# and a consumer enclosure that must never gain one.
+_MPN_PRODUCTS = {
+    "wd-red-plus-sata-3-5-hdd-recertified": {
+        "code": "wd-red-plus-sata-3-5-hdd-recertified",
+        "name": 'WD Red Plus Internal NAS HDD 3.5" - Recertified',
+        "variantOptions": [
+            {
+                "code": "RWD20EFPX",
+                "priceData": {"value": 54.99, "currency": "USD"},
+                "stock": {"stockLevelStatus": "inStock"},
+                "saleable": True,
+            }
+        ],
+    },
+    "my-book-2018-usb-3-0-hdd-recertified": {
+        "code": "my-book-2018-usb-3-0-hdd-recertified",
+        "name": "My Book (Recertified)",
+        "variantOptions": [
+            {
+                "code": "RWDBBGB0040HBK-NESN",
+                "priceData": {"value": 79.99, "currency": "USD"},
+                "stock": {"stockLevelStatus": "inStock"},
+                "saleable": True,
+            }
+        ],
+    },
+}
+
+
+def _mpn_mock() -> httpx.MockTransport:
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/robots.txt":
+            return httpx.Response(404)
+        if path.endswith("/products/search"):
+            return httpx.Response(200, json={"products": [{"code": c} for c in _MPN_PRODUCTS]})
+        return httpx.Response(200, json=_MPN_PRODUCTS[path.rsplit("/", 1)[-1]])
+
+    return httpx.MockTransport(handler)
+
+
+def test_recert_key_mpn_reaches_resolver_and_identity_is_stable(
+    loop: asyncio.AbstractEventLoop,
+) -> None:
+    for _ in range(2):  # second run is a re-observation of the same listings
+        adapter = WdAdapter(client=httpx.AsyncClient(transport=_mpn_mock()))
+        run, _ = loop.run_until_complete(run_source(adapter, CatalogResolver()))
+        assert run.status == RunStatus.SUCCESS
+        assert run.detail_json["resolver_errors"] == 0
+
+    listings = Listing.objects.filter(source_site__normalized_name="wd-recertified")
+    assert sorted(listings.values_list("source_listing_key", flat=True)) == [
+        "RWD20EFPX",
+        "RWDBBGB0040HBK-NESN",
+    ]  # keys persisted unchanged; re-observation upserted, never duplicated
+
+    drive = listings.get(source_listing_key="RWD20EFPX")
+    snapshots = OfferSnapshot.objects.filter(listing=drive)
+    assert snapshots.count() == 2  # both observations appended to ONE listing's history
+    assert {s.attrs_json.get("mpn") for s in snapshots} == {"WD20EFPX"}
+    # The title has no part number, so this hypothesis can only be the
+    # structured field the resolver read from attrs_json["mpn"].
+    edge = ListingResolution.objects.get(listing=drive, is_current=True)
+    assert edge.evidence["mpn_hypothesis"] == "wd20efpx"
+
+    enclosure = listings.get(source_listing_key="RWDBBGB0040HBK-NESN")
+    assert all("mpn" not in s.attrs_json for s in OfferSnapshot.objects.filter(listing=enclosure))
+    enclosure_edge = ListingResolution.objects.get(listing=enclosure, is_current=True)
+    assert enclosure_edge.evidence["mpn_hypothesis"] != "wdbbgb0040hbk"

@@ -181,7 +181,8 @@ def test_lane_row_is_created_on_demand_when_heartbeat_is_enabled_later() -> None
 # BEFORE the other job committed — which is exactly the shape a threaded test
 # would produce, without its scheduling nondeterminism.
 def test_concurrent_lane_failures_both_count_toward_escalation() -> None:
-    config = _config("serverpartdeals")
+    # Any ACTIVE heartbeat source: migration 0023 pins serverpartdeals to SKIP (OQ31).
+    config = _config("wd-recertified")
     full_lane = config.lane_state(SchedulingLane.FULL)
     heartbeat_lane = config.lane_state(SchedulingLane.HEARTBEAT)
     full_view = SourceConfig.objects.get(pk=config.pk)
@@ -212,7 +213,8 @@ def test_concurrent_lane_failures_both_count_toward_escalation() -> None:
 
 
 def test_stale_heartbeat_success_cannot_resurrect_a_paused_source() -> None:
-    config = _config("serverpartdeals")
+    # Any ACTIVE heartbeat source: migration 0023 pins serverpartdeals to SKIP (OQ31).
+    config = _config("wd-recertified")
     full_lane = config.lane_state(SchedulingLane.FULL)
     heartbeat_lane = config.lane_state(SchedulingLane.HEARTBEAT)
     heartbeat_view = SourceConfig.objects.get(pk=config.pk)  # snapshot taken while ACTIVE

@@ -6,7 +6,7 @@ description: 'Move the mutable cadence state (current_interval_s, clean_polls, b
 doc_type: 'adr'
 status: 'active'
 created: '2026-08-16'
-updated: '2026-08-16'
+updated: '2026-09-26'
 reviewed: null
 owner: ''
 consumer: 'mix'
@@ -117,3 +117,29 @@ The column is scheduling *state* by locality only: nothing in `check_admission`,
 boundary this ADR draws is unchanged. It lives on the lane row because
 continuity is a property of one lane's polling, and the full lane is the only
 lane a delist decision may be founded on.
+
+## Amendment — 2026-09-26: eBay scopes opt out of stale absence
+
+The `continuous_since` invariant above still holds for any scope that uses the
+stale-absence path, but no eBay scope uses it any more. Under the owner
+invariant "never enable delist semantics on an unprovably complete scope"
+(session 7; review r2 N1 for the category scopes, review r3 R3-F for the legacy
+drive scope), every eBay `DelistScope` — each category sweep scope and the
+legacy NULL drive scope built in
+`hw_radar.acquisition.sources.ebay.EbayAdapter._legacy_report` — sets
+`stale_absence_allowed=False`.
+
+The reason is specific to a truncated Browse sweep: a live listing ranked past
+the fetched page is invisible to every sweep for as long as it stays live, so
+six hours of continuous misses is not evidence that it ended, however long the
+lane has been polling. An incomplete eBay sweep therefore never delists; a
+stale offer stops being shown through the 6h `expires_at` TTL and
+`purge_expired`, which asserts nothing about whether the listing ended. A
+provably complete sweep still marks `ABSENT_FROM_SWEEP` as before.
+
+Continuity recording is unchanged: `continuous_since` is still maintained for
+the eBay full lane, because it is read from run evidence rather than from the
+scope's opt-out. `gate_delist_scope` drops an opted-out incomplete scope and
+`apply_delist`, the only `ABSENT_STALE` writer, refuses it again.
+`tests/db/test_source_ebay.py` pins the legacy case, including three
+incomplete sweeps past the grace that never delist.

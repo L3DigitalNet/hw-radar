@@ -1,19 +1,23 @@
 """RefdataConfig settings row, ReferenceFetchRequest queue, and (later tasks)
 the reconsider/discovery/refresh loop."""
 
+from io import StringIO
 from pathlib import Path
 
 import pytest
 from django.core.management import CommandError, call_command
 
 from hw_radar.catalog.models import (
+    CpuSpec,
     DelistReason,
     FetchRequestStatus,
+    GpuSpec,
     Listing,
     ListingResolution,
     Manufacturer,
     ProductAlias,
     ProductModel,
+    RamSpec,
     RefdataConfig,
     ReferenceFetchRequest,
     ResolutionGrain,
@@ -62,6 +66,13 @@ def site(db: None) -> SourceSite:
     return SourceSite.objects.create(name="Demo", normalized_name="rr-demo")
 
 
+def _admit(*categories: str) -> None:
+    """Explicitly import categories — the only way one enters the catalog; the
+    refresh maintains admitted categories and never introduces one."""
+    for slug in categories:
+        call_command("import_refdata", "--category", slug, stdout=StringIO())
+
+
 def _listing(site: SourceSite, key: str, title: str) -> Listing:
     return Listing.objects.create(
         source_site=site,
@@ -106,13 +117,16 @@ def test_scan_is_idempotent_and_skips_synthetic_keys(site: SourceSite) -> None:
 
 def test_run_refresh_imports_reconsiders_and_scans(site: SourceSite) -> None:
     listing = _listing(site, "rr-1", "seagate exos st16000nm002c 16tb sata")
-    CatalogResolver().resolve_listing(listing.pk)  # family grain before the seed
+    CatalogResolver().resolve_listing(listing.pk)  # unresolved before the seed (`nm`: no family)
+    # Seeded after resolution, so the upgrade can only come from the refresh's
+    # reconsider pass.
+    _admit("drive")
     report = run_refresh()
     assert report.ran is True
     assert report.conflicts == []
     assert report.import_report is not None
     assert report.reconsidered >= 1
-    assert report.upgraded >= 1  # family → model via the seeded Exos alias
+    assert report.upgraded >= 1  # none → model via the seeded Exos alias
     listing.refresh_from_db()
     assert listing.resolution_grain == ResolutionGrain.MODEL
     config = RefdataConfig.current()
@@ -128,6 +142,7 @@ def test_run_refresh_skips_delisted_listings(site: SourceSite) -> None:
     live = _listing(site, "rr-live", "seagate exos st16000nm002c 16tb sata")
     gone = _listing(site, "rr-gone", "seagate exos st16000nm002c 16tb sata")
     gone.mark_delisted(DelistReason.ABSENT_FROM_SWEEP)
+    _admit("drive")
     report = run_refresh()
     assert report.ran is True
     assert report.reconsidered >= 1
@@ -153,7 +168,7 @@ def test_run_refresh_conflicted_import_still_reconsiders(site: SourceSite) -> No
     # so its upgrade can ONLY come from that refresh's reconsider pass — an
     # implementation that returns early after ImportConflictError leaves it at
     # none and fails this test (Codex CR-NEW-001).
-    run_refresh()  # first refresh seeds the catalog
+    _admit("drive")  # seeds the catalog the conflicted refresh falls back on
     samsung = Manufacturer.objects.create(name="Samsung", normalized_name="samsung")
     stranger = ProductModel.objects.create(
         manufacturer=samsung,
@@ -180,12 +195,66 @@ def test_run_refresh_conflicted_import_still_reconsiders(site: SourceSite) -> No
     assert listing.resolution_grain in (ResolutionGrain.MODEL, ResolutionGrain.VARIANT)
 
 
+def _models_by_category() -> dict[str, int]:
+    rows = ProductModel.objects.values_list("product_family__category__slug", flat=True)
+    counts: dict[str, int] = {}
+    for slug in rows:
+        counts[slug] = counts.get(slug, 0) + 1
+    return counts
+
+
+def test_run_refresh_on_empty_catalog_admits_nothing(db: None) -> None:
+    report = run_refresh()
+    assert report.ran is True
+    assert report.skipped_categories == ["cpu", "drive", "gpu", "ram"]
+    assert not ProductModel.objects.exists()
+
+
+def test_run_refresh_on_drive_only_catalog_skips_other_categories(db: None) -> None:
+    # The production shape before F6: drive seeds only.
+    _admit("drive")
+    drive_models = _models_by_category()
+    report = run_refresh()
+    assert report.conflicts == []
+    assert report.skipped_categories == ["cpu", "gpu", "ram"]
+    assert _models_by_category() == drive_models
+    assert not CpuSpec.objects.exists()
+    assert not GpuSpec.objects.exists()
+    assert not RamSpec.objects.exists()
+    assert report.import_report is not None
+    assert set(report.import_report.by_category) == {"drive"}
+    stamped = RefdataConfig.current().last_report_json
+    assert stamped["skipped_categories"] == ["cpu", "gpu", "ram"]
+
+
+def test_run_refresh_maintains_admitted_cpu_and_skips_gpu_ram(db: None) -> None:
+    _admit("drive", "cpu")
+    # Drift one admitted CPU row away from its seed; the refresh must restore it.
+    drifted = CpuSpec.objects.select_related("product_model").first()
+    assert drifted is not None
+    seeded_cores = drifted.cores
+    drifted.cores = 1
+    drifted.save(update_fields=["cores"])
+    before = _models_by_category()
+    report = run_refresh()
+    assert report.conflicts == []
+    assert report.skipped_categories == ["gpu", "ram"]
+    assert report.import_report is not None
+    assert set(report.import_report.by_category) == {"drive", "cpu"}
+    assert report.import_report.by_category["cpu"].specs_updated == 1
+    drifted.refresh_from_db()
+    assert drifted.cores == seeded_cores
+    assert _models_by_category() == before
+    assert not GpuSpec.objects.exists()
+    assert not RamSpec.objects.exists()
+
+
 def test_import_refdata_command_imports_the_seeds(db: None) -> None:
     call_command("import_refdata")
     # Drive-only pin preserved from before the B4c GPU/RAM/CPU seeds landed,
-    # plus the new whole-corpus total (15 drive + 19 first-party GPU/RAM/CPU).
-    assert ProductModel.objects.filter(product_family__category__slug="drive").count() == 15
-    assert ProductModel.objects.count() == 34
+    # plus the whole-corpus total (268 drive + 19 first-party GPU/RAM/CPU).
+    assert ProductModel.objects.filter(product_family__category__slug="drive").count() == 268
+    assert ProductModel.objects.count() == 287
 
 
 def test_scan_skips_overlength_hypotheses(site: SourceSite) -> None:

@@ -2001,6 +2001,25 @@ review N-02).**
   absent listing except by retention expiry. It also leaves the legacy
   scope's reverse hazard (remote scoped runs bridging a later local NULL
   sweep) unfixed.
+  - *Amended 2026-09-26 (session 7, owner invariant "never enable delist
+    semantics on an unprovably complete scope"):* eBay category scopes now
+    carry `DelistScope.stale_absence_allowed=False`. An incomplete category
+    sweep never delists; only a complete single-page sweep does. Continuity
+    is still recorded. Other listings in these scopes drop out of view through
+    the 6h `expires_at` TTL and `purge_expired`, never as a recorded delist.
+    The legacy NULL drive scope and the local sources keep stale absence.
+    Per-scope continuity above is unchanged; the reverse-hazard reasoning
+    still applies to the NULL scope.
+  - *Amended again 2026-09-26 (session 7, review r3 R3-F):* the legacy eBay
+    NULL drive scope now opts out too (`_legacy_report` sets
+    `stale_absence_allowed=False`), superseding "the legacy NULL drive scope
+    keeps stale absence" above. Its one-page keyword sweep is incomplete
+    whenever Browse reports more matches than the page held, and a live
+    listing ranked past that page misses every sweep, so an incomplete legacy
+    sweep never delists; a provably complete one still marks
+    `ABSENT_FROM_SWEEP`. NULL-scope continuity is still recorded. The
+    `DelistScope` default (`True`) is unchanged, but eBay is the only local
+    DelistDetector today, so no production adapter reaches the stale path.
 - *Rejected (b):* moving the NULL scope into the new table too. It changes the
   mechanism that frozen tests pin, for no behavior gain.
 - *Consequence (assumption):* when Actor runs rotate scopes more slowly than
@@ -7017,7 +7036,7 @@ follow-up R12-01).**
     and "any automated use of the Service", so the connector is not broadened
     ([record](../../research/source-admission/2026-09-25-serverpartdeals.md)). The
     existing drive connector's own conflict is
-    [OQ31](../../open-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access).
+    [OQ31](../../resolved-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access).
 - **F3 — Measurement.** `pilot_report` summarizes, per source and provider:
   runs, completeness distribution, identifier (MPN) coverage, condition and
   shipping presence, freshness lag, failures, and cost (Task 6).
@@ -7038,6 +7057,19 @@ follow-up R12-01).**
     `.harvest/f4-ebay/`. eBay is the only source with category sweeps. CPU is thin
     because the pilot sweep queries one model; widen `CATEGORY_SWEEPS` before
     labeling if the owner wants a broader CPU corpus.
+  - **Landed 2026-09-26 (owner decisions, OQ31/OQ32; not an F4 code change):** the local-connector
+    Terms review this section's F2 relied on ([`2026-09-25-local-connector-terms-review.md`](../../research/2026-09-25-local-connector-terms-review.md))
+    became an owner decision: ServerPartDeals and Seagate-recertified are retired
+    (`RETIRED_SOURCES`, `src/hw_radar/acquisition/admission.py`; migration `0023`), for any
+    execution venue, local or Apify — F2's "no change" finding stands, permanently. The global
+    SA-004 enable order this plan never restated is retired too, replaced by a per-`(source,
+    category)` admission matrix (`ADMISSION_MATRIX`, same module); every cell is `NOT_ADMITTED`.
+    Separately, OQ32 replaced the five-source ratification floor the MS-1e audit packet found
+    unsatisfiable with a metadata-declared ≥3-source floor (`ratification_sources`,
+    `MIN_RATIFICATION_SOURCES`), evaluated against production refdata rather than the unit-test
+    `seeded_catalog`; F4's owner-in-the-loop labeling and ratification path (above) is otherwise
+    unchanged. `matcher_version` bumped to `2026.09.2` in the same window (comparison-phrase MPN
+    masking, the Seagate `nm`→Exos false-merge fix, WD SKU→MPN structured evidence).
 - **F5 — Actor proof.** Revision 5 (owner-clarified (s2, 2026-09-24); OQ24
   split) replaces revision 4's single owner-gated merchant proof with two tasks.
   Revision 4's step "open the Actor PR in the separate Actor repository" is

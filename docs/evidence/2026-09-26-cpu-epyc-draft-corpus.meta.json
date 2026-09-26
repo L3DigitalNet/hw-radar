@@ -1,0 +1,13 @@
+{
+  "corpus_version": "cpu-epyc-draft-2026-09-26",
+  "harvested_from": "2026-09-26",
+  "harvested_to": "2026-09-26",
+  "observed_at": "2026-09-26T11:02:05Z",
+  "source_counts": {
+    "ebay": 284
+  },
+  "matcher_version": "unevaluated",
+  "audit_rollup": {
+    "claude_draft": 284
+  }
+}

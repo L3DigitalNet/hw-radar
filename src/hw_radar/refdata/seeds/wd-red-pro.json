@@ -1,0 +1,354 @@
+{
+  "schema": "hw-radar.refdata.seed/v1",
+  "manufacturer_name": "Western Digital",
+  "manufacturer_key": "western_digital",
+  "family_name": "Red Pro",
+  "provenance": {
+    "source_kind": "first_party_datasheet",
+    "sources": [
+      {
+        "url": "https://documents.westerndigital.com/content/dam/doc-library/en_us/assets/public/western-digital/product/internal-drives/wd-red-pro-hdd/data-sheet-wd-red-pro-hdd.pdf",
+        "title": "WD Red Pro NAS HDD datasheet (January 2025)",
+        "retrieved": "2026-09-26"
+      }
+    ]
+  },
+  "models": [
+    {
+      "model_number": "WD260KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "26",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD260KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD241KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD241KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD240KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "24",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD240KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD221KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "22",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD221KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD202KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD202KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD201KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "20",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": true}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD201KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD181KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "18",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD181KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD161KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "16",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD161KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD142KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "14",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD142KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD141KFGX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "14",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD141KFGX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD122KFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD122KFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD121KFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "12",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Helium", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD121KFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD103KFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 512,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD103KFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD102KFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "10",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD102KFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD8005FFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "8",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD8005FFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD8003FFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "8",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD8003FFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD6005FFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "6",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD6005FFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD6003FFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "6",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD6003FFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD4005FFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "4",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD4005FFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD4003FFBX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "4",
+        "rpm": 7200,
+        "cache_mb": 256,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD4003FFBX", "is_primary": true}]
+    },
+    {
+      "model_number": "WD2002FFSX",
+      "spec": {
+        "media_type": "hdd",
+        "interface": "SATA 6Gb/s",
+        "form_factor": "3.5",
+        "capacity_tb": "2",
+        "rpm": 7200,
+        "cache_mb": 64,
+        "recording_tech": "cmr",
+        "market_tier": "nas",
+        "model_family": "Red Pro",
+        "spec_json": {"drive_tech": "Air", "optinand": false}
+      },
+      "aliases": [{"alias_type": "mpn", "text": "WD2002FFSX", "is_primary": true}]
+    }
+  ]
+}

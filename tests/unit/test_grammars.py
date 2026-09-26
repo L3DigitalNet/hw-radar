@@ -10,14 +10,27 @@ from hw_radar.matching.types import Provenance
 _TB = 1_000_000_000_000
 
 
-def test_seagate_exos() -> None:
-    r = decode("st16000nm001g")
+@pytest.mark.parametrize(
+    ("token", "capacity_gb", "generation"),
+    [
+        ("st16000nm001g", 16000, "g"),  # Exos X16
+        ("st1000nm0001", 1000, "1"),  # Constellation ES — MS-1e ghd-0006
+        ("st8000nm0055", 8000, "5"),  # Enterprise Capacity v5, rebranded Exos 7E8
+    ],
+)
+def test_seagate_nm_segment_decodes_without_family(
+    token: str, capacity_gb: int, generation: str
+) -> None:
+    # `nm` spans Exos, Constellation and Enterprise Capacity with no structural
+    # boundary (grammars/seagate.py): the token is still a Seagate MPN with a
+    # capacity, but it must never name a family for rung 2 to attach.
+    r = decode(token)
     assert r is not None
     assert r.vendor == "seagate"
-    assert r.family_name == "exos"
-    assert r.capacity_bytes == 16000 * 1_000_000_000
-    assert r.generation == "g"
-    assert r.provenance is Provenance.CORROBORATED_COMMUNITY  # segment map tier
+    assert r.family_name is None
+    assert r.capacity_bytes == capacity_gb * 1_000_000_000
+    assert r.generation == generation
+    assert r.provenance is Provenance.VENDOR_OFFICIAL  # only official structure used
 
 
 def test_seagate_ironwolf_and_unknown_segment() -> None:
@@ -32,8 +45,9 @@ def test_seagate_ironwolf_and_unknown_segment() -> None:
 @pytest.mark.parametrize(
     ("token", "family", "capacity_tb"),
     [
-        ("wd120efbx", "red", 12),
-        ("wd20efpx", "red", 2),
+        ("wd120efbx", "red plus", 12),
+        ("wd20efpx", "red plus", 2),
+        ("wd30efzx", "red plus", 3),
         ("wd121kryz", "gold", 12),
         ("wd102kfbx", "red pro", 10),
     ],
@@ -45,6 +59,18 @@ def test_wd_modern(token: str, family: str, capacity_tb: int) -> None:
     assert r.family_name == family
     assert r.capacity_bytes == capacity_tb * _TB
     assert r.provenance is Provenance.CORROBORATED_COMMUNITY
+
+
+@pytest.mark.parametrize("token", ["wd40efax", "wd80efax", "wd60efrx", "wd20efrx"])
+def test_wd_red_line_suffix_without_first_party_family_asserts_none(token: str) -> None:
+    # EFAX spans WD Red (SMR, 2-6TB) and CMR capacities WD sells as Red Plus;
+    # EFRX has no first-party table. Asserting "red" here filed Red Plus
+    # drives under a family WD does not sell them as (MS-1e ebay-0424/0434).
+    r = decode(token)
+    assert r is not None
+    assert r.vendor == "western_digital"
+    assert r.family_name is None
+    assert r.capacity_bytes is not None
 
 
 def test_wd_four_digit_capacity_is_never_guessed() -> None:

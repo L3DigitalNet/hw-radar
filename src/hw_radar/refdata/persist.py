@@ -70,6 +70,28 @@ _SPEC_MODELS: Final[dict[str, type[DriveSpec | GpuSpec | RamSpec | CpuSpec]]] = 
 
 
 @dataclass
+class CategoryCounts:
+    """Per-category row outcomes for one import (models, spec satellites, aliases).
+
+    `unchanged` means the stored content already equalled the seed. A spec row
+    counted unchanged is still re-saved by update_or_create (its updated_at
+    moves); the count reports content, not write activity."""
+
+    models_created: int = 0
+    models_updated: int = 0
+    models_unchanged: int = 0
+    specs_created: int = 0
+    specs_updated: int = 0
+    specs_unchanged: int = 0
+    aliases_created: int = 0
+    aliases_updated: int = 0
+    aliases_unchanged: int = 0
+
+    def as_json(self) -> dict[str, int]:
+        return dict(vars(self))
+
+
+@dataclass
 class ImportReport:
     manufacturers_created: int = 0
     families_created: int = 0
@@ -80,6 +102,10 @@ class ImportReport:
     aliases_created: int = 0
     aliases_adopted: int = 0
     unreconciled_families: list[str] = field(default_factory=list)
+    by_category: dict[str, CategoryCounts] = field(default_factory=dict)
+
+    def counts_for(self, category: str) -> CategoryCounts:
+        return self.by_category.setdefault(category, CategoryCounts())
 
     def as_json(self) -> dict[str, object]:
         return {
@@ -93,6 +119,12 @@ class ImportReport:
             "aliases_adopted": self.aliases_adopted,
             "unreconciled_families": list(self.unreconciled_families),
         }
+
+    def by_category_json(self) -> dict[str, dict[str, int]]:
+        # Kept out of as_json(): that shape is pinned by the drive byte-identical
+        # snapshot (test_refdata_categories) and stamped into
+        # RefdataConfig.last_report_json by the monthly refresh.
+        return {slug: counts.as_json() for slug, counts in sorted(self.by_category.items())}
 
 
 class ImportConflictError(Exception):
@@ -213,8 +245,9 @@ def _import_document(doc: SeedDocument, report: ImportReport) -> None:
             family.name = doc.family_name
             family.save(update_fields=["name", "updated_at"])
     spec_model = _SPEC_MODELS[doc.category]
+    counts = report.counts_for(doc.category)
     for seed_model in doc.models:
-        _import_model(manufacturer, family, spec_model, seed_model, report)
+        _import_model(manufacturer, family, spec_model, seed_model, report, counts)
 
 
 def _import_model(
@@ -223,6 +256,7 @@ def _import_model(
     spec_model: type[DriveSpec | GpuSpec | RamSpec | CpuSpec],
     seed_model: SeedModel,
     report: ImportReport,
+    counts: CategoryCounts,
 ) -> None:
     report.models_seen += 1
     model, created = ProductModel.objects.get_or_create(
@@ -237,6 +271,7 @@ def _import_model(
     )
     if created:
         report.models_created += 1
+        counts.models_created += 1
     else:
         changed: list[str] = []
         if model.product_family_id != family.pk:  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no <field>_id shadow-attribute stubs
@@ -248,6 +283,9 @@ def _import_model(
             changed += ["retention_class", "expires_at"]
         if changed:
             model.save(update_fields=[*changed, "updated_at"])
+            counts.models_updated += 1
+        else:
+            counts.models_unchanged += 1
     # exclude_none means a re-import cannot RETRACT a typed spec value: if a
     # later seed corrects a field to "unknown" (None), the stale prior value
     # survives untouched. An explicit-clear mechanism is future work, only if
@@ -258,13 +296,22 @@ def _import_model(
     )
     spec_defaults["retention_class"] = RetentionClass.MANUFACTURER_REFERENCE
     spec_defaults["expires_at"] = None
+    existing_spec = spec_model.objects.filter(product_model=model).first()
+    if existing_spec is None:
+        counts.specs_created += 1
+    elif all(getattr(existing_spec, name) == value for name, value in spec_defaults.items()):
+        counts.specs_unchanged += 1
+    else:
+        counts.specs_updated += 1
     spec_model.objects.update_or_create(product_model=model, defaults=spec_defaults)
     report.specs_written += 1
     for alias in seed_model.aliases:
-        _import_alias(model, alias, report)
+        _import_alias(model, alias, report, counts)
 
 
-def _import_alias(model: ProductModel, alias: SeedAlias, report: ImportReport) -> None:
+def _import_alias(
+    model: ProductModel, alias: SeedAlias, report: ImportReport, counts: CategoryCounts
+) -> None:
     row = ProductAlias.objects.filter(
         alias_type=alias.alias_type,
         normalized_alias_text=alias.normalized,
@@ -281,6 +328,7 @@ def _import_alias(model: ProductModel, alias: SeedAlias, report: ImportReport) -
             expires_at=None,
         )
         report.aliases_created += 1
+        counts.aliases_created += 1
         return
     existing_model = row.product_model
     if existing_model is None or existing_model.pk != model.pk:
@@ -303,16 +351,21 @@ def _import_alias(model: ProductModel, alias: SeedAlias, report: ImportReport) -
     if changed:
         row.save(update_fields=[*changed, "last_seen"])
         report.aliases_adopted += 1
+        counts.aliases_updated += 1
+    else:
+        counts.aliases_unchanged += 1
 
 
 def _unreconciled_families(manufacturer_keys: list[str]) -> list[str]:
     """Families under seeded manufacturers with no models and no aliases: rung-2
     provisional rows the seed did not adopt. Reported for review, never touched.
 
-    Known artifact, not a bug: the WD grammar decodes to the broad family
-    'ultrastar', which seeds never adopt (seeds are per-HC-generation, e.g.
-    'Ultrastar DC HC550'). Once any WD listing family-resolves to 'ultrastar',
-    this list will PERMANENTLY include it on every future import."""
+    Seed family names equal the grammar-decoded family names (pinned by
+    tests/unit/test_grammar_seed_family_consistency.py), so a rung-2
+    'ultrastar' provisional family is adopted by the Ultrastar seeds rather
+    than listed here. A family a prior seed revision named differently (the
+    per-series 'ultrastar dc hc550' before the seeds moved the series name
+    into spec model_family) loses its models on re-import and is listed."""
 
     return sorted(
         ProductFamily.objects.filter(manufacturer__normalized_name__in=manufacturer_keys)

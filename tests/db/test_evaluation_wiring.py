@@ -12,6 +12,7 @@ drive when the collector sends no hint.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -219,7 +220,7 @@ class FakeHeartbeatAdapter:
     tests/db/test_poller_heartbeat.py's fake."""
 
     name = "fake-hb"
-    site_key = "serverpartdeals"
+    site_key = "wd-recertified"  # any non-retired site: retired keys are refused
     run_kind = RunKind.FULL
     expects_json = True
     last_parse_skipped = 0
@@ -267,7 +268,7 @@ class FakeHeartbeatAdapter:
 def test_heartbeat_fired_run_updates_watch_evaluation() -> None:
     watch = _drive_watch(DriveRequirementSpec(require_in_stock=True))
     config = SourceConfig.objects.select_related("source_site").get(
-        source_site__normalized_name="serverpartdeals"
+        source_site__normalized_name=FakeHeartbeatAdapter.site_key
     )
     adapter = FakeHeartbeatAdapter("out_of_stock")
     asyncio.run(run_heartbeat(adapter, config, NullResolver()))  # baseline sighting fires
@@ -287,12 +288,15 @@ def test_heartbeat_fired_run_updates_watch_evaluation() -> None:
 # ── Recovery probe (poller/service.py is unedited) ───────────────────────────
 
 
-def test_recovery_probe_run_evaluates(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_recovery_probe_run_evaluates(
+    monkeypatch: pytest.MonkeyPatch, admit: Callable[..., None]
+) -> None:
     from hw_radar.acquisition import sources
     from hw_radar.poller.service import recovery_probe_job
 
     watch = _drive_watch(DriveRequirementSpec(max_unit_price_usd=Decimal("150.00")))
     monkeypatch.setitem(sources.ADAPTERS, "demo", lambda: FakeAdapter([("probe-sku", "99.99")]))
+    admit(("demo", "drive"))
     SourceConfig.objects.filter(source_site__normalized_name="demo").update(
         enabled=True, lifecycle_state=LifecycleState.PAUSED_PENDING_FIX
     )

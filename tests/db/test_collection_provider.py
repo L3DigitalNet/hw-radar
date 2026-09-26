@@ -343,9 +343,12 @@ def test_remote_complete_evidence_incomplete_scope_breaks_continuity_then_local_
 
 
 def test_local_incomplete_scope_keeps_stale_absence_path() -> None:
-    # Mirrors test_source_ebay.py's truncated-sweep case: a local complete=False
-    # scope still stale-delists once the listing has been unseen for the grace
-    # and the lane has been polling continuously across it.
+    # The generic contract default (stale_absence_allowed=True): a local
+    # complete=False scope still stale-delists once the listing has been unseen
+    # for the grace and the lane has been polling continuously across it. No
+    # production adapter uses this path now — every eBay scope opts out (review
+    # r3 R3-F; test_source_ebay.py pins that) — but the default stays so a
+    # future adapter whose misses are real evidence can rely on it.
     _seed_stale_k_old(continuous_since=timezone.now() - OLD_CONTINUITY)
     run, _ = asyncio.run(run_source(_IncompleteSweepAdapter(["k-new"]), NullResolver()))
     assert run.status == RunStatus.SUCCESS

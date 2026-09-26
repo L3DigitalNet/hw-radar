@@ -18,7 +18,11 @@ production.** The Django foundation, TimescaleDB-backed schema (the ADR-0010
 identity ladder through the `offer_snapshot` hypertable), the ingestion
 substrate, matching layer, catalog seed, five marketplace connectors, and
 availability heartbeat all run on a dedicated Debian LXC container, deployed by
-GitHub Actions CD. The Python verification gate (uv · Ruff · BasedPyright
+GitHub Actions CD. Two of the five connectors (ServerPartDeals and
+Seagate-recertified) are retired as of 2026-09-26 — their current Terms
+prohibit the automated collection they perform, for any execution venue — so
+eBay, goHardDrive, and WD are the currently enableable sources (see
+`docs/handoff/deployed.md`). The Python verification gate (uv · Ruff · BasedPyright
 strict · pytest + coverage · pip-audit) is green locally and in CI. All
 marketplace sources still ship disabled: the MS-1e evaluation harness and
 harvest tooling are merged and deployed, but the owner-in-the-loop

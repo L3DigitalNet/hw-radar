@@ -13,7 +13,7 @@ each source's current Terms were read before any harvest. Result, and what it ch
 | eBay | Browse API under the eBay API License Agreement | contractually authorized API | yes |
 
 The two conflicts are the owner decision
-[OQ31](../open-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access).
+[OQ31](../resolved-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access).
 The orchestrator re-verified the ServerPartDeals and Seagate clauses verbatim against the raw pages
 by direct HTTP GET on 2026-09-25.
 

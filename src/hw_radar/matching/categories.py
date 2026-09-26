@@ -94,6 +94,16 @@ class CategoryRules:
     variant_on_demand: bool = True
     # None = no acceptance gate. Drive only: its decisions are pinned by A0.
     acceptance: AcceptancePolicy | None = None
+    # Folds the merchant-asserted structured MPN (snapshot attrs `mpn`) into the
+    # title-extracted attributes, for categories whose veto must see it; the
+    # resolver calls it only when the field is present. None = title only.
+    # `extract` keeps its title-only signature because drive binds
+    # `vocab.extract` by identity and the eligibility evaluator calls it too.
+    fold_structured: Callable[[ExtractedAttributes, str], ExtractedAttributes] | None = None
+    # ladder.decide's distinct-MPN guard: review an accept whose title names
+    # MPNs of more than one model. Drive only; the other extractors emit
+    # several MPN-kind candidates for one product (see ladder.decide).
+    distinct_mpn_guard: bool = False
 
 
 def _drive_rules() -> CategoryRules:
@@ -103,6 +113,7 @@ def _drive_rules() -> CategoryRules:
         extract_candidates=mpn.extract_candidates,
         decode=grammars.decode,
         veto=ladder.contradictions,
+        distinct_mpn_guard=True,
     )
 
 
@@ -138,6 +149,7 @@ def _cpu_rules() -> CategoryRules:
         decode=no_decode,
         veto=cpu.veto,
         auto_accept=False,
+        fold_structured=cpu.with_structured_mpn,
         acceptance=NEW_CATEGORY_ACCEPTANCE,
     )
 

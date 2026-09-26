@@ -329,3 +329,39 @@ resolver-driven test (a recert + a new listing of the same drive → one `produc
 verification gate → `dev → main` PR (merge commit, CI + dependency-review green). The live harvest,
 label audit, and ratification (§6) are a **separate, later** owner-in-the-loop step, not part of this
 PR. Deviations from this design or the spec go to the spec Deviations Log / OQ process.
+
+## 10. Amendment — 2026-09-26: Source-diversity gate, family-grain rule, ratification-catalog source, and category isolation (owner clarification)
+
+Owner decisions of 2026-09-26 resolve [OQ24](../../resolved-questions.md#oq24--production-actor-backed-merchant-source-admission),
+[OQ31](../../resolved-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access), and
+[OQ32](../../resolved-questions.md#oq32--ms-1e-ratification-gate-when-two-named-sources-are-unusable), recorded
+in full in [`resolved-questions.md`](../../resolved-questions.md) and as the same-dated
+[ADR-0019 amendment](../../adr/adr-0019-listing-catalog-matching-layer.md#amendment--2026-09-26-family-grain-resolution-ratification-catalog-source-source-diversity-gate-and-matcher-trap-findings-owner-clarification).
+This note mirrors that amendment for this design; §§1, 5, and 6 above are left as originally written
+rather than rewritten in place, and the per-source-floor and five-named-source language there is
+historical, superseded by the rule below.
+
+- **Source-diversity gate (OQ32), supersedes the §5 per-source floor.** A ratification corpus must
+  declare **at least three** independent, currently admissible validation sources in corpus metadata,
+  and every declared source must produce at least one correct owner-ratified family-or-better
+  auto-accept in the same composite gate run. Intended candidates: eBay, WD recertified, and
+  goHardDrive, each subject to its own source-policy eligibility. The ≥ 100 auto-accept, ≥ 99.5%
+  precision, `audit_gate` PASS, and rung-0-regression-PASS thresholds in §5–§6 are unchanged — a
+  source-diversity correction, not a quality relaxation.
+- **ServerPartDeals and Seagate retired (OQ31).** Both are retired from the currently enableable
+  acquisition set on Terms grounds and are not counted toward the source-diversity floor above; their
+  retirement is what makes the three-source (not five-source) gate the current design.
+- **Family-grain rule.** A correct family-grain (rung-2) resolution is a correct matcher result even
+  when the exact model is absent from the catalog, provided the evidence establishes the family and
+  the matcher claims no more than that; it does not license an arbitrary family guess, a
+  fuzzy-similarity-only attach, near-model collapse onto a seeded model, or skipping a hard-attribute
+  contradiction check.
+- **Ratification-catalog source.** The catalog scored against in §5's Approach A run is the canonical
+  first-party drive reference dataset imported through the production refdata path; `synthetic.jsonl`
+  stays unit-test-only and is never substituted at ratification.
+- **Category isolation.** This gate governs drive matching and drive source × category enablement
+  only; it does not block CPU/GPU/RAM enablement once those categories pass their own matching/source
+  gates.
+- **No production merchant source now (OQ24).** No production Actor-backed merchant source is
+  introduced at this milestone; this does not change the harness or harvest tooling in §§2–4, which
+  remain scoped to the five registered local connectors regardless of their enable status.

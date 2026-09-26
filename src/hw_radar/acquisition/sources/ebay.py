@@ -36,8 +36,10 @@ query-scoped Browse sweep per CategorySweep. Each sweep's listings carry
 category_hint=<slug> and collection_scope="ebay:<slug>:<query_id>", and
 delist_scopes() reports one scope per sweep, so the pipeline applies absence and
 continuity per scope: a complete GPU sweep can never delist RAM, CPU, or legacy
-drive (NULL-scope) listings. The class default is legacy-only; the production
-registry entry is category_sweep_adapter(), which adds CATEGORY_SWEEPS.
+drive (NULL-scope) listings. The class default is legacy-only;
+category_sweep_adapter() adds every CATEGORY_SWEEPS entry (harvest), and the
+scheduled registry entry, sources.admitted_ebay_adapter(), keeps only the
+sweeps the source x category admission matrix admits.
 
 Only a SINGLE-PAGE category sweep can be complete. Browse pages by offset over
 a Best Match ranking that moves while we page: a removal before the page
@@ -46,9 +48,15 @@ unchanged while one live item slides across the boundary unseen. No check on
 the pages we got can rule that out, and a false complete sweep delists a live
 listing on the spot and redacts it (IR-002). A multi-page sweep is therefore
 incomplete (`multi_page_unprovable`): its observations and continuity still
-count, and its absences go through the grace/stale path like any truncated
-sweep. One page is a single ranking snapshot, so there is no boundary to fall
-through.
+count, but its absences prove nothing. Every eBay scope — each category scope
+and the legacy NULL drive scope (review r3 R3-F) — sets
+stale_absence_allowed=False, so an incomplete sweep never delists, however long
+a listing goes unseen; the 6h expires_policy stops showing such an offer
+without claiming it ended. One page is a single ranking snapshot, so there is
+no boundary to fall through. The legacy sweep is one page too, but its query
+normally matches more than the 200 items that page holds (`total` above what
+was seen), so it is incomplete on most runs and delists only on the rare run
+that provably enumerated its result set.
 
 Category sweeps never cost the drive sweep: the legacy GET runs first with its
 own error semantics, and every category page runs under a wall-clock deadline
@@ -67,6 +75,10 @@ Browse facts the sweep code relies on (live eBay API, 2026-09-25, app token):
     legacy GET + at most RUN_PAGE_BUDGET category pages) = 3,024/day, plus one
     legacy GET per heartbeat-fired FULL run, which skips the category sweeps
     (see probe()). Paginating inside probe() or a fired run would exceed it.
+    The 144 is the scheduled FULL lane (poller.service.build_scheduler's
+    poll-ebay job, registered only while a non-drive eBay category is
+    admitted) at cadence_baseline_s 600 s, where scheduling.apply.ramp_floor_s
+    pins the full lane of a heartbeat source.
     A 401 re-mint (_search) adds one more GET to the call it affects, plus a
     token POST, which is outside the Browse quota.
 
@@ -116,17 +128,17 @@ SEARCH_PARAMS = {"q": "recertified enterprise hard drive", "limit": "200"}
 # Mint the token this many seconds before its stated expiry so a request never
 # rides an about-to-expire token across the eBay boundary.
 _TOKEN_SKEW_S = 300
-# CR-004 absence grace for a TRUNCATED sweep. Deliberately the same 6h as
-# _expires_in_6h: DR-008 says an eBay observation older than 6h may not be shown,
-# so a listing that has missed every sweep across that whole window has no
-# defensible claim to still be live, whatever Browse's ranking did to it.
-#
-# "Missed every sweep" is the load-bearing clause, and this constant alone cannot
-# enforce it: 6h of wall clock with nothing polling is not 6h of misses. The
-# pipeline's delist stage supplies the other half by requiring the full lane to
-# have been sweeping continuously for this long (SourceLaneState.continuous_since),
-# so raising or lowering the value here changes the freshness bar only — it can
-# never turn a polling outage into a mass delist.
+# CR-004 absence grace for a TRUNCATED sweep. Every eBay scope carries it, but
+# none uses it: all of them, the legacy drive scope included, set
+# stale_absence_allowed=False, so gate_delist_scope drops an incomplete eBay
+# sweep before the grace is ever read. The earlier rationale — that a listing
+# missing every sweep for the 6h DR-008 window (_expires_in_6h) has no claim to
+# still be live — does not hold for a truncated Browse sweep: a live listing
+# ranked past the fetched page misses every sweep for as long as it stays live
+# (review r3 R3-F). Opting a scope back onto the stale path therefore needs a
+# new argument that its misses are evidence, not just a different value here.
+# The pipeline's continuity requirement (SourceLaneState.continuous_since)
+# would still apply, so even then an outage could never become a mass delist.
 DELIST_ABSENCE_GRACE = timedelta(hours=6)
 
 # Browse item_summary/search paging limits (module docstring has the source).
@@ -237,14 +249,35 @@ def validate_sweeps(sweeps: Sequence[CategorySweep]) -> tuple[CategorySweep, ...
 
 
 # Pilot sweeps (MS-2 F1) — defaults the owner may tune. Category ids verified
-# 2026-09-25 against the live Taxonomy API for EBAY_US (default tree 0, version
-# 134): 27386 "Graphics/Video Cards" (leaf; eBay has no separate datacenter-
-# accelerator category, and Tesla-class cards suggest into it), 11210 "Server
-# Memory (RAM)" (leaf under 170083 "Memory (RAM)"), 56088 "Server CPUs/
-# Processors" (leaf under 164 "CPUs/Processors"). eBay revises categories
-# quarterly; docs/TODO.md tracks the re-verification. A query, not a bare
-# category: category-only result sets (GPU ~109k, RAM ~1.32M, CPU ~143k) are
-# far past the 10,000-item window, so they could never be proven complete.
+# 2026-09-25/26 against the live Taxonomy API for EBAY_US (default tree 0,
+# version 134): 27386 "Graphics/Video Cards" (leaf; eBay has no separate
+# datacenter-accelerator category, and Tesla-class cards suggest into it);
+# 11210 "Server Memory (RAM)" and 56088 "Server CPUs/Processors", both leaves
+# under 51240 "Server Components"; 164 "CPUs/Processors", a leaf under 175673
+# "Computer Components & Parts". 56088 and 164 are leaves in different
+# subtrees, not parent and child: a query in one does not return the other's
+# listings (live probe: at most 3 dual-listed items per EPYC model), so each
+# needs its own sweep. eBay revises categories quarterly; docs/TODO.md tracks
+# the re-verification. A query, not a bare category: category-only
+# result sets (GPU ~109k, RAM ~1.32M, CPU ~143k) are far past the 10,000-item
+# window, so they could never be proven complete.
+#
+# CPU (F6 pilot, ledger L14): one sweep per (category, seeded EPYC model) whose
+# live result set fits ONE page, so every CPU scope can be proven complete
+# (see the module docstring on single-page completeness) — max_pages=1 because
+# a second page could only ever make the sweep unprovable. Only models in the
+# first-party seed (refdata/seeds/amd-epyc.json) are swept: an unseeded model
+# has no catalog target to accept against. Live totals 2026-09-26 (EBAY_US,
+# fixed price): 56088 — 9354: 16, 9654: 22, 7763: 9, 7742: 13; 164 — 9354: 74,
+# 7763: 152 (the closest to the 200-item page; a result set past it turns the
+# scope incomplete via `next`, never falsely complete). Deliberately excluded:
+#   - (164, "EPYC 9654"): ~228 results, more than one page, so never complete.
+#   - (164, "EPYC 7742"): multi-variation listings come back as one variation
+#     per listing, and Browse rotates which one between calls (same legacy id,
+#     new itemId). source_listing_key is the full itemId, so a complete sweep
+#     would delist one variation and ingest another on alternate runs.
+# Six CPU pages leave RUN_PAGE_BUDGET 9 for the multi-page pilots, so RAM
+# drops from 5 pages to 4 (neither pilot can be complete at any page count).
 CATEGORY_SWEEPS: Final = validate_sweeps(
     (
         CategorySweep(slug="gpu", query_id="rtx-3090", category_id="27386", q="RTX 3090"),
@@ -253,8 +286,26 @@ CATEGORY_SWEEPS: Final = validate_sweeps(
             query_id="ddr4-ecc-rdimm-32gb",
             category_id="11210",
             q="32GB DDR4 ECC RDIMM",
+            max_pages=4,
         ),
-        CategorySweep(slug="cpu", query_id="epyc-7302", category_id="56088", q="EPYC 7302"),
+        CategorySweep(
+            slug="cpu", query_id="epyc-9354-56088", category_id="56088", q="EPYC 9354", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-9654-56088", category_id="56088", q="EPYC 9654", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-7763-56088", category_id="56088", q="EPYC 7763", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-7742-56088", category_id="56088", q="EPYC 7742", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-9354-164", category_id="164", q="EPYC 9354", max_pages=1
+        ),
+        CategorySweep(
+            slug="cpu", query_id="epyc-7763-164", category_id="164", q="EPYC 7763", max_pages=1
+        ),
     )
 )
 
@@ -354,8 +405,9 @@ def _legacy_verdict(pages: list[RawItem], skipped: int) -> str | None:
 
     Every page must carry no `next` href and a `total` no larger than the
     summaries it held. Browse's `total` is an estimate for broad queries, so for
-    SEARCH_PARAMS' sweep this is normally not proven and the absence-grace path
-    applies — the intended conservative default, not an oversight. A parse drop
+    SEARCH_PARAMS' sweep this is normally not proven, and an unproven legacy
+    sweep delists nothing (its scope opts out of stale absence) — the intended
+    conservative default, not an oversight. A parse drop
     also forfeits the claim: a summary we could not read is not a listing that
     ended.
     """
@@ -445,6 +497,7 @@ class EbayAdapter:
         client: httpx.AsyncClient | None = None,
         *,
         category_sweeps: Sequence[CategorySweep] = (),
+        drive_sweep: bool = True,
     ) -> None:
         # Inject-or-own-and-close: tests inject a MockTransport client (not
         # closed by us); production leaves this None and gets a fresh client
@@ -452,8 +505,13 @@ class EbayAdapter:
         self._client = client
         # Legacy-only by default: every MS-1 caller and frozen test builds
         # EbayAdapter() and expects exactly the single drive GET. Production
-        # opts in through category_sweep_adapter().
+        # opts in through sources.admitted_ebay_adapter() (scheduled) or
+        # category_sweep_adapter() (harvest).
         self._sweeps = validate_sweeps(category_sweeps)
+        # False when (ebay, drive) is not admitted (sources.admitted_ebay_adapter):
+        # fetch() then skips the legacy drive GET and probe() sends nothing, since
+        # that GET is itself the drive sweep and the heartbeat.
+        self._drive_sweep = drive_sweep
         self._sweep_by_query = {(s.category_id, s.q): s for s in self._sweeps}
         # Set by probe(). The heartbeat job probes and then, on a transition,
         # runs the SAME instance as a FULL run; that fired run skips the
@@ -597,24 +655,30 @@ class EbayAdapter:
         base = _api_base()
         deadline = asyncio.get_running_loop().time() + CATEGORY_DEADLINE_S
         try:
-            # The legacy GET keeps its MS-1 error semantics: an exception here
-            # still fails the run.
-            resp = await self._search(client, base, SEARCH_PARAMS)
-            items = [
-                RawItem(
-                    url=str(resp.url),
-                    http_status=resp.status_code,
-                    content_type=resp.headers.get("content-type", "application/json"),
-                    payload_json=resp.json() if resp.status_code == 200 else None,
-                    payload_text=resp.text,
+            items: list[RawItem] = []
+            legacy_ok = True
+            if self._drive_sweep:
+                # The legacy GET keeps its MS-1 error semantics: an exception
+                # here still fails the run.
+                resp = await self._search(client, base, SEARCH_PARAMS)
+                items.append(
+                    RawItem(
+                        url=str(resp.url),
+                        http_status=resp.status_code,
+                        content_type=resp.headers.get("content-type", "application/json"),
+                        payload_json=resp.json() if resp.status_code == 200 else None,
+                        payload_text=resp.text,
+                    )
                 )
-            ]
+                legacy_ok = resp.status_code == 200
             stops: dict[str, str] = {}
             # A failed legacy GET fails the whole run in _classify_batch, as it
             # always has; sweeping categories behind it would only spend quota
             # on pages that run discards. It is also the throttling canary:
-            # the quota is per application, so a 429 lands here too.
-            if resp.status_code == 200 and not self._heartbeat_probed:
+            # the quota is per application, so a 429 lands here too. Without
+            # the drive sweep there is no canary, and each category page's own
+            # failure handling ends only its sweep.
+            if legacy_ok and not self._heartbeat_probed:
                 for sweep in self._sweeps:
                     pages, stops[sweep.scope_key] = await self._sweep_pages(
                         client, base, sweep, deadline
@@ -750,6 +814,16 @@ class EbayAdapter:
             observed_at=batch.fetched_at,
             complete=why_not is None,
             absence_grace=DELIST_ABSENCE_GRACE,
+            # Same owner invariant as the category scopes (review r3 R3-F): an
+            # unprovably complete sweep never delists. The legacy keyword
+            # search is one 200-item page of a Best Match ranking over a
+            # result set Browse normally reports as larger, so a live listing
+            # ranked past that page misses every sweep for as long as it stays
+            # live; six hours of continuous misses there says nothing about
+            # whether it ended. Evidence expiry (_expires_in_6h) hides such an
+            # offer instead. Continuity is still recorded for this scope —
+            # counts_toward_sweep_continuity reads run evidence, not this flag.
+            stale_absence_allowed=False,
         )
         return ScopeSweepReport(
             scope_key=None, scope=scope, pages=len(pages), reason=why_not or "complete"
@@ -760,10 +834,12 @@ class EbayAdapter:
 
         Semantics (CR-004 / IR-002 delete-on-delist): the Browse search returns
         only active, buyable items, so a key the sweep omitted is a delist
-        CANDIDATE — never a certainty. Absence is believed immediately only when
-        the page provably enumerated the entire result set; otherwise the listing
-        must go unseen for DELIST_ABSENCE_GRACE first. Both marks are reversible
-        on re-sight, so the false-positive cost is a temporarily hidden offer.
+        CANDIDATE — never a certainty. Absence is believed only when the page
+        provably enumerated the entire result set; an incomplete sweep delists
+        nothing however long a listing goes unseen (stale_absence_allowed=False),
+        and the 6h evidence expiry hides that offer instead. The mark is
+        reversible on re-sight, but IR-002 redaction runs first, so a false
+        positive destroys merchant content until the listing is seen again.
 
         Returns None when there is nothing to conclude from. Covers the legacy
         NULL scope only; the pipeline prefers delist_scopes(), which adds one
@@ -815,6 +891,15 @@ class EbayAdapter:
                 complete=why_not is None,
                 absence_grace=DELIST_ABSENCE_GRACE,
                 scope_key=key,
+                # Only a provably complete category sweep may delist (owner
+                # invariant; review r2 N1). An incomplete one (a `next`, a
+                # total above what was seen, an unstable total, a parse drop,
+                # a page cap, any multi-page sweep) keeps no stale path: a
+                # listing ranked past the page cap is invisible to every sweep
+                # for as long as it stays live, so six hours of misses there
+                # is not evidence that it ended. The _expires_in_6h TTL hides
+                # such an offer from Listing.objects.active() instead.
+                stale_absence_allowed=False,
             )
             reason = stopped or why_not or "complete"
             reports.append(ScopeSweepReport(key, scope, len(pages), reason))
@@ -827,6 +912,10 @@ class EbayAdapter:
         # stays one request and a FULL run the heartbeat fires on this same
         # instance costs one more (see __init__).
         self._heartbeat_probed = True
+        if not self._drive_sweep:
+            # The probe IS the legacy drive GET; with drive not admitted there
+            # is nothing this source may probe.
+            return []
         batch = await self.fetch()
         endpoint = _search_url(_api_base())
         return [
@@ -844,10 +933,22 @@ class EbayAdapter:
         ]
 
 
-def category_sweep_adapter() -> EbayAdapter:
-    """The production eBay adapter: legacy drive sweep plus CATEGORY_SWEEPS.
+def category_sweep_adapter(category: str | None = None) -> EbayAdapter:
+    """The eBay harvest adapter, unfiltered by the admission matrix.
 
-    The ADAPTERS registry entry, so the poller and harvest_corpus both get the
-    category sweeps (harvest: at most 1 + RUN_PAGE_BUDGET Browse calls).
+    With no category: the legacy drive sweep plus every CATEGORY_SWEEPS entry.
+    With a category slug: only that category's sweeps, and the legacy drive
+    GET only when the slug is drive, so a focused harvest spends Browse calls
+    on that category alone. A slug no sweep carries yields an adapter that
+    fetches nothing (drive aside); callers validate the slug.
+
+    harvest_corpus's entry (sources.HARVEST_ADAPTERS; at most 1 +
+    RUN_PAGE_BUDGET Browse calls). The poller never uses it: its entry is
+    sources.admitted_ebay_adapter, which drops non-admitted sweeps.
     """
-    return EbayAdapter(category_sweeps=CATEGORY_SWEEPS)
+    if category is None:
+        return EbayAdapter(category_sweeps=CATEGORY_SWEEPS)
+    return EbayAdapter(
+        category_sweeps=[s for s in CATEGORY_SWEEPS if s.slug == category],
+        drive_sweep=category == DRIVE,
+    )

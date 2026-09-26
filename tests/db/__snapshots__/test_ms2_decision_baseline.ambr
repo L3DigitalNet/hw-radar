@@ -56,13 +56,22 @@
       ]),
     ),
     'rung1_brand_mismatch': tuple(
-      <Outcome.NONE: 'none'>,
+      <Outcome.REVIEW: 'review'>,
       <Grain.NONE: 'none'>,
-      None,
+      1,
       '',
       None,
       None,
       list([
+        tuple(
+          'brand_contradicts_exact_alias',
+          dict({
+            'alias_brands': list([
+              'seagate',
+            ]),
+            'brand': 'toshiba',
+          }),
+        ),
         tuple(
           'mpn_hypothesis',
           'st16000nm001g',
@@ -312,11 +321,11 @@
     ),
     tuple(
       'ghd-0001',
-      <Outcome.ACCEPT: 'accept'>,
-      <Grain.FAMILY: 'family'>,
-      2,
-      'seagate',
-      'exos',
+      <Outcome.NONE: 'none'>,
+      <Grain.NONE: 'none'>,
+      None,
+      None,
+      None,
       None,
       None,
     ),
@@ -336,7 +345,7 @@
       <Grain.FAMILY: 'family'>,
       2,
       'western_digital',
-      'red',
+      'red plus',
       None,
       None,
     ),

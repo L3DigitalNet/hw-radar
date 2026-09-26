@@ -5,4 +5,42 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 # Stamped on every listing_resolution edge (C.3.3). Bump on ANY rule change —
 # vocab pattern, grammar rule, ladder constant — so re-resolution runs are
 # diffable experiments (C.3.5). Format: YYYY.MM.revision.
-MATCHER_VERSION = "2026.09.1"
+#
+# Rule history, so a persisted listing_resolution.matcher_version stays
+# interpretable after the rules move on (earlier bumps: git log of this file):
+#   2026.09.1 — MS-2 multi-category watch core rules; drive rules as MS-1e
+#               evaluated them (docs/evidence/2026-09-25-ms1e-audit-packet.md).
+#   2026.09.2 — MS-1e owner-audit false-merge fixes: (a) an MPN cited only as the
+#               object of a comparison phrase ("comparable to X") is masked and
+#               never becomes identity evidence; (b) the Seagate `nm` segment no
+#               longer implies Exos (grammars/seagate.py), so ST…NM… tokens
+#               decode without a family and never attach at rung 2; (c) WD
+#               recertified-store SKU keys expose the manufacturer MPN as a
+#               structured-field candidate. Edges stamped 2026.09.1 may carry
+#               rung-2 Seagate/Exos families that 2026.09.2 would not assert.
+#               2026.09.2 also: contradicted exact alias -> review; older-version
+#               automated priors re-decided.
+#               2026.09.2 also: reference spans computed before punctuation
+#               stripping; offer terms masked.
+#               2026.09.2 also: CPU reference masking, multi-model/OPN-suffix
+#               and ES/QS sample guards.
+#               2026.09.2 also: parentheticals do not end reference spans;
+#               category-local phrases keep clause punctuation.
+#               2026.09.2 also: CPU bundle/board, multi-model and structured-MPN
+#               sample vetoes; EPYC codenames skipped in the name candidate.
+#               2026.09.2 also: drive title-family contradiction and multi-MPN
+#               reviews; WD `ef` decodes only Red Plus datasheet suffixes;
+#               drive-local "fit for"/"suitable for"/leading-"for" masking.
+#               2026.09.2 also: unclosed "(" masks to the end; "for sale" is not a
+#               reference; conflicting-model aliases review at every rung;
+#               structured MPNs keep title provenance; WD 0F retail PNs are
+#               review-only candidates; complete CPU model tokens only; spaced
+#               "mother board"/"main board" is a CPU bundle.
+#               2026.09.2 also: drive leading-"compatible" masking; a prior is
+#               not inherited when the title's aliases name only other models.
+#               2026.09.2 also: automated priors re-decided when identifiers change;
+#               review-only aliases veto contradicted targets; repair preambles
+#               kept; coordinated Xeon/Core models vetoed; title MPN kind kept.
+#               2026.09.2 also: plural repair preambles kept; numeric Xeon "or"
+#               alternatives vetoed; variant priors re-decided on changed condition.
+MATCHER_VERSION = "2026.09.2"

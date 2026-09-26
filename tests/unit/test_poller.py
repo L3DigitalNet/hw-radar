@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+from collections.abc import Callable
 
 import pytest
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -179,10 +180,13 @@ def test_refdata_refresh_job_registered_on_utc_cron() -> None:
     assert str(job.trigger.timezone) == "UTC"
 
 
-def test_heartbeat_sources_get_fast_and_slow_repair_jobs() -> None:
+def test_heartbeat_sources_get_fast_and_slow_repair_jobs(admit: Callable[..., None]) -> None:
     # CR-006: non-eBay heartbeat sources run TWO jobs — a fast heartbeat probe at
     # the heartbeat lane's interval AND a slow full-pipeline repair crawl at the
-    # full lane's, which ADR-0020 pins at cadence_baseline_s.
+    # full lane's, which ADR-0020 pins at cadence_baseline_s. goharddrive ships
+    # without a heartbeat; it is flagged on here only to give the mechanics a
+    # second admitted key with different intervals.
+    admit(("wd-recertified", "drive"), ("goharddrive", "drive"))
     schedules = [
         _mem_schedule(
             "wd-recertified",
@@ -192,14 +196,7 @@ def test_heartbeat_sources_get_fast_and_slow_repair_jobs() -> None:
             full_interval_s=1800,
         ),
         _mem_schedule(
-            "seagate-recertified",
-            heartbeat_enabled=True,
-            cheap_signal=CheapSignal.BOOTSTRAP_JSON,
-            heartbeat_interval_s=300,
-            full_interval_s=1800,
-        ),
-        _mem_schedule(
-            "serverpartdeals",
+            "goharddrive",
             heartbeat_enabled=True,
             cheap_signal=CheapSignal.SHOPIFY_PRODUCTS_JSON,
             heartbeat_interval_s=900,
@@ -209,8 +206,7 @@ def test_heartbeat_sources_get_fast_and_slow_repair_jobs() -> None:
     scheduler = build_scheduler(BucketRegistry(), schedules)
     for key, fast, slow in (
         ("wd-recertified", 300, 1800),
-        ("seagate-recertified", 300, 1800),
-        ("serverpartdeals", 900, 3600),
+        ("goharddrive", 900, 3600),
     ):
         hb = scheduler.get_job(f"poll-heartbeat-{key}")
         repair = scheduler.get_job(f"poll-{key}")
@@ -221,9 +217,10 @@ def test_heartbeat_sources_get_fast_and_slow_repair_jobs() -> None:
         assert fast != slow  # distinct cadences, distinct job IDs
 
 
-def test_ebay_gets_single_heartbeat_job_only() -> None:
-    # eBay's Browse poll IS both heartbeat and full fetch (natively-both source),
-    # so a separate poll-ebay repair job would double-poll.
+def test_ebay_gets_single_heartbeat_job_only(admit: Callable[..., None]) -> None:
+    # For the drive sweep alone, eBay's Browse poll IS both heartbeat and full
+    # fetch (natively-both source), so a separate poll-ebay job would double-poll.
+    admit(("ebay", "drive"))
     schedules = [
         _mem_schedule(
             "ebay",
@@ -238,7 +235,32 @@ def test_ebay_gets_single_heartbeat_job_only() -> None:
     assert scheduler.get_job("poll-ebay") is None
 
 
-def test_heartbeat_disabled_source_gets_single_full_job() -> None:
+@pytest.mark.parametrize("category", ["cpu", "gpu", "ram"])
+def test_admitted_ebay_sweep_category_gets_the_full_lane_job(
+    admit: Callable[..., None], category: str
+) -> None:
+    # Category sweeps never run on the heartbeat path (its probe is the drive
+    # GET and its fired run skips sweeps), so the scheduled full lane is the
+    # only thing that collects an admitted eBay category.
+    admit(("ebay", category))
+    schedules = [
+        _mem_schedule(
+            "ebay",
+            heartbeat_enabled=True,
+            cheap_signal=CheapSignal.EBAY_BROWSE,
+            heartbeat_interval_s=120,
+            full_interval_s=600,
+        )
+    ]
+    scheduler = build_scheduler(BucketRegistry(), schedules)
+    full = scheduler.get_job("poll-ebay")
+    assert full is not None
+    assert full.trigger.interval.total_seconds() == 600
+    assert scheduler.get_job("poll-heartbeat-ebay") is not None
+
+
+def test_heartbeat_disabled_source_gets_single_full_job(admit: Callable[..., None]) -> None:
+    admit(("goharddrive", "drive"))
     schedules = [
         _mem_schedule(
             "goharddrive",

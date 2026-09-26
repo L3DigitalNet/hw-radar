@@ -415,6 +415,7 @@ def apply_delist(site: SourceSite, scope: DelistScope, continuous_since: datetim
     CR-004 continuity invariant: ABSENT_STALE needs both that the listing went
     unseen for the grace and that the scope was polled continuously across it
     (`continuous_since`); a complete sweep is direct evidence and needs neither.
+    An incomplete scope with stale_absence_allowed=False delists nothing.
 
     Ordering guard (MS2-D-30, revision 10 ED-06): a listing observed by a
     newer run (last_observed_at > scope.observed_at) is never delisted by this
@@ -428,6 +429,12 @@ def apply_delist(site: SourceSite, scope: DelistScope, continuous_since: datetim
         reason = DelistReason.ABSENT_FROM_SWEEP
         stale_cutoff: datetime | None = None
     else:
+        if not scope.stale_absence_allowed:
+            # gate_delist_scope already drops such a scope; repeating the check
+            # at the only ABSENT_STALE writer keeps the owner invariant (an
+            # unprovably complete scope never delists) true on any caller path,
+            # however much continuity the scope has built up.
+            return 0
         if continuous_since is None or scope.observed_at - continuous_since < scope.absence_grace:
             logger.info(
                 "delist stage for %s: skipping stale-absence marks — scope %s has only "
@@ -482,8 +489,10 @@ def apply_absence(
       also swept the NULL scope applies that scope in its own call, which
       records or breaks the NULL continuity from the NULL sweep's evidence.
       Breaking it here as well would clear the continuous_since that call
-      just recorded, so the legacy drive lane's continuity would restart on
-      every run and its stale-absence path would never open.
+      just recorded, so the NULL lane's continuity would restart on every run
+      and no NULL-scope stale-absence path could ever open. (eBay's legacy
+      NULL scope itself opts out of stale absence; its continuity is still
+      recorded, and this rule holds for any NULL scope that does not.)
     - A gated complete scope raises that scope's complete-sweep watermark in
       the same transaction as its ABSENT_FROM_SWEEP marks (MS2-D-35),
       complete-empty and zero-delist sweeps included.

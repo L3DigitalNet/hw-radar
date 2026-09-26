@@ -1,3 +1,5 @@
+# pyright: reportMissingTypeStubs=false, reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+# APScheduler 3.x is untyped (see tests/unit/test_poller.py); the scheduled-lane tests read Job objects.
 """MS-2 F1: eBay category sweeps — pagination, per-sweep completeness, per-scope absence.
 
 The Browse fake routes on the request parameters the adapter sends: no
@@ -11,17 +13,21 @@ behavior recorded in acquisition.sources.ebay's module docstring.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Sequence
+import json
+from collections.abc import Callable, Iterator, Sequence
 from datetime import timedelta
+from pathlib import Path
 from typing import cast
 
 import httpx
 import pytest
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from django.utils import timezone
 
 from hw_radar.acquisition.contracts import NullResolver, RawBatch, RawItem
 from hw_radar.acquisition.pipeline import FETCH_TIMEOUT_S, run_source
-from hw_radar.acquisition.sources import ADAPTERS, ebay
+from hw_radar.acquisition.scheduling.buckets import BucketRegistry
+from hw_radar.acquisition.sources import HARVEST_ADAPTERS, ebay
 from hw_radar.acquisition.sources.ebay import (
     _TOKEN_CACHE,  # pyright: ignore[reportPrivateUsage]
     CATEGORY_DEADLINE_S,
@@ -32,7 +38,9 @@ from hw_radar.acquisition.sources.ebay import (
     validate_sweeps,
 )
 from hw_radar.catalog.models import (
+    CheapSignal,
     DelistReason,
+    LifecycleState,
     Listing,
     OfferSnapshot,
     RawPayload,
@@ -44,6 +52,7 @@ from hw_radar.catalog.models import (
     SourceConfig,
     SourceLaneState,
 )
+from hw_radar.poller.service import build_scheduler, load_schedules, poll_source
 
 pytestmark = pytest.mark.django_db(transaction=True, serialized_rollback=True)
 
@@ -59,6 +68,8 @@ CPU = CategorySweep(
     slug="cpu", query_id="epyc-7302", category_id="56088", q="EPYC 7302", max_pages=2
 )
 ALL = (GPU, GPU_4090, RAM, CPU)
+
+REFDATA_SEEDS = Path(ebay.__file__).parents[2] / "refdata" / "seeds"
 
 TOKEN_BODY = {"access_token": "SYNTH-TOKEN", "expires_in": 7200}
 
@@ -665,22 +676,33 @@ def test_malformed_category_summary_is_a_parse_drop_not_a_run_failure(
 
 
 def test_scheduled_adapter_sweeps_every_category() -> None:
-    # The registry entry is what the poller and harvest_corpus build.
-    adapter = ADAPTERS["ebay"]()
+    # harvest_corpus's entry carries every sweep; the poller's is matrix-filtered
+    # (tests/db/test_source_admission_db.py).
+    adapter = HARVEST_ADAPTERS["ebay"]()
     assert isinstance(adapter, EbayAdapter)
     batch = RawBatch(source="ebay", fetched_at=timezone.now(), items=[])
     assert adapter.delist_scopes(batch, []) == []  # nothing fetched, nothing reported
-    assert [s.scope_key for s in CATEGORY_SWEEPS] == [
-        "ebay:gpu:rtx-3090",
-        "ebay:ram:ddr4-ecc-rdimm-32gb",
-        "ebay:cpu:epyc-7302",
+    assert [(s.scope_key, s.category_id, s.q, s.max_pages) for s in CATEGORY_SWEEPS] == [
+        ("ebay:gpu:rtx-3090", "27386", "RTX 3090", 5),
+        ("ebay:ram:ddr4-ecc-rdimm-32gb", "11210", "32GB DDR4 ECC RDIMM", 4),
+        ("ebay:cpu:epyc-9354-56088", "56088", "EPYC 9354", 1),
+        ("ebay:cpu:epyc-9654-56088", "56088", "EPYC 9654", 1),
+        ("ebay:cpu:epyc-7763-56088", "56088", "EPYC 7763", 1),
+        ("ebay:cpu:epyc-7742-56088", "56088", "EPYC 7742", 1),
+        ("ebay:cpu:epyc-9354-164", "164", "EPYC 9354", 1),
+        ("ebay:cpu:epyc-7763-164", "164", "EPYC 7763", 1),
     ]
-    assert [(s.category_id, s.q) for s in CATEGORY_SWEEPS] == [
-        ("27386", "RTX 3090"),
-        ("11210", "32GB DDR4 ECC RDIMM"),
-        ("56088", "EPYC 7302"),
-    ]
-    assert all(s.filter == FIXED_PRICE_FILTER and s.max_pages == 5 for s in CATEGORY_SWEEPS)
+    assert all(s.filter == FIXED_PRICE_FILTER for s in CATEGORY_SWEEPS)
+
+
+def test_cpu_sweeps_query_only_seeded_epyc_models() -> None:
+    # F6: a CPU scope exists to be matched against the first-party catalog, so
+    # every query must be a seeded model_number (an unseeded query, like the
+    # earlier EPYC 7302 pilot, can never produce an accept).
+    seed = json.loads((REFDATA_SEEDS / "amd-epyc.json").read_text(encoding="utf-8"))
+    seeded = {model["model_number"] for model in seed["models"]}
+    cpu_queries = {s.q for s in CATEGORY_SWEEPS if s.slug == "cpu"}
+    assert cpu_queries <= seeded
 
 
 @pytest.mark.parametrize(
@@ -717,3 +739,121 @@ def test_sweep_set_must_fit_one_run() -> None:
     ]
     with pytest.raises(ValueError, match="pages per run"):
         validate_sweeps(wide)
+
+
+# ── Scheduled category sweeps (the poller's full lane) ──────────────────────
+
+CPU_SWEEPS = tuple(s for s in CATEGORY_SWEEPS if s.slug == "cpu")
+
+
+def _install_browse(monkeypatch: pytest.MonkeyPatch, browse: Browse) -> None:
+    # The scheduled path builds its own adapter (sources.admitted_ebay_adapter)
+    # with no injected client, so the fake goes in at the AsyncClient seam.
+    real = httpx.AsyncClient
+
+    def client(**kwargs: object) -> httpx.AsyncClient:
+        return real(transport=httpx.MockTransport(browse.handler), **kwargs)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(ebay.httpx, "AsyncClient", client)
+
+
+def _enabled_ebay_scheduler() -> AsyncIOScheduler:
+    """Enable the SEEDED eBay row (migration 0011's heartbeat flags kept) and build
+    the scheduler the poller would, from the enabled rows."""
+    SourceConfig.objects.filter(source_site__normalized_name="ebay").update(
+        enabled=True, lifecycle_state=LifecycleState.ACTIVE
+    )
+    config = SourceConfig.objects.get(source_site__normalized_name="ebay")
+    # The regression lives exactly here: a heartbeat-enabled EBAY_BROWSE row
+    # used to get the heartbeat job alone, whose path never sweeps categories.
+    assert config.heartbeat_enabled
+    assert config.cheap_signal == CheapSignal.EBAY_BROWSE
+    configs = list(SourceConfig.objects.select_related("source_site").filter(enabled=True))
+    registry = BucketRegistry()
+    registry.configure_source("ebay", rate_per_min=60.0, burst=10, now_s=0.0)
+    return build_scheduler(registry, load_schedules(configs))
+
+
+def test_admitted_cpu_cell_schedules_cpu_sweeps_that_delist_per_complete_scope(
+    loop: asyncio.AbstractEventLoop,
+    monkeypatch: pytest.MonkeyPatch,
+    admit: Callable[..., None],
+) -> None:
+    admit(("ebay", "cpu"))
+    scheduler = _enabled_ebay_scheduler()
+    job = scheduler.get_job("poll-ebay")
+    assert job is not None
+    assert job.func is poll_source
+
+    browse = Browse(
+        _legacy(),
+        {s: [_page([f"{s.query_id}-a", f"{s.query_id}-b"], total=2)] for s in CPU_SWEEPS},
+    )
+    _install_browse(monkeypatch, browse)
+    loop.run_until_complete(job.func(*job.args))
+    # Exactly one single-page request per CPU scope: no legacy drive GET and no
+    # GPU/RAM page, because only (ebay, cpu) is admitted.
+    assert sorted(browse.calls) == sorted(f"{s.category_id}:0" for s in CPU_SWEEPS)
+
+    # Second pass: every scope lost its -b listing. Five sweeps prove it
+    # (total 1, one page, no next); the last still reports total 2, so its
+    # absence is unproven and must wait out the grace instead.
+    incomplete = CPU_SWEEPS[-1]
+    browse.calls.clear()
+    browse.pages = {  # pyright: ignore[reportAttributeAccessIssue] - Page is a union
+        (s.category_id, s.q): [_page([f"{s.query_id}-a"], total=2 if s is incomplete else 1)]
+        for s in CPU_SWEEPS
+    }
+    loop.run_until_complete(job.func(*job.args))
+    assert len(browse.calls) == len(CPU_SWEEPS)
+
+    delisted = set(
+        Listing.objects.filter(
+            source_site__normalized_name="ebay", delisted_at__isnull=False
+        ).values_list("source_listing_key", flat=True)
+    )
+    assert delisted == {f"{s.query_id}-b" for s in CPU_SWEEPS if s is not incomplete}
+    run = ScraperRun.objects.filter(source_site__normalized_name="ebay").latest("started_at")
+    assert {k: (v["complete"], v["delisted"]) for k, v in _scopes(run).items()} == {
+        s.scope_key: (s is not incomplete, 0 if s is incomplete else 1) for s in CPU_SWEEPS
+    }
+
+
+def test_drive_and_cpu_admitted_keep_the_heartbeat_and_still_sweep_cpu(
+    loop: asyncio.AbstractEventLoop,
+    monkeypatch: pytest.MonkeyPatch,
+    admit: Callable[..., None],
+) -> None:
+    admit(("ebay", "drive"), ("ebay", "cpu"))
+    scheduler = _enabled_ebay_scheduler()
+    heartbeat_job = scheduler.get_job("poll-heartbeat-ebay")
+    full_job = scheduler.get_job("poll-ebay")
+    assert heartbeat_job is not None
+    assert full_job is not None
+
+    browse = Browse(
+        _legacy("drive-a"),
+        {s: [_page([f"{s.query_id}-a"], total=1)] for s in CPU_SWEEPS},
+    )
+    _install_browse(monkeypatch, browse)
+
+    # The heartbeat stays drive-only: its probe is the drive GET, and the FULL
+    # run it fires on first sight of drive-a (a transition) skips every sweep.
+    loop.run_until_complete(heartbeat_job.func(*heartbeat_job.args))
+    assert browse.calls == ["legacy", "legacy"]
+
+    # The scheduled full lane sweeps every CPU scope, and carries the drive GET
+    # too: without it this scoped run would break the NULL scope's continuity
+    # (stages.apply_absence) every cycle and drive stale-absence could never open.
+    browse.calls.clear()
+    loop.run_until_complete(full_job.func(*full_job.args))
+    assert browse.calls[0] == "legacy"
+    assert sorted(browse.calls[1:]) == sorted(f"{s.category_id}:0" for s in CPU_SWEEPS)
+    assert _lane().continuous_since is not None
+
+
+def test_no_admitted_ebay_cell_schedules_nothing() -> None:
+    # Current production truth: every eBay cell is NOT_ADMITTED.
+    scheduler = _enabled_ebay_scheduler()
+    assert scheduler.get_job("poll-ebay") is None
+    assert scheduler.get_job("poll-heartbeat-ebay") is None

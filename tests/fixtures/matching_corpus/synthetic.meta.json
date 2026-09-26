@@ -11,6 +11,13 @@
     "ebay": 2
   },
   "matcher_version": "2026.07.3",
+  "ratification_sources": [
+    "ebay",
+    "goharddrive",
+    "seagate-recertified",
+    "serverpartdeals",
+    "wd-recertified"
+  ],
   "audit_rollup": {
     "claude_draft": 8,
     "owner_confirmed": 2

@@ -12,6 +12,8 @@
   },
   "matcher_version": "2026.09.1",
   "audit_rollup": {
-    "claude_draft": 125
+    "claude_draft": 89,
+    "owner_confirmed": 23,
+    "owner_corrected": 13
   }
 }

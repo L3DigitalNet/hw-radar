@@ -73,6 +73,9 @@ def test_cache_sector_recording_security() -> None:
 
 def test_condition_ladder_precedence() -> None:
     assert _value(_x("Seagate 8TB used - for parts").condition) == "for_parts"
+    assert _value(_x("For spares or repair: Seagate 12TB HDD").condition) == "for_parts"
+    assert _value(_x("Seagate 12TB spares/repair").condition) == "for_parts"
+    assert _value(_x("WD 4TB for repair").condition) == "for_parts"
     attrs = _x("16TB Factory Recertified drive")
     assert _value(attrs.condition) == "recertified"
     assert _value(attrs.recert_channel) == "factory"

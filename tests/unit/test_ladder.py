@@ -111,10 +111,13 @@ def test_rung1_oem_fanout_within_one_family_collapses_to_family() -> None:
     assert v.target is not None and v.target.family_id == 1
 
 
-def test_rung1_brand_mismatch_filters_the_hit() -> None:
+def test_rung1_brand_mismatch_on_every_hit_reviews() -> None:
+    # A contradicted exact alias is a conflict, not a miss (review F3; the full
+    # grammar-fallthrough case lives in test_ladder_brand_contradiction.py).
     extracted = ExtractedAttributes(brand=_attr("toshiba"))
     v = ladder.decide(extracted, [_cand("st16000nm001g")], None, [_model_hit()], None)
-    assert v.outcome is ladder.Outcome.NONE  # hit filtered; no decode supplied
+    assert v.outcome is ladder.Outcome.REVIEW
+    assert v.rung == 1
 
 
 def test_rung1_brandless_unknown_code_collision_reviews_never_accepts() -> None:

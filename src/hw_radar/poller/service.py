@@ -9,8 +9,9 @@ configured, and this module is only imported *after* that — by ``__main__.py``
 settings during collection). That is why the package ``__init__`` no longer
 bootstraps Django at import time; see ``poller/__init__.py``.
 
-Per-source interval jobs are registered from SourceConfig rows; the admission
-gate (buckets → back-off → lifecycle) runs inside each job, so a denied tick
+Per-source interval jobs are registered only for enabled SourceConfig rows that
+the source x category matrix (acquisition.admission) allows; the per-tick
+scheduling.admission gate (buckets → back-off → lifecycle) runs inside each job, so a denied tick
 is cheap. Auto-ramp/back-off changes to a lane's current_interval_s reschedule
 that lane's job in place. Django ORM calls go through sync_to_async.
 
@@ -35,6 +36,7 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
+from hw_radar.acquisition.admission import admitted_categories, scheduling_block
 from hw_radar.acquisition.apify import jobs as apify_jobs
 from hw_radar.acquisition.apify.jobs import APIFY_POLL_SECONDS, apify_poll_tick, start_provider_run
 from hw_radar.acquisition.apify.reconcile import resolve_stale_monitoring_markers
@@ -60,6 +62,7 @@ from hw_radar.catalog.models import (
     SourceLaneState,
 )
 from hw_radar.catalog.models.provider import ImportState
+from hw_radar.matching.categories import DRIVE
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata import refresh as refdata_refresh
 
@@ -303,6 +306,14 @@ async def recovery_probe_job(registry: BucketRegistry) -> None:
         )
     )()
     for config in paused:
+        # This job reads enabled rows straight from the DB rather than from
+        # build_scheduler's filtered set, so it needs its own matrix gate: an
+        # enabled row for a retired or unadmitted source would otherwise be
+        # probed — and, on success, reactivated — every day.
+        block = scheduling_block(config.source_site.normalized_name)
+        if block is not None:
+            logger.warning("probe for %s skipped: %s", config.source_site.normalized_name, block)
+            continue
         if config.collection_provider == ProviderKind.APIFY.value:  # .value: django-types quirk
             # Dispatched before the adapter lookup: the local adapter must never
             # run for an Actor-backed source, even when one is registered — its
@@ -451,6 +462,16 @@ def build_scheduler(
     for schedule in schedules:
         config = schedule.config
         key = config.source_site.normalized_name
+        # The admission matrix is the ceiling above `enabled` (acquisition.
+        # admission): an enabled row for a retired source, or for one with no
+        # admitted category, gets no job at all. Skipping here rather than
+        # denying per tick keeps a retired source from ever reaching a fetch,
+        # a heartbeat probe, or an Apify start, and the warning makes an
+        # enabled-but-blocked row visible instead of silently idle.
+        block = scheduling_block(key)
+        if block is not None:
+            logger.warning("source %s is enabled but not scheduled: %s", key, block)
+            continue
         registry.configure_source(
             key,
             rate_per_min=config.bucket_rate_per_min,
@@ -473,9 +494,22 @@ def build_scheduler(
             # CR-006: non-eBay heartbeat sources also need a slow full-pipeline
             # repair crawl at cadence_baseline_s — CDN edge cache floors probe
             # freshness, so the heartbeat alone can miss changes. eBay's Browse
-            # poll IS both heartbeat and full fetch (natively-both source), so a
-            # second poll-{key} job would just double-poll: it stays single-job.
-            if config.cheap_signal != CheapSignal.EBAY_BROWSE.value:  # .value: django-types quirk
+            # poll IS both heartbeat and full fetch for the DRIVE sweep, so for
+            # drive alone a second poll-{key} job would just double-poll.
+            #
+            # eBay's category sweeps are the exception: the heartbeat never runs
+            # them (the probe is the legacy drive GET, and the FULL run it fires
+            # skips them to protect the Browse quota — sources/ebay.py), so the
+            # scheduled full lane is their only path. Without this job an
+            # admitted eBay category would be silently never collected. The job
+            # builds sources.admitted_ebay_adapter per run, so it sweeps exactly
+            # the admitted categories (plus the drive GET if drive is admitted,
+            # which the eBay quota math already counts per scheduled run).
+            ebay_sweeps_admitted = bool(admitted_categories(key) - {DRIVE})
+            if (
+                config.cheap_signal != CheapSignal.EBAY_BROWSE.value  # .value: django-types quirk
+                or ebay_sweeps_admitted
+            ):
                 # The repair lane's interval is its own row's, which ramp_floor_s
                 # pins at cadence_baseline_s for heartbeat sources — the slow end
                 # CR-006 asks for, now stated by the lane row rather than by

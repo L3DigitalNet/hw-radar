@@ -1,5 +1,7 @@
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false
 # APScheduler 3.x is untyped (see tests/unit/test_poller.py).
+from collections.abc import Callable
+
 import pytest
 
 from hw_radar.acquisition.scheduling.buckets import BucketRegistry
@@ -19,7 +21,9 @@ def test_disabled_sources_get_no_jobs() -> None:
     assert scheduler.get_job("poll-demo") is None
 
 
-def test_recovery_probe_reactivates_paused_source(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_recovery_probe_reactivates_paused_source(
+    monkeypatch: pytest.MonkeyPatch, admit: Callable[..., None]
+) -> None:
     # ADR-0017 end-to-end: paused source + passing daily probe → active again.
     # A fake (non-Scrapy) adapter keeps the Scrapy reactor confined to
     # test_pipeline_demo.py's module loop (the single-loop rule).
@@ -56,6 +60,7 @@ def test_recovery_probe_reactivates_paused_source(monkeypatch: pytest.MonkeyPatc
             ]
 
     monkeypatch.setitem(sources.ADAPTERS, "demo", ProbeAdapter)
+    admit(("demo", "drive"))
     SourceConfig.objects.filter(source_site__normalized_name="demo").update(
         enabled=True, lifecycle_state=LifecycleState.PAUSED_PENDING_FIX
     )
@@ -76,7 +81,10 @@ def test_poller_wires_the_catalog_resolver() -> None:
     assert not hasattr(service, "NullResolver")
 
 
-def test_enabled_source_gets_job_with_config_cadence_and_bucket() -> None:
+def test_enabled_source_gets_job_with_config_cadence_and_bucket(
+    admit: Callable[..., None],
+) -> None:
+    admit(("demo", "drive"))
     SourceConfig.objects.filter(source_site__normalized_name="demo").update(enabled=True)
     registry = BucketRegistry()
     configs = list(SourceConfig.objects.select_related("source_site").filter(enabled=True))

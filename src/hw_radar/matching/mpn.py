@@ -8,13 +8,26 @@ precisely so 'Exos X16' can never read as a NetApp part). House SKUs are
 recognized via the per-source prefix registry — SOURCE-LOCAL aliases only,
 never canonical (ADR-0019 rule 2); the registry is empty until MS-1d
 connectors observe real SKU shapes. Structured-field MPNs (JSON-LD `mpn`)
-outrank every title-mined token."""
+outrank every title-mined token.
+
+Every title-mined pass reads the title with reference spans masked
+(normalize.mask_reference_spans): an MPN or OEM vendor word cited as "comparable
+to X" names another product, and mining it would hand the ladder a rung-1 alias
+hit or a rung-2 decode for the wrong item (MS-1e ebay-0021). The drive phrase
+set (normalize.DRIVE_REFERENCE_PHRASE) must match vocab.extract's, so brand
+and MPN never disagree about which text is the listed product. The structured
+field is exempt — the merchant asserted it as this item's MPN."""
 
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
-from hw_radar.matching.normalize import normalize_alias_text
+from hw_radar.matching.normalize import (
+    DRIVE_REFERENCE_PHRASE,
+    mask_reference_spans,
+    normalize_alias_text,
+)
 from hw_radar.matching.types import MpnCandidate, TokenKind
 
 _MFR_SHAPES: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -41,6 +54,13 @@ _OEM_RULES: tuple[tuple[str, re.Pattern[str], re.Pattern[str] | None], ...] = (
 HOUSE_SKU_PREFIXES: dict[str, tuple[str, ...]] = {}
 
 _CODE_SHAPE = re.compile(r"\b[a-z0-9][a-z0-9./-]{5,23}\b")
+# WD/HGST orderable part numbers ("0F62796"): the seeds carry them as
+# catalog-authoritative retail_pn aliases, but with a single letter they fail
+# the code-token _TWO_ALPHA test, so a title naming one never reached the
+# alias table. That hid a second model from the conflicting-alias review
+# (round-3 R3-A: "WUH722424ALE6L1 / 0F62796", ALE6L4's retail PN). See the
+# extraction pass for why these are review_only UNKNOWN_CODE candidates.
+_WD_RETAIL_PN = re.compile(r"\b0f\d{5}\b")
 _TWO_ALPHA = re.compile(r"[a-z].*[a-z]")
 _TWO_DIGIT = re.compile(r"\d.*\d")
 # Vocab-owned tokens that are code-shaped but never MPN candidates.
@@ -63,6 +83,14 @@ def extract_candidates(
         existing = out.get(candidate.normalized)
         if existing is None or candidate.confidence > existing.confidence:
             out[candidate.normalized] = candidate
+        elif (
+            existing.from_structured_field
+            and not candidate.from_structured_field
+            and existing.title_kind is not TokenKind.MANUFACTURER_MPN
+        ):
+            # The title's strongest classification of the token wins, so a
+            # later weaker pass cannot demote an MPN-shaped title occurrence.
+            out[candidate.normalized] = replace(existing, title_kind=candidate.kind)
 
     if structured_mpn:
         canonical = structured_mpn.casefold().strip()
@@ -78,6 +106,10 @@ def extract_candidates(
             )
         )
 
+    # Masked AFTER the structured field and BEFORE every title pass, including
+    # the OEM vendor gates: "compatible with Dell PowerEdge" must not open the
+    # Dell/EMC gate for a bare number elsewhere in the title.
+    title = mask_reference_spans(title, DRIVE_REFERENCE_PHRASE)
     for vendor, pattern in _MFR_SHAPES:
         for m in pattern.finditer(title):
             add(
@@ -135,5 +167,27 @@ def extract_candidates(
                 confidence=0.3,
             )
         )
+
+    # review_only: the retail PN may turn an accept into a review (another
+    # model's PN beside the MPN) but never grounds one. Letting it accept would
+    # widen drive recall beyond the review fix that motivated it, and the
+    # MS-1e corpus showed the cost: "Compatible WD Ultrastar DC HC560 0F38785"
+    # (ebay-0388, a look-alike part labeled none) became a false accept.
+    # UNKNOWN_CODE with no vendor, not MANUFACTURER_MPN: the shape asserts no
+    # brand, and an unseeded one beside the MPN ("WUH721818AL5204 0F38353")
+    # must not count as a second MPN for the distinct-MPN guard.
+    for m in _WD_RETAIL_PN.finditer(title):
+        normalized = normalize_alias_text(m.group(0))
+        if normalized not in out:
+            add(
+                MpnCandidate(
+                    raw=m.group(0),
+                    normalized=normalized,
+                    kind=TokenKind.UNKNOWN_CODE,
+                    vendor_hint="",
+                    confidence=0.3,
+                    review_only=True,
+                )
+            )
 
     return sorted(out.values(), key=lambda c: -c.confidence)

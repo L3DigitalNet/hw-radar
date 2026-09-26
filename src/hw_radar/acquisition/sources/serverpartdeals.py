@@ -1,5 +1,9 @@
 """ServerPartDeals connector: Shopify /products.json (T2, churning, heartbeat-not-fast-lane).
 
+RETIRED (OQ31, acquisition.admission.RETIRED_SOURCES): kept for history, its
+tests and corpus provenance only. fetch() and probe() raise RetiredSourceError
+before any request; parse() stays usable offline.
+
 httpx JSON connector (not Scrapy) — routes through acquisition.http.get so the
 C-007 robots guardrail applies uniformly across scrape and API-style sources.
 Config seeded by migration 0011: heartbeat_enabled=True, fast_lane=False (SPD
@@ -16,6 +20,7 @@ from typing import cast
 import httpx
 
 from hw_radar.acquisition import http
+from hw_radar.acquisition.admission import ensure_not_retired
 from hw_radar.acquisition.contracts import ParsedListing, RawBatch, RawItem
 from hw_radar.acquisition.heartbeat import HeartbeatReading
 from hw_radar.catalog.models import RunKind
@@ -39,6 +44,12 @@ class ServerPartDealsAdapter:
         self._client = client
 
     async def fetch(self) -> RawBatch:
+        # Retired (OQ31): refused before any client or request exists, so even
+        # a direct call outside the pipeline cannot reach the site. parse() is
+        # deliberately left unguarded; it is offline and keeps the fixture and
+        # corpus-provenance tests working. is_retired, not a hard-coded refusal,
+        # so a reviewed re-admission re-enables this adapter with no edit here.
+        ensure_not_retired(self.site_key)
         owns = self._client is None
         client = self._client or httpx.AsyncClient(timeout=30.0)
         try:
@@ -128,6 +139,9 @@ class ServerPartDealsAdapter:
         return out
 
     async def probe(self) -> list[HeartbeatReading]:
+        # Guarded in its own right, not only through fetch(): a probe that one
+        # day reads a cheaper endpoint directly must still be refused.
+        ensure_not_retired(self.site_key)
         batch = await self.fetch()
         return [
             HeartbeatReading(

@@ -23,7 +23,10 @@ Last updated: 2026-09-25
   (the `shortlist`/`review_queue` read model). No ADR-0011 scoring artifact is
   read or written here.
 - `acquisition`: `sources/` (five drive-focused direct connectors — eBay,
-  GoHardDrive, Seagate, ServerPartDeals, WD — plus a `demo` source),
+  GoHardDrive, Seagate, ServerPartDeals, WD — plus a `demo` source;
+  ServerPartDeals and Seagate are retired as of 2026-09-26 and no longer
+  schedulable, `admission.py` `RETIRED_SOURCES`/`sources/__init__.py`
+  `RETIRED_ADAPTERS`, though their code and history stay in the tree),
   `scheduling/` (fast/slow lane admission, backoff, checkpoints),
   `deadman`/`heartbeat` (availability monitoring), `stages` (transactional
   persist/delist stages shared by the local and remote paths), `persist`
@@ -62,8 +65,9 @@ Last updated: 2026-09-25
   (migrations 0021/0022 undeployed); plan rev 12 (no runtime account reads)
   landed; F5a synthetic Actor proof executed 2026-09-25; Slice F pilot sources
   (F1–F3) and the owner-gated F6 remain;
-  OQ25–OQ29 resolved 2026-09-25, OQ24 (production merchant source) still owner-
-  gated. ADR-0011's detailed drive-scoring design is accepted but deferred from
+  OQ25–OQ29 resolved 2026-09-25; OQ24 part (b) (production merchant source)
+  resolved 2026-09-26 — none is admitted now, F5b deferred, not a blocker.
+  ADR-0011's detailed drive-scoring design is accepted but deferred from
   the immediate critical path.
 - MS-3 operator-facing product UI: not implemented
 - MS-4 alerting: not implemented
