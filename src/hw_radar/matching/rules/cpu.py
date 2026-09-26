@@ -288,18 +288,41 @@ VENDOR_UNLOCKED: Final = "unlocked"
 # Explicit wording only; OEM branding alone ('Dell', 'Pulled from Cisco UCS')
 # never implies a lock, because OEMs ship both locked and unlocked parts.
 #
-# Scan order is load-bearing. Negated unlocks ('not unlocked', "isn't
-# unlocked", 'non-unlocked') are blanked FIRST and disqualify every unlocked
-# reading: a negated unlock proves no lock state, and letting the bare
-# 'unlocked' inside it match turned 'NOT UNLOCKED' into an eligible unlocked
-# CPU (Codex s8 r1 #9). Unlock forms are blanked next, so 'not locked',
-# 'no vendor-lock' and 'unlocked' can never also read as the bare lock word.
-# Hyphens and spaces are interchangeable separators throughout: canonical
-# text keeps '-' ('no-vendor-lock', 'psb-locked'), and a separator-specific
-# pattern read 'no vendor-lock' as locked. 'unlock' and typos ('unclocked')
-# are deliberately absent. The watch clause treats unknown as not satisfying
-# an unlocked requirement, so a missed unlocked costs a review while a misread
-# one makes a locked CPU eligible: every doubtful shape resolves to unknown.
+# Negation is ONE window rule (the s8 round-3 shared negation design, which
+# the condition-phrase negation in vocab is specified to follow too; change
+# the two together): a lock or unlock assertion is NEGATED when a
+# negator token (_NEGATORS) occurs within the _NEGATION_WINDOW tokens before
+# its start. Lock qualifiers and articles (_WINDOW_QUALIFIERS) do not use up
+# the window, and punctuation and hyphens are separators, never tokens, so
+# 'NOT VENDOR-UNLOCKED', 'not a Dell PSB-unlocked CPU' and 'no longer
+# unlocked' are all negated. Rounds 1-2 enumerated negation shapes as regex
+# patches ('not'+one qualifier+'unlocked'); each round found a shape the
+# patch missed ('no longer', two qualifiers) that left the bare 'unlocked'
+# standing as a confident unlock satisfying require_vendor_unlocked (Codex s8
+# r3 #2). A negated match is never a positive reading: it is recorded as the
+# lock state the listing DENIES, which _vendor_lock uses only as a veto. A
+# denied unlock does not prove a lock (the title is unknown unless explicit
+# lock wording also stands), and a denied lock does not prove an unlock.
+#
+# Scan order is load-bearing:
+#  1. _UNLOCK_PHRASES first: positive unlocked phrases whose own wording holds
+#     a negator ('no vendor lock', 'not PSB locked', 'non-locked'). Matched
+#     whole, their negator is their meaning, not a negation of a neighbour;
+#     the window still applies before THEIR start ('not a no-vendor-lock CPU').
+#  2. _UNLOCK_WORD, _UNLOCK_STEM, then _LOCK_WORD, each on text with every
+#     earlier match blanked, so the 'lock'/'locked' inside a claimed phrase
+#     or inside 'un-locked' is never read again: a sub-match inherits its
+#     enclosing match's verdict and can never re-assert a denied or claimed
+#     phrase.
+# A window stops at an earlier assertion, so the negator claimed by 'no
+# vendor lock' does not also negate a following 'Unlocked'. A bare 'unlock'
+# (_UNLOCK_STEM) is never a reading ('unlock code'), but negated ('without
+# unlock', 'no unlock') it is a denial, so it still vetoes an 'Unlocked'
+# elsewhere in the title. Typos ('unclocked') are deliberately absent, and
+# hyphens and spaces are interchangeable separators ('no-vendor-lock',
+# 'psb-locked'). The watch clause treats unknown as not satisfying an unlocked requirement, so a
+# missed unlocked costs a review while a misread one makes a locked CPU
+# eligible: every doubtful shape resolves to unknown.
 _LOCK_OEMS = r"(?:dell|lenovo|hpe?|cisco)"
 _LOCK_QUALIFIER = rf"(?:(?:vendor|psb|{_LOCK_OEMS})[-\s]+)"
 # The shared reference phrases plus lock-local ones. The lock-local phrases
@@ -310,24 +333,29 @@ _LOCK_QUALIFIER = rf"(?:(?:vendor|psb|{_LOCK_OEMS})[-\s]+)"
 # make masking safe (a title with no punctuation still runs the span to the
 # end), which is why _vendor_lock also reads contradictions unmasked.
 _LOCK_REFERENCE = reference_phrase_pattern("works with", "work with", "for use with", "for use in")
-# A lock qualifier or an article may stand between the negator and the word:
-# 'NOT VENDOR-UNLOCKED', 'not PSB unlocked', 'not an unlocked CPU'. Requiring
-# adjacency let the bare 'unlocked' after the qualifier read as an unlock
-# (Codex s8 r2 #9).
-_NEGATED_UNLOCK = re.compile(
-    rf"\b(?:not|non|never|isn\s?t)[-\s]+(?:an?\s+)?{_LOCK_QUALIFIER}?un-?locked\b"
+# 'isn't' canonicalizes to 'isn t' (the apostrophe becomes a space), so the
+# contracted forms are listed by their stem as well as their squeezed form.
+_NEGATORS: Final = frozenset(
+    {"not", "no", "never", "non", "without", "isn", "isnt", "aren", "arent", "ain", "aint"}
 )
-_UNLOCKED_WORDING = re.compile(
-    r"\bun-?locked\b"
-    r"|\bno[-\s]+(?:(?:vendor|psb)[-\s]+)?lock(?:ed)?\b"
+_WINDOW_QUALIFIERS: Final = frozenset(
+    {"vendor", "psb", "dell", "lenovo", "hp", "hpe", "cisco", "factory", "manufacturer"}
+    | {"a", "an", "the", "cpu"}
+)
+_NEGATION_WINDOW: Final = 3
+_WINDOW_TOKEN = re.compile(r"[a-z0-9]+")
+_UNLOCK_PHRASES = re.compile(
+    r"\bno[-\s]+(?:(?:vendor|psb)[-\s]+)?lock(?:ed)?\b"
     rf"|\b(?:not|isn\s?t)[-\s]+{_LOCK_QUALIFIER}?locked\b"
     r"|\bnon[-\s]?(?:(?:vendor|psb)[-\s]+)?locked\b"
 )
+_UNLOCK_WORD = re.compile(r"\bun-?locked\b")
+_UNLOCK_STEM = re.compile(r"\bun-?lock\b")
 # The bare word covers 'Dell Locked', 'vendor-locked', 'PSB locked', 'locked
 # to <vendor>' and the emphasized '(*locked*)'. '<OEM> only' ('LENOVO ONLY') is
 # an exclusivity claim, which for a CPU means it only boots in that OEM's
 # boards: a vendor lock stated in other words.
-_LOCKED_WORDING = re.compile(rf"\blocked\b|\b(?:vendor|psb)[-\s]lock\b|\b{_LOCK_OEMS}\s+only\b")
+_LOCK_WORD = re.compile(rf"\blocked\b|\b(?:vendor|psb)[-\s]lock\b|\b{_LOCK_OEMS}\s+only\b")
 
 
 def socket_key(value: str) -> str:
@@ -477,24 +505,65 @@ def _blank(pattern: re.Pattern[str], text: str) -> str:
     return pattern.sub(lambda m: " " * len(m.group(0)), text)
 
 
-def _lock_wording(
-    text: str,
-) -> tuple[re.Match[str] | None, re.Match[str] | None, re.Match[str] | None]:
-    """(negated unlock, unlocked, locked) wording found in `text`, each read
-    after blanking the forms that contain it (see the scan-order note)."""
-    negated = _NEGATED_UNLOCK.search(text)
-    text = _blank(_NEGATED_UNLOCK, text)
-    unlocked = _UNLOCKED_WORDING.search(text)
-    locked = _LOCKED_WORDING.search(_blank(_UNLOCKED_WORDING, text))
-    return negated, unlocked, locked
+@dataclass(frozen=True, slots=True)
+class _LockWording:
+    """The first match of each kind in one text: `unlocked` / `locked` are
+    un-negated assertions; `unlock_denied` / `lock_denied` are negated ones,
+    the lock state the text explicitly denies (see the window-rule note)."""
+
+    unlocked: re.Match[str] | None = None
+    locked: re.Match[str] | None = None
+    unlock_denied: re.Match[str] | None = None
+    lock_denied: re.Match[str] | None = None
+
+
+def _negated(text: str, start: int, stops: list[tuple[int, int]]) -> bool:
+    counted = 0
+    for token in reversed(list(_WINDOW_TOKEN.finditer(text, 0, start))):
+        if any(lo <= token.start() < hi for lo, hi in stops):
+            return False
+        word = token.group(0)
+        if word in _NEGATORS:
+            return True
+        if word not in _WINDOW_QUALIFIERS:
+            counted += 1
+            if counted == _NEGATION_WINDOW:
+                return False
+    return False
+
+
+def _lock_wording(text: str) -> _LockWording:
+    """Classify every lock/unlock assertion in `text` in the load-bearing scan
+    order described above, then apply the negation window to each."""
+    scans = ((_UNLOCK_PHRASES, True, True), (_UNLOCK_WORD, True, True))
+    scans += ((_UNLOCK_STEM, True, False), (_LOCK_WORD, False, True))
+    # (match, is an unlock assertion, may make a reading when not negated)
+    found: list[tuple[re.Match[str], bool, bool]] = []
+    rest = text
+    for pattern, unlock, reads in scans:
+        found += [(m, unlock, reads) for m in pattern.finditer(rest)]
+        rest = _blank(pattern, rest)
+    spans = [f[0].span() for f in found]
+    first: dict[tuple[bool, bool], re.Match[str]] = {}
+    for m, unlock, reads in sorted(found, key=lambda f: f[0].start()):
+        denied = _negated(text, m.start(), [s for s in spans if s[1] <= m.start()])
+        if denied or reads:
+            first.setdefault((unlock, denied), m)
+    return _LockWording(
+        unlocked=first.get((True, False)),
+        locked=first.get((False, False)),
+        unlock_denied=first.get((True, True)),
+        lock_denied=first.get((False, True)),
+    )
 
 
 def _vendor_lock(title: str) -> Attribute[str] | None:
     """The unit's stated vendor lock; None when the title states neither, or
     both (a self-contradicting title is unknown, not whichever came first).
     A negated unlock never yields unlocked: it is unknown, or locked when
-    explicit lock wording also stands. See _LOCK_REFERENCE for the scope."""
-    negated, unlocked, locked = _lock_wording(mask_reference_spans(title, _LOCK_REFERENCE))
+    explicit lock wording also stands; a negated lock likewise never yields
+    locked. See _LOCK_REFERENCE for the scope."""
+    masked = _lock_wording(mask_reference_spans(title, _LOCK_REFERENCE))
     # The reading comes from the masked text; the veto from the whole title.
     # A reference mask may only ever turn a reading into unknown: wording it
     # hides can remove evidence FOR a reading, never evidence AGAINST one. An
@@ -504,15 +573,15 @@ def _vendor_lock(title: str) -> Attribute[str] | None:
     # that lock wording about a cited product ('Unlocked, compatible with Dell
     # locked servers') makes the unit's own reading unknown: a review, where
     # the other error makes a locked CPU eligible.
-    any_negated, any_unlocked, any_locked = _lock_wording(title)
-    if unlocked is not None and locked is None and negated is None:
-        if any_negated is not None or any_locked is not None:
+    whole = _lock_wording(title)
+    if masked.unlocked is not None and masked.locked is None and masked.unlock_denied is None:
+        if whole.unlock_denied is not None or whole.locked is not None:
             return None
-        m, value = unlocked, VENDOR_UNLOCKED
-    elif locked is not None and unlocked is None:
-        if any_unlocked is not None:
+        m, value = masked.unlocked, VENDOR_UNLOCKED
+    elif masked.locked is not None and masked.unlocked is None and masked.lock_denied is None:
+        if whole.unlocked is not None or whole.lock_denied is not None:
             return None
-        m, value = locked, VENDOR_LOCKED
+        m, value = masked.locked, VENDOR_LOCKED
     else:
         return None
     return Attribute(value=value, confidence=0.9, layer=LAYER, source_text=m.group(0))
