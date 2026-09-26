@@ -2,10 +2,10 @@
 
 ## Current focus
 
-- Prod `c2adae0` (Slices D/E + F1–F4; Apify unconfigured, sources off); dev = main apart from docs.
-- Owner gates: MS-1e audit (packet in docs/evidence), OQ32 floor, OQ31 SPD/Seagate terms, OQ24.
-- Proof env keeps the ledger authority; run its tick.sh after 2026-10-02 21:10Z, then drain/handoff.
-- F6 blocked: no source enabled, no category seeds in prod, 0% condition capture (see TODO).
+- Prod `478baf0` (matcher 2026.09.2, admission matrix, CPU refdata seeded); fail-closed for Apify.
+- Owner gates: MS-1e Q1-Q8 decisions + stratified audit (packet); CPU EPYC owner audit (60 ids).
+- F5a: run the proof-env tick after 2026-10-02 21:10Z; verify 0/0; handoff only if paid admission wanted.
+- F6 (eBay x CPU x EPYC) blocked on the CPU owner gate + SA-004 per-cell live checklist.
 
 ## Active incidents
 
