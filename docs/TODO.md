@@ -15,15 +15,6 @@ Instructions for AI agents:
 
 ## Agent tasks
 
-- [x] Re-baseline the implementation around [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
-  and [ADR 0022](adr/adr-0022-multi-category-watch-first-v1.md). **Plan converged at rev 8**
-  (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`); Codex r5-r8 review
-  READY, no new findings.
-- [x] Establish the category-domain boundary around the existing ADR-0010 identity spine.
-  **Slice B complete on dev** (satellites, category rows, refdata importer, first-party seeds,
-  rules/registry/acceptance policy, corpus category-hint round trip). CPU 9 / GPU 8 / RAM 2
-  first-party rows seeded; no further RAM expansion is planned in MS-2 (OQ27 resolved
-  2026-09-25 — no new retention class for non-first-party reference data).
 - [ ] Split the committed input contract into a common schema + synthetic extension so a future
   merchant Actor can't inherit `faultMode` (verifier finding, low priority).
 - [ ] Harden D3 client's proxy guard: currently top-level only; nested proxy config is blocked via
@@ -56,10 +47,12 @@ Instructions for AI agents:
 - [ ] Capture listing condition: the pilot measured 0% condition coverage on every source (eBay
   Browse `condition`/`conditionId` is not mapped). Condition feeds the drive matcher's variant
   grain, so change it only with a `matcher_version` bump after, or together with, the MS-1e
-  ratification.
-- [ ] Seed CPU reference rows in production (`import_refdata --category cpu`; production has 0
-  category spec rows) before any CPU watch, and extend seeds to cover the chosen F6 EPYC models.
-  GPU/RAM production seeding is deferred until their own pilot/owner gate is scheduled.
+  ratification. Same change: keep the title/label join visible to the negation window (today
+  "... No Screws" + label "Used" denies the label; canonical text erases the " | " join).
+- [x] Seed CPU reference rows in production. **Done 2026-09-26** (`import_refdata --category cpu`
+  on release `478baf0`: 2 manufacturers, 2 families, 9 models, 9 specs, 19 aliases). Remaining:
+  extend seeds to cover the chosen F6 EPYC models; GPU/RAM production seeding stays deferred
+  until their own pilot/owner gate is scheduled.
 - [x] Coordinate one self-owned private Hardware Radar Actor as the integration proof. **F5a
   executed 2026-09-25** in a non-production proof environment (evidence:
   `docs/evidence/2026-09-25-f5a-synthetic-proof.md`): build `1.0.1`, eleven admitted runs over every
@@ -82,19 +75,22 @@ Instructions for AI agents:
   smoke is ever wanted; the synthetic Actor is not a production collection source.
 - [x] Keep provider identity separate from marketplace/source identity: proven by D7
   (`test_provider_switch_preserves_identity_history_and_watch_state`, AC-4).
-- [ ] MS-1e drive-matcher ratification: harvest and draft labels are done (2026-09-25,
-  `docs/evidence/2026-09-25-ms1e-audit-packet.md`; provisional FAIL, 17 of 100 required
-  auto-accepts). The `ebay-0021` ("comparable to") and `ghd-0006` (Constellation read as Exos)
-  traps are fixed (`matcher_version` 2026.09.2), the WD SKU→MPN gap is closed, and OQ32 settled the
-  gate on ≥3 declared ratification sources evaluated against production refdata. Waiting on the
-  owner: audit the remaining listed ids and decide the labeling rule (R2). Then run the full
-  verification gate and flip ADR-0019 only on a composite PASS.
+- [ ] MS-1e drive-matcher ratification: owner-audited corpus measures 366/366 at `2026.09.3`
+  (floors met, rung-0 PASS); the audit gate waits only on OQ33 (8 legacy-family rows, 7 sampled).
+  After the owner answers: relabel those rows, re-measure on the pinned refdata, and flip ADR-0019
+  only on a composite PASS. Re-measure under a new digest after the 2026-10-01 refresh.
 - [ ] Add category-specific validation corpora/gates before auto-accepting GPU/RAM/CPU matches;
   drive-corpus precision does not validate other categories. F4 harvest done 2026-09-25: eBay,
   1,888 unlabeled entries (GPU 851, RAM 991, CPU 16, drive 30) in the git-ignored
   `.harvest/f4-ebay/` on the workstation; regenerate with `manage.py harvest_corpus --source ebay
   --out .harvest/f4-ebay`. Labeling and ratification are owner work (R4); CPU coverage is thin
   because the pilot sweep queries only "EPYC 7302".
+- [ ] CPU `auto_accept` flip waits on OQ34 (category-wide vs EPYC-scoped). The owner-audited EPYC
+  corpus passes the identity gate (105/105, audit PASS; packet §9).
+- [ ] F6 (eBay x CPU x EPYC) is blocked on OQ34 plus the per-cell live checklist
+  (`docs/handoff/deployed.md`); its watch must set `require_vendor_unlocked`.
+- [ ] Residual latent CPU matcher gap: Ryzen/Core "or" alternatives are unflagged because their
+  lines are unseeded (cannot alias-hit). (Model priors now upgrade on a new condition: 2026.09.3.)
 - [ ] Deliberately admit each `(source, category)` cell in the admission matrix
   (`src/hw_radar/acquisition/admission.py`) only after its operational, retention/ToS,
   completeness, match-quality, and cost gates pass, then flip the source's `enabled` bit. Before

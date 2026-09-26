@@ -205,6 +205,11 @@ class CpuRequirement(TimeStamped):
     sockets = ArrayField(models.CharField(max_length=32), default=list, blank=True)
     min_cores = models.PositiveSmallIntegerField(null=True, blank=True)
     max_tdp_w = models.PositiveSmallIntegerField(null=True, blank=True)
+    # True = only a listing that explicitly states the unit is vendor (PSB)
+    # unlocked can match; False = no constraint. Not nullable: there is no
+    # "require locked" use, and a third state would only add an unknown case.
+    # The lock is listing evidence, not a CpuSpec field (matching.rules.cpu).
+    require_vendor_unlocked = models.BooleanField(default=False)
 
     class Meta:
         db_table = "cpu_requirement"

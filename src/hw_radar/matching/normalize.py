@@ -74,7 +74,21 @@ _REFERENCE_PHRASES: tuple[str, ...] = (
 #       title compatible or look-alike stock "FIT FOR Seagate Exos ..." (MS-1e
 #       ebay-0263, ebay-0463). Drive-local, not shared: the CPU and other
 #       categories' masking (and so their pinned decisions) stay unchanged.
-_CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of", "fit for", "suitable for")
+#   "works with", "work with", "for use with", "for use in" — rules/cpu.py
+#       _LOCK_REFERENCE only (vendor-lock scope, never identity). Unregistered,
+#       their erased commas let the lock span swallow a later "NOT UNLOCKED"
+#       clause and keep an earlier "Unlocked" as the reading (Codex s8 r2 A).
+#       Registering them changes the canonical text of drive titles carrying
+#       them (punctuation kept as " - "), not drive masking.
+_CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = (
+    "oem version of",
+    "fit for",
+    "suitable for",
+    "works with",
+    "work with",
+    "for use with",
+    "for use in",
+)
 
 # Words that open a reference span only as the FIRST token of the canonical
 # title, registered like _CATEGORY_REFERENCE_PHRASES and for the same reason.
@@ -106,6 +120,45 @@ _CATEGORY_LEADING_REFERENCE_WORDS: tuple[str, ...] = ("for", "compatible")
 # the exclusion only "repair"), so "For repairs:" masked the whole identity,
 # condition included, and the drive read as unresolved instead of for_parts.
 FOR_PARTS_PREAMBLE_WORDS = r"(?:parts|spares?|repairs?)"
+
+# Negator-owning phrases: wording whose negator IS its meaning ("No Warranty"
+# is a warranty term, "No Reserve" an auction term), so it negates nothing
+# after it. ONE registry for both readers of the shared negation window
+# (vocab._condition_matches, rules/cpu._lock_wording): every match is a window
+# barrier in both. Two registries drifted in round 4: vocab protected "no
+# warranty" but the lock reader did not, so the "no" of "Unlocked No Warranty
+# Dell Locked" negated the lock, the unlock survived and a self-contradicting
+# title satisfied require_vendor_unlocked (Codex s8 r4 finding 1). The parity
+# test (tests/unit/test_negation_window_parity.py) pins a sample spelling for
+# every entry against both readers.
+#
+# Only listing boilerplate whose negator cannot be about a neighbouring
+# condition or lock word belongs here: a barrier is also a place where a real
+# negation stops ("no tray used" now reads used), so an entry that could be a
+# genuine "no <condition>" would hide a denial.
+LOCK_OEMS = r"(?:dell|lenovo|hpe?|cisco)"
+# The CPU reader's positive unlock phrases ("no vendor lock", "not Dell
+# locked", "non-locked"). Registered here, not in rules/cpu, because the
+# condition reader must stop at them too: "No Vendor Lock Used" is used.
+NEGATED_LOCK_PHRASE = re.compile(
+    r"\bno[-\s]+(?:(?:vendor|psb)[-\s]+)?lock(?:ed)?\b"
+    rf"|\b(?:not|isn\s?t)[-\s]+(?:(?:vendor|psb|{LOCK_OEMS})[-\s]+)?locked\b"
+    r"|\bnon[-\s]?(?:(?:vendor|psb)[-\s]+)?locked\b"
+)
+NEGATOR_OWNING_WORDING: tuple[str, ...] = (
+    r"no[-\s]+warranty",
+    r"no[-\s]+reserve",
+    r"no[-\s]+returns?",
+    r"not[-\s]+tested",
+    r"not[-\s]+working",  # vocab's for_parts wording; the lock reader needs it too
+    r"no[-\s]+trays?",
+    r"no[-\s]+cadd(?:y|ies)",
+    r"no[-\s]+os",
+    r"no[-\s]+cables?",
+)
+NEGATOR_OWNING_PHRASE = re.compile(
+    r"\b(?:" + "|".join(NEGATOR_OWNING_WORDING) + r")\b|" + NEGATED_LOCK_PHRASE.pattern
+)
 # Per-word negative lookaheads: what may NOT follow a leading word for it to
 # open a span. Keyed per word because these are exceptions to "for" only;
 # sharing them would silently narrow every other leading word.

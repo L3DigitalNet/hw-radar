@@ -61,7 +61,7 @@ from hw_radar.catalog.models import (
     ProductModel,
     RetentionClass,
 )
-from hw_radar.matching import categories
+from hw_radar.matching import categories, resolver
 from hw_radar.matching.eval.corpus import (
     CorpusEntry,
     CorpusMeta,
@@ -84,6 +84,7 @@ from hw_radar.matching.eval.report import (
     build_report,
     ms1_ratification_gate,
 )
+from hw_radar.matching.grammars import DECODER_VENDORS
 from hw_radar.matching.ladder import Outcome
 from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.types import Grain
@@ -113,26 +114,10 @@ MEASUREMENT_REPORT_ENV = "HW_RADAR_MS1E_REPORT"
 # reads the corpus and report paths from the two variables above.
 CATEGORY_WOULD_ACCEPT_ENV = "HW_RADAR_CATEGORY_WOULD_ACCEPT"
 
-# Evidence keys that say why an edge is REVIEW rather than ACCEPT. Cross-file
-# contract: these are the keys `ladder.decide` and `resolver._apply_category_gates`
-# (plus the resolver's error fallback) write. A new gate key missing here shows up
-# as an empty `review_reason` on a REVIEW row, never as a wrong reason.
-REVIEW_REASON_KEYS = (
-    "veto",
-    "no_brand_evidence",
-    "brand_contradicts_exact_alias",
-    "conflicting_targets",
-    "brand_contradicts_decode",
-    "family_contradicts_decode",
-    "multiple_mpns",
-    "conflicting_alias_models",
-    "prior_model_not_named",
-    "review_only_alias_conflict",
-    "cross_category",
-    "acceptance_policy",
-    "auto_accept_disabled",
-    "error",
-)
+# Evidence keys that say why an edge is REVIEW rather than ACCEPT: derived from
+# the matcher's own registry (ladder + resolver gates) plus the resolver's error
+# fallback, so a new review reason cannot silently report an empty reason here.
+REVIEW_REASON_KEYS = (*sorted(resolver.REVIEW_REASON_KEYS), "error")
 
 # One resolvable listing shape reused for the generated gate cases: it hits the
 # seeded ST16000NM001G alias at rung 1 and carries a factory-recert condition, so
@@ -445,8 +430,33 @@ def test_an_unseeded_manufacturer_key_aborts_the_run(db: None) -> None:
     every affected entry as a precision miss."""
     entries = load_corpus(SYNTHETIC_JSONL)
     meta = load_meta(SYNTHETIC_META)
-    with pytest.raises(UnknownManufacturerError):
-        evaluate_corpus(entries, meta)
+    labeled = next(e for e in entries if e.label.expected_target.manufacturer_key == "seagate")
+    typo = labeled.model_copy(
+        update={
+            "label": labeled.label.model_copy(
+                update={
+                    "expected_target": labeled.label.expected_target.model_copy(
+                        update={"manufacturer_key": "seagte"}
+                    )
+                }
+            )
+        }
+    )
+    with pytest.raises(UnknownManufacturerError, match="seagte"):
+        evaluate_corpus([typo], meta)
+
+
+def test_a_decoder_vendor_label_key_needs_no_seed(db: None) -> None:
+    """Owner Q3 labels HUS/HUH drives `hgst`; no seed names HGST, but the WD
+    grammar emits it and the resolver creates it on decode, so the run proceeds
+    on an empty catalog instead of aborting."""
+    entries = [
+        e
+        for e in load_corpus(SYNTHETIC_JSONL)
+        if e.label.expected_target.manufacturer_key in DECODER_VENDORS
+    ]
+    assert {e.label.expected_target.manufacturer_key for e in entries} >= {"hgst"}
+    evaluate_corpus(entries, load_meta(SYNTHETIC_META))
 
 
 def test_synthetic_fixture_cannot_reach_a_passing_gate(seeded_catalog: None) -> None:

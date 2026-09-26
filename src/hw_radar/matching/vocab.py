@@ -18,11 +18,13 @@ catalog contradicts the equivalence."""
 from __future__ import annotations
 
 import re
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import Final
 
 from hw_radar.matching.normalize import (
     DRIVE_REFERENCE_PHRASE,
     FOR_PARTS_PREAMBLE_WORDS,
+    NEGATOR_OWNING_PHRASE,
     mask_reference_spans,
 )
 from hw_radar.matching.types import Attribute, ExtractedAttributes
@@ -78,7 +80,25 @@ _CONDITIONS: tuple[tuple[re.Pattern[str], str, str | None, float], ...] = (
     (re.compile(r"\brefurb(?:ished)?\b|\brenewed\b"), "refurbished", None, 0.85),
     (re.compile(r"\bopen box\b"), "open_box", None, 0.9),
     (re.compile(r"\bserver pull\b|\bpull(?:ed)?\b|\bused\b"), "used", None, 0.8),
-    (re.compile(r"\bfactory sealed\b|(?<!like )\bnew\b"), "new", None, 0.8),
+    # "new" asserts nothing in three positions, each excluded here rather than
+    # left to the table order:
+    # - "like new" / "like-new" (a cosmetic grade; canonicalize_title keeps the
+    #   hyphen, so both separators are excluded);
+    # - next to a percentage on EITHER side ("90%new", "95 % new", "new 90%"):
+    #   seller marketing for a used drive (owner ruling Q7, MS-1e ebay-0261),
+    #   not a condition, and it must not fall through to any other condition;
+    # - before "pull"/"pulled": "new pull" is a used server pull (Q7). The used
+    #   rule above also claims it, but only because it happens to come first;
+    #   the lookahead keeps a reordering from turning pulls into new drives.
+    (
+        re.compile(
+            r"\bfactory sealed\b"
+            r"|(?<!like )(?<!like-)(?<!%)(?<!% )\bnew\b(?![- ]pull)(?! ?\d{1,3}(?:\.\d+)? ?%)"
+        ),
+        "new",
+        None,
+        0.8,
+    ),
 )
 
 _PACKAGING: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -90,15 +110,6 @@ _WARRANTY_CHANNELS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bno warranty\b"), "none"),
     (re.compile(r"\bmanufacturer warranty\b"), "manufacturer"),
     (re.compile(r"\bseller warranty\b"), "seller"),
-)
-
-# Quantity: digit-FIRST forms only. The 'xN' form (e.g. 'x16') is deliberately
-# unsupported — it collides with Seagate family names (Exos X16/X18/X24).
-_QUANTITIES: tuple[tuple[re.Pattern[str], float], ...] = (
-    (re.compile(r"\blot of (\d{1,3})\b"), 0.95),
-    (re.compile(r"\b(\d{1,3})[- ]pack\b"), 0.9),
-    (re.compile(r"\bqty:? ?(\d{1,3})\b"), 0.9),
-    (re.compile(r"\b(\d{1,3})\s?x\b"), 0.7),
 )
 
 # Longest-married-name first so 'western digital' wins over 'wd'.
@@ -149,6 +160,113 @@ _WD_BRAND_ADJACENT = re.compile(
     r"\b(?:wd|western digital)\s+"
     r"(red plus|red pro|red|gold|purple pro|purple|blue|black|green)\b"
 )
+
+
+# Quantity: digit-FIRST forms only. The 'xN' form (e.g. 'x16') is deliberately
+# unsupported — it collides with Seagate family names (Exos X16/X18/X24).
+# Ordered, first match wins, so an explicit lot form outranks a stray "Nx".
+#
+# Two readers with different bars. Eligibility divides the price by any
+# quantity at or above its policy confidence (lot pricing; offer_quantity).
+# ladder.decide reviews every accept whose quantity is above 1 at
+# LOT_MIN_CONFIDENCE or more (owner ruling Q4: a lot is not a single-unit
+# offer). Every form at that bar was checked against all 718 MS-1e drive and
+# 284 CPU corpus titles and matched only real multi-unit offers, board bundles
+# the CPU bundle veto already reviews, or an explicit quantity of 1.
+#
+# "Nx" is at the bar only when the count is tied to the item: followed by a
+# brand, a drive line, a drive/CPU noun or a TB capacity ("2x seagate",
+# "10x amd epyc", "2 x 16tb"; s8 Codex r1 finding 3). The space after the x
+# is optional: "2x12tb" is the same lot as "2x 12tb", and requiring the
+# space let a compact count keep a single-unit prior forever, because the
+# compact capacity token is no MPN candidate and the identifiers never
+# change (Codex r2 finding 3). A bare "Nx" stays below the bar: "32x
+# 3.25ghz" / "32x3.25ghz" is a CPU thread count (corpus cpu-0010). Capacity
+# is TB only: "2x16gb" / "2x 16gb" is a RAM kit shape, and eligibility reads
+# this table for every category, so a GB form would start dividing RAM kit
+# prices by their module count.
+LOT_MIN_CONFIDENCE: Final = 0.9
+_LOT_ITEM_WORDS: Final = (
+    "western digital",
+    "wd",
+    "sandisk",
+    "hgst",
+    "hitachi",
+    "seagate",
+    "toshiba",
+    "solidigm",
+    "intel",
+    "kioxia",
+    "amd",
+    "epyc",
+    "xeon",
+    "ultrastar",
+    *(name for names in _DISTINCT_FAMILIES.values() for name in names),
+    r"hard (?:disk )?drives?",
+    r"hard disks?",
+    "hdds?",
+    "ssds?",
+    "drives?",
+    "disks?",
+    "cpus?",
+    "processors?",
+)
+# Brands that also sell memory: "2x kingston 16gb ddr4" is ONE kit of two
+# modules, and eligibility divides the price by this count for every category.
+# These brands tie the count only when the title carries no memory marker, so
+# "2x samsung 870 evo 1tb ssd" still reviews as a drive multipack.
+#
+# The marker is searched over the WHOLE title in _quantity_statements, not as
+# a lookahead after the brand: "ddr4 ram kit 2x kingston 16gb" names the kit
+# before the count, and a lookahead would trust the 2 and halve the kit price
+# (Codex r2 finding B). Rejected: category-aware pricing quantities. The
+# resolver's CPU/drive extractors and eligibility's category-blind
+# offer_quantity would then read one table two ways, while the title-wide
+# check keeps one reading for every caller.
+_LOT_MEMORY_BRANDS: Final = ("samsung", "micron", "crucial", "kingston")
+_MEMORY_MARKER: Final = re.compile(
+    r"\b(?:ddr\d?|dimm|rdimm|udimm|lrdimm|sodimm|so-dimm|memory|ram)\b"
+)
+# Offer words that may sit between the count and the item ("2x new seagate",
+# "3x brand new wd"): the count still describes the item, and requiring
+# adjacency would let "2x " prepended to a "New Seagate ..." title escape.
+_LOT_OFFER_WORDS: Final = (
+    r"(?:brand|new|used|sealed|genuine|original|oem|bulk|retail|pulled"
+    r"|refurb(?:ished)?|recert(?:ified)?|factory|enterprise|internal)"
+)
+# (pattern, confidence, memory_brand): a memory_brand form is skipped for a
+# title carrying a _MEMORY_MARKER anywhere.
+_QUANTITIES: tuple[tuple[re.Pattern[str], float, bool], ...] = (
+    (re.compile(r"\blot of (\d{1,3})x?\b"), 0.95, False),
+    # "Lot 10 Supermicro Seagate ..." (MS-1e ebay-0282/0288).
+    (re.compile(r"\blot (\d{1,3})x?\b"), 0.9, False),
+    (re.compile(r"\b(\d{1,3})[- ]pack\b"), 0.9, False),
+    (re.compile(r"\bqty:? ?(\d{1,3})\b"), 0.9, False),
+    # "2pcs AMD EPYC ...", "1pcs new Seagate ..." (cpu-0260, ebay-0296).
+    (re.compile(r"\b(\d{1,3}) ?pcs?\b"), 0.9, False),
+    (
+        re.compile(
+            r"\b(\d{1,3}) ?x ?(?:" + _LOT_OFFER_WORDS + r" )*"
+            r"(?:(?:" + "|".join(_LOT_ITEM_WORDS) + r")\b|\d+(?:\.\d+)? ?tb\b)"
+        ),
+        0.9,
+        False,
+    ),
+    (
+        re.compile(
+            r"\b(\d{1,3}) ?x ?(?:" + _LOT_OFFER_WORDS + r" )*"
+            r"(?:" + "|".join(_LOT_MEMORY_BRANDS) + r")\b"
+        ),
+        0.9,
+        True,
+    ),
+    (re.compile(r"\b(\d{1,3})\s?x\b"), 0.7, False),
+)
+# Auction catalogue numbers ("Auction Lot 42:", "Lot #42", "Lot No. 42") name
+# the sale, not a unit count; they are blanked before the quantity scan. The
+# "lot N" form would otherwise read "auction lot 42" as 42 units, send a
+# single drive to lot review and divide its price by 42 in eligibility.
+_AUCTION_LOT = re.compile(r"\bauction lot (?:#|no\.? ?)?\d+|\blot (?:#|no\.? ?)\d+")
 
 
 def _alternation(names: tuple[str, ...]) -> re.Pattern[str]:
@@ -243,35 +361,268 @@ def _int_pattern(title: str, pattern: re.Pattern[str], scale: int = 1) -> Attrib
     )
 
 
-def _condition(title: str) -> tuple[Attribute[str] | None, Attribute[str] | None]:
-    for pattern, value, channel, confidence in _CONDITIONS:
-        m = pattern.search(title)
-        if m:
-            cond = Attribute(
-                value=value, confidence=confidence, layer=_LAYER, source_text=m.group(0)
-            )
-            chan = (
-                Attribute(
-                    value=channel, confidence=confidence, layer=_LAYER, source_text=m.group(0)
+# Explicit negation of a condition phrase (s8 round-3 shared negation design;
+# matching/rules/cpu.py applies the same window rule to vendor-lock phrases):
+#
+# - A condition match is NEGATED when a negator token occurs within the 3
+#   tokens immediately before it. Qualifier tokens ("factory", "a", "the", ...)
+#   do not use up the window, and punctuation, hyphens and slashes separate
+#   tokens without being tokens ("NOT - used", "not a factory-recertified").
+# - The window never reaches back past an earlier condition match or a
+#   negator-owning phrase: a negator scopes over the next assertion only, so in
+#   "NOT FACTORY RECERTIFIED Used" the "not" denies the recertification and
+#   the "used" stays a positive assertion.
+# - A match inside a longer match takes the longer one's polarity: the generic
+#   "recertified" inside a negated "factory recertified" is negated too.
+#   Judged by its own window it would see only "factory" before it and
+#   re-assert the denied recertification (Codex r3 finding 6).
+# - Phrases whose own wording holds the negator ("not working" = for parts,
+#   "no warranty" = the warranty channel, "no vendor lock" = unlocked, "no
+#   tray" = packaging boilerplate) are whole assertions; their negator negates
+#   nothing after them. They come from normalize.NEGATOR_OWNING_PHRASE, the one
+#   registry the CPU lock reader stops at too.
+#
+# A negated match is not an assertion, and is kept as NEGATIVE evidence
+# (ExtractedAttributes.denied_conditions, and denied_recert_channels for the
+# channel a negated channel phrase names) distinct from absence: a store's
+# declared condition and an automated variant prior must yield to a listing
+# that denies them, while a title that merely stops naming a condition keeps
+# the omission policy (Codex r3 finding 8).
+#
+# Known cost of a window rule: boilerplate outside the registry ("no screws
+# used") reads as a denial. The error is conservative: the condition becomes
+# unknown, a prior variant is re-decided at model grain, and the source fold
+# declines (with_source_offer_terms); no condition is ever asserted from a
+# negated phrase.
+_NEGATORS: Final = frozenset({"not", "no", "never", "non", "without", "isnt", "arent", "aint"})
+_WINDOW_QUALIFIERS: Final = frozenset(
+    {
+        "vendor",
+        "psb",
+        "dell",
+        "lenovo",
+        "hp",
+        "hpe",
+        "cisco",
+        "factory",
+        "manufacturer",
+        "a",
+        "an",
+        "the",
+        "cpu",
+    }
+)
+_NEGATION_WINDOW: Final = 3
+# canonicalize_title turns "isn't" into "isn t"; both spellings are one token.
+_WINDOW_TOKEN = re.compile(r"\b(?:isn|aren|ain) ?'?t\b|[a-z0-9]+")
+
+
+@dataclass(frozen=True)
+class _ConditionMatch:
+    rank: int  # index into _CONDITIONS: the first-match precedence
+    start: int
+    end: int
+    text: str
+    negated: bool
+
+
+def _negated_by_window(text: str) -> bool:
+    budget = _NEGATION_WINDOW
+    for m in reversed(list(_WINDOW_TOKEN.finditer(text))):
+        token = re.sub(r"[ ']", "", m.group(0))
+        if token in _NEGATORS:
+            return True
+        if token in _WINDOW_QUALIFIERS:
+            continue
+        budget -= 1
+        if budget == 0:
+            return False
+    return False
+
+
+def _condition_matches(text: str) -> list[_ConditionMatch]:
+    """Every _CONDITIONS match in `text` with its polarity, in text order."""
+    raw = [
+        (rank, m)
+        for rank, (pattern, _value, _channel, _confidence) in enumerate(_CONDITIONS)
+        for m in pattern.finditer(text)
+    ]
+    barriers = [m.span() for _rank, m in raw]
+    barriers += [m.span() for m in NEGATOR_OWNING_PHRASE.finditer(text)]
+    decided: list[_ConditionMatch] = []
+    # Longest first, so a containing match is decided before its sub-matches.
+    for rank, m in sorted(raw, key=lambda item: item[1].start() - item[1].end()):
+        start, end = m.span()
+        outer = next(
+            (
+                d
+                for d in decided
+                if d.start <= start and end <= d.end and (d.start, d.end) != (start, end)
+            ),
+            None,
+        )
+        if outer is not None:
+            negated = outer.negated
+        else:
+            window_start = max((b_end for _b, b_end in barriers if b_end <= start), default=0)
+            negated = _negated_by_window(text[window_start:start])
+        decided.append(_ConditionMatch(rank, start, end, m.group(0), negated))
+    return sorted(decided, key=lambda d: (d.start, d.rank))
+
+
+def _condition(
+    matches: list[_ConditionMatch],
+) -> tuple[Attribute[str] | None, Attribute[str] | None]:
+    # First-match precedence over POSITIVE matches only: the table order picks
+    # the condition, the earliest asserted match of that entry its source text.
+    asserted = [m for m in matches if not m.negated]
+    if not asserted:
+        return None, None
+    best = min(asserted, key=lambda m: (m.rank, m.start))
+    _pattern, value, channel, confidence = _CONDITIONS[best.rank]
+    cond = Attribute(value=value, confidence=confidence, layer=_LAYER, source_text=best.text)
+    chan = (
+        Attribute(value=channel, confidence=confidence, layer=_LAYER, source_text=best.text)
+        if channel
+        else None
+    )
+    return cond, chan
+
+
+def _condition_conflict(matches: list[_ConditionMatch]) -> Attribute[tuple[str, ...]] | None:
+    """Every distinct condition the text asserts, when it asserts more than one.
+
+    Informational for ordinary listings: the first-match precedence of
+    _CONDITIONS still picks their condition. with_source_offer_terms and
+    source_offer_conflict read it, because a source's proven condition must
+    not be folded over a listing that also asserts another.
+
+    Only positive assertions count: "recertified not new" clarifies the
+    store's condition rather than contradicting it (Codex r2 finding D)."""
+    found = [
+        (_CONDITIONS[m.rank][1], m.text)
+        for m in sorted(matches, key=lambda m: m.rank)
+        if not m.negated
+    ]
+    values = tuple(dict.fromkeys(value for value, _ in found))
+    if len(values) < 2:
+        return None
+    return Attribute(
+        value=values,
+        confidence=0.9,
+        layer=_LAYER,
+        source_text=", ".join(text for _, text in found),
+    )
+
+
+def _denied_conditions(matches: list[_ConditionMatch]) -> Attribute[tuple[str, ...]] | None:
+    """The conditions the text explicitly denies and nowhere asserts."""
+    asserted = {_CONDITIONS[m.rank][1] for m in matches if not m.negated}
+    denied = [
+        (_CONDITIONS[m.rank][1], m.text)
+        for m in sorted(matches, key=lambda m: m.rank)
+        if m.negated and _CONDITIONS[m.rank][1] not in asserted
+    ]
+    if not denied:
+        return None
+    return Attribute(
+        value=tuple(dict.fromkeys(value for value, _ in denied)),
+        confidence=0.9,
+        layer=_LAYER,
+        source_text=", ".join(dict.fromkeys(text for _, text in denied)),
+    )
+
+
+def _denied_recert_channels(
+    matches: list[_ConditionMatch],
+) -> Attribute[tuple[str, ...]] | None:
+    """The recertification channels a negated channel phrase names ("NOT
+    Factory Recertified") and no asserted phrase names.
+
+    Kept apart from _denied_conditions: "Recertified NOT Factory Recertified"
+    asserts the generic condition, so no CONDITION is denied, yet the listing
+    explicitly withdraws factory provenance. Folding the denial into the
+    condition lost it, and a stored factory variant survived every normal poll
+    while fresh resolution gave an unknown channel (Codex s8 r4 finding 6)."""
+    asserted = {_CONDITIONS[m.rank][2] for m in matches if not m.negated}
+    denied = [
+        (channel, m.text)
+        for m in sorted(matches, key=lambda m: m.rank)
+        if m.negated and (channel := _CONDITIONS[m.rank][2]) is not None and channel not in asserted
+    ]
+    if not denied:
+        return None
+    return Attribute(
+        value=tuple(dict.fromkeys(channel for channel, _ in denied)),
+        confidence=0.9,
+        layer=_LAYER,
+        source_text=", ".join(dict.fromkeys(text for _, text in denied)),
+    )
+
+
+def _quantity_statements(title: str) -> tuple[Attribute[int] | None, tuple[int, ...]]:
+    """The first-match quantity of _QUANTITIES, plus every distinct count the
+    title states at LOT_MIN_CONFIDENCE or more; auction catalogue numbers are
+    blanked first."""
+    text = _AUCTION_LOT.sub(" ", title)
+    memory_title = _MEMORY_MARKER.search(text) is not None
+    first: Attribute[int] | None = None
+    counts: set[int] = set()
+    for pattern, confidence, memory_brand in _QUANTITIES:
+        if memory_brand and memory_title:
+            continue
+        for m in pattern.finditer(text):
+            if first is None:
+                first = Attribute(
+                    value=int(m.group(1)),
+                    confidence=confidence,
+                    layer=_LAYER,
+                    source_text=m.group(0),
                 )
-                if channel
-                else None
-            )
-            return cond, chan
-    return None, None
+            if confidence >= LOT_MIN_CONFIDENCE:
+                counts.add(int(m.group(1)))
+    return first, tuple(sorted(counts))
 
 
-def _quantity(title: str) -> Attribute[int] | None:
-    for pattern, confidence in _QUANTITIES:
-        m = pattern.search(title)
-        if m:
-            return Attribute(
-                value=int(m.group(1)),
-                confidence=confidence,
-                layer=_LAYER,
-                source_text=m.group(0),
-            )
-    return None
+def _conflict(counts: tuple[int, ...], confidence: float) -> Attribute[int]:
+    return Attribute(
+        value=max(counts),
+        confidence=confidence,
+        layer=_LAYER,
+        source_text="conflicting quantities: " + ", ".join(str(c) for c in counts),
+    )
+
+
+def extract_quantity(title: str) -> Attribute[int] | None:
+    """The listing's stated unit count for IDENTITY (ladder.decide's lot
+    review), or None when it states none. Public for the category rules
+    modules, so every category reads the one table above.
+
+    Conflicting counts at the lot bar ("Lot of 2 ... (1pc)") return the
+    largest at the bar: the title cannot prove a single unit, so the lot
+    review must fire. Pricing must not use this value as a divisor; it reads
+    offer_quantity instead."""
+    first, counts = _quantity_statements(title)
+    if len(counts) > 1:
+        return _conflict(counts, LOT_MIN_CONFIDENCE)
+    return first
+
+
+# Below every eligibility divisor bar (CategoryPolicy.listing_min_confidence),
+# so a conflicting count is never used to divide a price.
+_CONFLICT_PRICING_CONFIDENCE: Final = 0.5
+
+
+def offer_quantity(title: str) -> Attribute[int] | None:
+    """The listing's stated unit count for PRICING (eligibility's unit-price
+    divisor). Equal to extract_quantity except under conflicting counts, where
+    the count is unproven and is returned at a confidence no divisor bar
+    accepts: the undivided price is then only an upper bound on the unit
+    price, never a price divided by a count the title contradicts."""
+    first, counts = _quantity_statements(title)
+    if len(counts) > 1:
+        return _conflict(counts, _CONFLICT_PRICING_CONFIDENCE)
+    return first
 
 
 def _link_speed(title: str) -> Attribute[float] | None:
@@ -323,15 +674,130 @@ def offer_terms(title: str) -> ExtractedAttributes:
     return _offer_fields(mask_reference_spans(title))
 
 
+@dataclass(frozen=True)
+class SourceOfferProvenance:
+    """Offer terms a source proves for every listing it carries, whatever the
+    title says or omits. Values are the catalog TextChoices literals, like the
+    title-derived ones."""
+
+    condition: str
+    recert_channel: str
+
+
+# Per-source provenance, keyed by SourceSite.normalized_name (the connector's
+# `site_key`; test_vocab_owner_rulings.test_declared_sources_are_registered_adapters
+# pins every key to a registered adapter). The WD recertified store sells only WD's own
+# `-recertified` product codes (acquisition/sources/wd.py filters on that
+# suffix), so its listings are factory recertifications (owner ruling Q6)
+# although the store titles say only "Recertified". The generic text rule is
+# deliberately untouched: a marketplace "recertified" still asserts no channel.
+# Seagate's recertified store is not declared: no ruling covers it yet.
+SOURCE_OFFER_PROVENANCE: Final[dict[str, SourceOfferProvenance]] = {
+    "wd-recertified": SourceOfferProvenance(condition="recertified", recert_channel="factory"),
+}
+
+
+def source_offer_conflict(
+    extracted: ExtractedAttributes, source_key: str
+) -> tuple[str, ...] | None:
+    """The conditions a listing from a declared source asserts when it asserts
+    the declared condition AND another ("... Recertified" with a "Used"
+    condition label; "... Recertified New Pull"); None otherwise, and always
+    None for an undeclared source.
+
+    The resolver reviews an accept on such a listing at every rung, rung 0
+    included: the listing contradicts itself, so neither the store's variant
+    nor any first-match pick is a sellable identity it proves, and inheriting
+    a prior factory variant would keep the contradiction forever."""
+    declared = SOURCE_OFFER_PROVENANCE.get(source_key)
+    conflict = extracted.condition_conflict
+    if declared is None or conflict is None or declared.condition not in conflict.value:
+        return None
+    return conflict.value
+
+
+def with_source_offer_terms(extracted: ExtractedAttributes, source_key: str) -> ExtractedAttributes:
+    """`extracted` with the source's declared offer terms folded in; unchanged
+    for a source with no declaration.
+
+    The title stays authoritative when it contradicts the declaration: a store
+    title asserting another condition ("Used", "For parts") keeps that
+    condition and gets NO declared channel, since the store's claim evidently
+    does not describe this item and a factory channel on a used or broken
+    drive would file it under a sellable variant it is not. The same holds
+    for a title channel other than the declared one. A title that states no
+    condition gets the declared one.
+
+    A title asserting the declared condition AND another (source_offer_conflict)
+    gets neither a condition nor a channel: the first-match table would pick
+    "recertified" and the fold would add "factory", proving a factory recert
+    the listing's own "Used" contradicts. Condition unknown keeps a
+    condition-restricted watch at `unknown`, and the resolver reviews.
+
+    A title that states no condition fills it from the store only when it
+    also DENIES none: a negated condition is negative evidence, not the
+    omission the fold fills in. Folding over "... NOT RECERTIFIED"
+    re-asserted exactly the recertification the listing denies (Codex r3
+    finding 8), and folding over a window-suppressed reading ("... No Screws
+    Used" reads as a denied used) turned a used drive into a factory recert
+    (Codex s8 r4 finding 4). Any denied condition therefore blocks the
+    condition fill, whichever condition it is.
+
+    A title that denies the declared CHANNEL ("Recertified NOT Factory
+    Recertified") gets no fold at all: its own recertified condition stands,
+    with no channel (Codex s8 r4 finding 6).
+
+    The ONE fold both offer-term readers apply, each over the same category
+    extraction: the resolver before the ladder (so _materialize and
+    _offer_reconsideration see the factory variant) and eligibility's
+    _listing_attributes (so the condition clause reads the same condition). A
+    reader that skipped it, or folded over a different extraction, would
+    disagree with the variant."""
+    declared = SOURCE_OFFER_PROVENANCE.get(source_key)
+    if declared is None:
+        return extracted
+    if source_offer_conflict(extracted, source_key) is not None:
+        return replace(extracted, condition=None, recert_channel=None)
+    denied_channels = extracted.denied_recert_channels
+    if denied_channels is not None and declared.recert_channel in denied_channels.value:
+        return extracted
+    condition, channel = extracted.condition, extracted.recert_channel
+    if condition is None and extracted.denied_conditions is not None:
+        return extracted
+    if condition is not None and condition.value != declared.condition:
+        return extracted
+    if channel is not None and channel.value != declared.recert_channel:
+        return extracted
+    source_text = f"source:{source_key}"
+    return replace(
+        extracted,
+        condition=condition
+        or Attribute(
+            value=declared.condition, confidence=0.95, layer="source", source_text=source_text
+        ),
+        recert_channel=channel
+        or Attribute(
+            value=declared.recert_channel,
+            confidence=0.95,
+            layer="source",
+            source_text=source_text,
+        ),
+    )
+
+
 def _offer_fields(masked: str) -> ExtractedAttributes:
     # Caller passes mask_reference_spans output. condition, packaging,
     # recert_channel and warranty_channel are VARIANT identity:
     # resolver._materialize get_or_creates the ProductVariant from exactly
     # these four, so reading them from a reference span would file the listing
     # under a sellable variant it never offered (review finding F4).
-    condition, recert_channel = _condition(masked)
+    matches = _condition_matches(masked)
+    condition, recert_channel = _condition(matches)
     return ExtractedAttributes(
         condition=condition,
+        condition_conflict=_condition_conflict(matches),
+        denied_conditions=_denied_conditions(matches),
+        denied_recert_channels=_denied_recert_channels(matches),
         recert_channel=recert_channel,
         packaging=_first_pattern(masked, _PACKAGING, 0.85),
         warranty_months=_int_pattern(masked, _WARRANTY_YEARS, scale=12),
@@ -352,8 +818,9 @@ def extract(title: str) -> ExtractedAttributes:
         # match to review but can never create or select an identity. Masking
         # them instead would let an over-reaching span hide the listing's own
         # contradicting capacity or interface, trading a visible review for a
-        # silent accept. quantity is neither identity nor veto (eligibility
-        # reads it for lot pricing) and keeps its historical unmasked read.
+        # silent accept. quantity is in the same position: its only matching
+        # use is ladder.decide's lot review, which can only demote, and
+        # eligibility's lot pricing keeps its historical unmasked read.
         capacity_bytes=_capacity(title),
         interface=_first_pattern(title, _INTERFACES, 0.9),
         link_speed_gbps=_link_speed(title),
@@ -363,7 +830,7 @@ def extract(title: str) -> ExtractedAttributes:
         sector_format=_sector(title),
         recording_tech=_recording(title),
         security=_security(title),
-        quantity=_quantity(title),
+        quantity=extract_quantity(title),
         # Brand satisfies the rung-1 brand gate, so it is identity evidence
         # and reads the masked text like the offer terms.
         brand=_first_pattern(masked, _BRANDS, 0.9),

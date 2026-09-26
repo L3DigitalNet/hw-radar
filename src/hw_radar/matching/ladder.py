@@ -15,11 +15,16 @@ models (decide: conflicting_alias_models), inherited priors included, a
 re-observed listing whose aliases now name only models other than the one its
 prior inherited (decide: prior_model_not_named), and a review-only alias whose
 catalog model contradicts the accepted target (decide:
-review_only_alias_conflicts).
+review_only_alias_conflicts). A listing that offers more than one unit ("Lot
+of 2 ...") reviews at every rung too (decide: lot_quantity): a known product
+identity does not make a lot equivalent to a single-unit offer.
 
 The prior passed in is trusted to describe the listing's current identity:
-the resolver discards an automated prior whose identity_identifiers changed
-before calling decide, so rung 0 here only re-runs the vetoes.
+the resolver discards an automated prior whose identity_identifiers changed,
+whose target's brand the listing now contradicts, or whose variant its offer
+terms contradict, before calling decide, so rung 0 here only re-runs the
+vetoes. In particular rung 0 never applies the rung-1 brand gate itself: a
+manual prior must inherit whatever the title's brand says.
 
 Confidence constants are OQ-provisional tunables; ADR-0016 settings-row
 versions arrive with the rung-3/occurrence thresholds at MS-1c."""
@@ -31,6 +36,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from hw_radar.matching.types import (
+    Attribute,
     DecodeResult,
     ExtractedAttributes,
     Grain,
@@ -38,6 +44,7 @@ from hw_radar.matching.types import (
     Provenance,
     TokenKind,
 )
+from hw_radar.matching.vocab import LOT_MIN_CONFIDENCE
 
 CONFIDENCE_BY_SOURCE_KIND: dict[str, float] = {
     "catalog_authoritative": 0.98,
@@ -421,6 +428,39 @@ def prior_model_not_named(
     }
 
 
+# Every evidence key a REVIEW verdict from decide()/_decide() uses to say WHY
+# it is a review. resolver._review_reason reads these (plus the resolver's own
+# gate keys) as the stable reason a review edge records, so a review whose
+# reason changes writes a new edge while an identical re-poll writes none.
+# A new review reason added in this module must be listed here: an unlisted
+# key still reviews, but a change to or from it keeps the obsolete reason on
+# the current edge.
+REVIEW_REASON_KEYS: frozenset[str] = frozenset(
+    {
+        "veto",
+        "brand_contradicts_exact_alias",
+        "no_brand_evidence",
+        "conflicting_targets",
+        "brand_contradicts_decode",
+        "family_contradicts_decode",
+        "conflicting_alias_models",
+        "prior_model_not_named",
+        "review_only_alias_conflict",
+        "lot",
+        "multiple_mpns",
+    }
+)
+
+
+def lot_quantity(quantity: Attribute[int] | None) -> dict[str, object] | None:
+    """The lot evidence for a listing that states more than one unit at a form
+    trusted as a lot (vocab.LOT_MIN_CONFIDENCE), else None. An explicit
+    quantity of 1 ("Lot of 1", "1pcs") is a single-unit offer."""
+    if quantity is None or quantity.value <= 1 or quantity.confidence < LOT_MIN_CONFIDENCE:
+        return None
+    return {"quantity": quantity.value, "source_text": quantity.source_text}
+
+
 def decide(
     extracted: ExtractedAttributes,
     candidates: Sequence[MpnCandidate],
@@ -460,7 +500,16 @@ def decide(
     a model whose family or capacity contradicts the accepted target
     (review_only_alias_conflicts). Withholding those hits from grounding keeps
     them from creating an accept; this is what keeps them from being ignored
-    by one."""
+    by one.
+
+    And at every rung, owner ruling Q4: an ACCEPT becomes REVIEW (`lot`) when
+    the listing offers more than one unit (lot_quantity). Its price is not a
+    unit price and its identity is not a single product's, so no lot may
+    enter a single-unit variant's history. It is checked here and not in a
+    category veto because a veto never sees a rung-2 decode, and because rung
+    0 must not inherit a single-unit prior once the title becomes a lot. It
+    fires only for categories whose extract reads a quantity (drive, cpu);
+    the others' kit and bundle shapes ("2x16GB") are not lots."""
 
     grounding = [h for h in alias_hits if not h.candidate_review_only]
     verdict = _decide(extracted, candidates, prior, grounding, decoded, veto=veto)
@@ -482,6 +531,9 @@ def decide(
         )
         if contradicted is not None:
             ambiguity["review_only_alias_conflict"] = contradicted
+    lot = lot_quantity(extracted.quantity)
+    if lot is not None:
+        ambiguity["lot"] = lot
     if distinct_mpn_guard:
         mpns = distinct_mpns(candidates, alias_hits)
         if mpns:

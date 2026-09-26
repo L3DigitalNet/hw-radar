@@ -207,6 +207,7 @@ class CpuRequirementSpec(_RequirementSpecBase):
     sockets: tuple[str, ...] = ()
     min_cores: int | None = Field(default=None, gt=0, le=_SMALL_INT_MAX)
     max_tdp_w: int | None = Field(default=None, gt=0, le=_SMALL_INT_MAX)
+    require_vendor_unlocked: bool = False
 
     @field_validator("sockets")
     @classmethod
@@ -271,7 +272,7 @@ _SATELLITES: Final[dict[str, tuple[type[_Satellite], tuple[str, ...]]]] = {
             "min_speed_mts",
         ),
     ),
-    "cpu": (CpuRequirement, ("sockets", "min_cores", "max_tdp_w")),
+    "cpu": (CpuRequirement, ("sockets", "min_cores", "max_tdp_w", "require_vendor_unlocked")),
 }
 
 _OFFER_FIELDS: Final = (

@@ -8,6 +8,8 @@
   },
   "matcher_version": "unevaluated",
   "audit_rollup": {
-    "claude_draft": 284
+    "claude_draft": 224,
+    "owner_confirmed": 55,
+    "owner_corrected": 5
   }
 }

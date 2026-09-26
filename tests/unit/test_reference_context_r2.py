@@ -226,11 +226,13 @@ _HIST_BOILERPLATE = re.compile(
 )
 # Every registered phrase, so the partition below routes a phrase-bearing title
 # out of the byte-identical set: the shared ones, CPU's "oem version of", and
-# the drive-local "fit for" / "suitable for" (适用于 folds to it) plus a
+# the drive-local "fit for" / "suitable for" (适用于 folds to it), CPU's
+# lock-scope "works with" / "work with" / "for use with" / "for use in", plus a
 # first-token "for" (except "for parts").
 _HIST_PHRASE = re.compile(
     r"\b(?:comparable to|compatible with|replacement for|equivalent to|equiv to|"
-    r"alternative to|substitute for|replaces|oem version of|fit for|suitable for)\b"
+    r"alternative to|substitute for|replaces|oem version of|fit for|suitable for|"
+    r"works with|work with|for use with|for use in)\b"
     r"|^for\b(?!\s+parts\b)|适用于"
 )
 

@@ -14,8 +14,9 @@ separators: Intel ARK states 'FCLGA4677' while listings say 'LGA 4677', and
 those are one socket. `cpu_spec.socket` stays the seed's lowercase token; only
 the comparison is normalized.
 
-Veto fields: socket and cores, plus three listing-only identity markers that
-veto whatever the target — `sample`, `bundle` and `multi_model` (see below).
+Veto fields: socket, cores and the explicitly named model (`model`, see
+veto), plus three listing-only identity markers that veto whatever the
+target — `sample`, `bundle` and `multi_model` (see below).
 tdp_w is extracted but never vetoes, because configurable TDP makes a
 listing's quoted wattage an unreliable identity signal.
 
@@ -31,10 +32,11 @@ authoritative identity:
     on the seeded one and read as unambiguous.
   - An AMD OPN followed by a '-NN' suffix ('100-000000314-04', a QS sample
     marking) is not the OPN, so it is not a candidate.
-  - A first-party AMD codename between 'EPYC' and the number ('EPYC Genoa
-    9354', 'EPYC Milan-X 7773X') is skipped when forming the name candidate,
-    which is emitted as 'epyc <number>'. The number keeps its suffix, so the
-    P-variant and multi-model guards see exactly what they would without it.
+  - A first-party AMD codename, socket or Zen generation between 'EPYC' and
+    the number ('EPYC Genoa 9354', 'EPYC Milan-X 7773X', 'EPYC GENOA SP5 ZEN4
+    9354') is skipped when forming the name candidate, which is emitted as
+    'epyc <number>'. The number keeps its suffix, so the P-variant and
+    multi-model guards see exactly what they would without it.
 
 Candidate filtering alone is not enough for multi-model titles: rung 0 never
 looks at candidates, so a listing accepted under one title and re-observed
@@ -52,6 +54,21 @@ H12DSi-N6 Motherboard With 2x AMD EPYC 7763') names the CPU exactly, so it
 reaches the alias. Its price is not a CPU price, so the product-type marker is
 extracted as `bundle` and vetoes (see _BUNDLE for what does and does not count).
 
+Vendor (PSB) lock is extracted as `vendor_lock` but is deliberately NOT an
+identity field: it is a property of the particular unit and its sales channel
+(the same EPYC 7742 ships locked to Dell or unlocked), not of the CPU model, so
+it is listing evidence rather than a `cpu_spec` column, `veto` never reads it,
+and a 'Dell Locked EPYC 7742' resolves to EPYC 7742 like any other. Whether a
+watch accepts a locked unit is eligibility's decision (`cpu.vendor_lock` in
+eligibility.evaluate).
+
+Price is not identity either (owner ruling on cpu-0283: a $399 'EPYC 7763 ...
+100-000000312' is EPYC 7763). Nothing in this module, nor the ladder that
+calls it, receives the listing price, and that must stay so: a price anomaly
+is a question for eligibility, seller trust, deal evaluation and review, and
+letting it veto or demote identity would hide exactly the listings those
+layers exist to judge.
+
 Engineering and qualification samples ('ES', 'QS', 'engineering sample',
 'pre-production', a suffixed OPN) are different parts from the retail SKU:
 their own OPNs, stepping, clocks and often locked or unfinished firmware. A
@@ -68,10 +85,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, replace
+from typing import Final
 
 from hw_radar.matching import vocab
 from hw_radar.matching.ladder import CategoryHardAttrs, HardAttrs
 from hw_radar.matching.normalize import (
+    LOCK_OEMS,
+    NEGATED_LOCK_PHRASE,
+    NEGATOR_OWNING_PHRASE,
     canonicalize_title,
     mask_reference_spans,
     reference_phrase_pattern,
@@ -110,6 +131,14 @@ class CpuAttributes(CategoryAttributes):
     # The distinct model numbers (EPYC numbers and _line_models keys),
     # space-joined, when the title names more than one; None = at most one.
     multi_model: Attribute[str] | None = None
+    # VENDOR_LOCKED / VENDOR_UNLOCKED when the title states the unit's vendor
+    # (PSB) lock explicitly; None = unknown. Listing evidence for the watch
+    # clause `cpu.vendor_lock` only: never compared to the catalog and never
+    # read by `veto`, so it cannot change identity (see _vendor_lock).
+    vendor_lock: Attribute[str] | None = None
+    # The one model the title names explicitly, as a model_key; None = no
+    # model named, or several (then multi_model carries the ambiguity).
+    model: Attribute[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -119,6 +148,9 @@ class CpuHard(CategoryHardAttrs):
 
     socket: str | None = None
     cores: int | None = None
+    # The target's model_key; set only for a model-grain target (see
+    # resolver._cpu_model_hard). A family has no single model to contradict.
+    model: str | None = None
 
 
 _BRANDS: tuple[tuple[re.Pattern[str], str], ...] = (
@@ -143,9 +175,16 @@ _TDP = re.compile(r"\b(\d{2,3})\s?w\b")
 # number must also start its own token, hence the Ryzen tier digit needs
 # whitespace after it: an optional '[3579]?' let 'Ryzen 79500' read as tier 7
 # plus model '9500'.
+#
+# Between 'EPYC' and the number a title may carry up to three AMD qualifier
+# words: the first-party codename, the socket ('sp5') and the core
+# microarchitecture ('zen4', 'zen 4'), in any order ('EPYC GENOA SP5 ZEN4 9354',
+# cpu-0082). Only that closed vocabulary is skipped, so a free word between
+# them ('EPYC server 9354') still breaks the phrase, and the number must still
+# follow the last qualifier directly with its suffix intact (9354P stays 9354P).
 _EPYC_NAME_PHRASE = re.compile(
-    r"\bepyc\s+(?:(?P<codename>naples|rome|milan(?:-x)?|genoa(?:-x)?|bergamo|siena"
-    r"|turin)\s+)?(?P<num>\d{4}[a-z]{0,2})\b"
+    r"\bepyc\s+(?P<qualifiers>(?:(?:naples|rome|milan(?:-x)?|genoa(?:-x)?|bergamo|siena"
+    r"|turin|sp[3-6]|zen\s?[1-6]c?)\s+){1,3})?(?P<num>\d{4}[a-z]{0,2})\b"
 )
 _NAMES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
@@ -173,7 +212,13 @@ _ORDERING: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("intel", re.compile(r"\b(?:bx|bxc|bv|cm|cd|pk)\d{6,}[a-z0-9]*\b")),
     # (?!-\w): a suffixed OPN ('100-000000314-04') is a sample/stepping
     # marking, not the part number, so its stem must not reach the alias table.
-    ("amd", re.compile(r"\b100-\d{9}\b(?!-\w)")),
+    # The second branch admits an OPN fused with a following condition word
+    # ('100-000000798Open', cpu-0082: the seller's text ran into the part
+    # number). Only that closed word set, never an arbitrary alphanumeric
+    # continuation: AMD's own boxed part numbers extend the digits with letters
+    # ('100-100000312WOF'), and a longer digit run is another code entirely, so
+    # a general suffix strip would collapse distinct parts onto one alias.
+    ("amd", re.compile(r"\b100-\d{9}(?:\b(?!-\w)|(?=(?:open(?:box)?|new|used)\b(?!-\w)))")),
 )
 _SSPEC = re.compile(r"\bsr[a-z0-9]{3}\b")
 _VOCAB_TAILS = re.compile(r"(?:\d(?:ghz|mhz|mb|gb|w)|lga\d+|\dc/\d+t|\d-?cores?)$")
@@ -227,6 +272,99 @@ _BUNDLE = re.compile(
 )
 
 
+VENDOR_LOCKED: Final = "locked"
+VENDOR_UNLOCKED: Final = "unlocked"
+
+# Vendor (AMD PSB) lock wording is read on the canonical title with its OWN
+# scope mask (_LOCK_REFERENCE), not the identity mask: lock words describe the
+# unit on sale unless they sit inside a span citing another product
+# ('replacement for an unlocked processor', 'compatible with Dell locked
+# servers'), where they describe that product and never make a reading
+# (they can still veto one: see _vendor_lock).
+# Deliberately NOT masked: the CPU-local 'oem version of' span. Titles put the
+# offered part's unlock inside it ('7T83 ... OEM Version of EPYC 7763
+# unlocked'), and a retail EPYC has no PSB lock, so lock wording there can
+# only describe the offered OEM unit. The residual risk is a seller writing
+# 'OEM version of an unlocked 7763' about a locked unit, which no corpus
+# listing shows; masking the span instead would leave every '... OEM Version
+# of EPYC 7763 unlocked' listing (three corpus rows) with an unknown lock.
+# Explicit wording only; OEM branding alone ('Dell', 'Pulled from Cisco UCS')
+# never implies a lock, because OEMs ship both locked and unlocked parts.
+#
+# Negation is ONE window rule (the s8 round-3 shared negation design, which
+# the condition-phrase negation in vocab is specified to follow too; change
+# the two together): a lock or unlock assertion is NEGATED when a
+# negator token (_NEGATORS) occurs within the _NEGATION_WINDOW tokens before
+# its start. Lock qualifiers and articles (_WINDOW_QUALIFIERS) do not use up
+# the window, and punctuation and hyphens are separators, never tokens, so
+# 'NOT VENDOR-UNLOCKED', 'not a Dell PSB-unlocked CPU' and 'no longer
+# unlocked' are all negated. Rounds 1-2 enumerated negation shapes as regex
+# patches ('not'+one qualifier+'unlocked'); each round found a shape the
+# patch missed ('no longer', two qualifiers) that left the bare 'unlocked'
+# standing as a confident unlock satisfying require_vendor_unlocked (Codex s8
+# r3 #2). A negated match is never a positive reading: it is recorded as the
+# lock state the listing DENIES, which _vendor_lock uses only as a veto. A
+# denied unlock does not prove a lock (the title is unknown unless explicit
+# lock wording also stands), and a denied lock does not prove an unlock.
+#
+# Scan order is load-bearing:
+#  1. _UNLOCK_PHRASES first: positive unlocked phrases whose own wording holds
+#     a negator ('no vendor lock', 'not PSB locked', 'non-locked'). Matched
+#     whole, their negator is their meaning, not a negation of a neighbour;
+#     the window still applies before THEIR start ('not a no-vendor-lock CPU').
+#  2. _UNLOCK_WORD, _UNLOCK_STEM, then _LOCK_WORD, each on text with every
+#     earlier match blanked, so the 'lock'/'locked' inside a claimed phrase
+#     or inside 'un-locked' is never read again: a sub-match inherits its
+#     enclosing match's verdict and can never re-assert a denied or claimed
+#     phrase.
+# A window stops at an earlier assertion, so the negator claimed by 'no
+# vendor lock' does not also negate a following 'Unlocked', and at every
+# negator-owning phrase of the registry shared with vocab
+# (normalize.NEGATOR_OWNING_PHRASE: 'No Warranty', 'No Reserve', ...). A bare
+# 'unlock' (_UNLOCK_STEM) is never a reading ('unlock code'), but negated
+# ('without unlock', 'no unlock') it is a denial, so it still vetoes an 'Unlocked'
+# elsewhere in the title. Typos ('unclocked') are deliberately absent, and
+# hyphens and spaces are interchangeable separators ('no-vendor-lock',
+# 'psb-locked'). The watch clause treats unknown as not satisfying an unlocked requirement, so a
+# missed unlocked costs a review while a misread one makes a locked CPU
+# eligible: every doubtful shape resolves to unknown.
+# The shared reference phrases plus lock-local ones. The lock-local phrases
+# are registered in normalize._CATEGORY_REFERENCE_PHRASES (reference_phrase_
+# pattern enforces it) so canonicalize_title keeps their clause punctuation
+# and a span ends at the clause it opened; unregistered, the span ran on
+# through a later 'NOT UNLOCKED' (Codex s8 r2 A). Boundaries alone cannot
+# make masking safe (a title with no punctuation still runs the span to the
+# end), which is why _vendor_lock also reads contradictions unmasked.
+_LOCK_REFERENCE = reference_phrase_pattern("works with", "work with", "for use with", "for use in")
+# 'isn't' canonicalizes to 'isn t' (the apostrophe becomes a space), so the
+# contracted forms are listed by their stem as well as their squeezed form.
+_NEGATORS: Final = frozenset(
+    {"not", "no", "never", "non", "without", "isn", "isnt", "aren", "arent", "ain", "aint"}
+)
+_WINDOW_QUALIFIERS: Final = frozenset(
+    {"vendor", "psb", "dell", "lenovo", "hp", "hpe", "cisco", "factory", "manufacturer"}
+    | {"a", "an", "the", "cpu"}
+)
+_NEGATION_WINDOW: Final = 3
+# One token per contraction, exactly as vocab's condition window reads it, so
+# "isn't X Y unlocked" spends the same window in both readers.
+_WINDOW_TOKEN = re.compile(r"\b(?:isn|aren|ain) ?'?t\b|[a-z0-9]+")
+# Shared with vocab, which must stop its condition window at these too.
+_UNLOCK_PHRASES = NEGATED_LOCK_PHRASE
+_UNLOCK_WORD = re.compile(r"\bun-?locked\b")
+_UNLOCK_STEM = re.compile(r"\bun-?lock\b")
+# The bare word covers 'Dell Locked', 'vendor-locked', 'PSB locked', 'locked
+# to <vendor>' and the emphasized '(*locked*)'; the noun form needs a lock
+# qualifier ('vendor lock', 'Dell Lock'), since a bare 'lock' is too loose.
+# '<OEM> only' ('LENOVO ONLY') is an exclusivity claim, which for a CPU means
+# it only boots in that OEM's boards: a vendor lock stated in other words.
+# This set only widens toward locked/unknown; the unlock phrases stay narrow
+# ('No Dell Lock' is a window-denied lock, so unknown, not unlocked).
+_LOCK_WORD = re.compile(
+    rf"\blocked\b|\b(?:vendor|psb|{LOCK_OEMS})[-\s]lock\b|\b{LOCK_OEMS}\s+only\b"
+)
+
+
 def socket_key(value: str) -> str:
     """The comparison form of a socket name: lowercase alphanumerics with any
     'socket' word and Intel 'fc' package prefix dropped ('FCLGA4677' and
@@ -250,6 +388,21 @@ def _marker(pattern: re.Pattern[str], text: str) -> Attribute[str] | None:
     return Attribute(value=m.group(0), confidence=0.9, layer=LAYER, source_text=m.group(0))
 
 
+# Pin counts are socket context, not models, and some fit the model shapes:
+# 'SP3 4094-pin' read 4094 as the sole EPYC model and vetoed the OPN's 7763
+# (Codex s8 r2 C), and 'Gold 6338 4189-pin' reads as a coordinated second
+# Xeon. Blanked before any model scan: a number followed by 'pin(s)', or an
+# AMD socket name followed by that socket's own pin count ('SP5 6096',
+# 'Socket SP3 (4094)'). Only the socket's own counts, never any number after a
+# socket word: 'EPYC SP3 7763' names the model right after the socket. LGA
+# counts need nothing here; _SOCKETS already takes 'LGA 4677' whole.
+_PIN_COUNT = re.compile(
+    r"\b\d{3,4}[-\s]?pins?\b"
+    r"|\b(?:socket\s+)?(?:sp[3-6]|s?trx4|tr4|swrx8|str5|am[45])[-\s]*"
+    r"\(?(?:1331|1718|4094|4844|6096)\b\)?"
+)
+
+
 def _epyc_models(identity: str) -> set[str]:
     """The distinct EPYC model numbers an EPYC title names; empty for a title
     without 'epyc'.
@@ -260,7 +413,7 @@ def _epyc_models(identity: str) -> set[str]:
     """
     if _EPYC_NAME.search(identity) is None:
         return set()
-    unsocketed = identity
+    unsocketed = _blank(_PIN_COUNT, identity)
     for pattern in _SOCKETS:
         unsocketed = pattern.sub(lambda m: " " * len(m.group(0)), unsocketed)
     return {m.group(0) for m in _EPYC_MODEL.finditer(unsocketed)}
@@ -304,6 +457,7 @@ def _line_models(identity: str) -> set[str]:
     strings. EPYC is _epyc_models' job: its number shape is broader than the
     name phrase, so reading the EPYC phrase here too could count one model
     twice under two spellings."""
+    identity = _blank(_PIN_COUNT, identity)
     models = {
         _model_key(m.group("num"))
         for _vendor, pattern in _NAMES
@@ -321,12 +475,149 @@ def _line_models(identity: str) -> set[str]:
     return models
 
 
+def _model_keys(identity: str) -> set[str]:
+    return _epyc_models(identity) | _line_models(identity)
+
+
 def _multi_model(identity: str) -> Attribute[str] | None:
-    models = _epyc_models(identity) | _line_models(identity)
+    models = _model_keys(identity)
     if len(models) < 2:
         return None
     joined = " ".join(sorted(models))
     return Attribute(value=joined, confidence=0.9, layer=LAYER, source_text=joined)
+
+
+def _listing_model(identity: str) -> Attribute[str] | None:
+    models = _model_keys(identity)
+    if len(models) != 1:
+        return None
+    (key,) = models
+    return Attribute(value=key, confidence=0.9, layer=LAYER, source_text=key)
+
+
+def model_key(model_number: str) -> str | None:
+    """The catalog side of the `model` veto: a seeded `model_number` ('EPYC
+    9354', 'Xeon Platinum 8480+') read by the same scanners as a listing
+    title, so both sides compare in one key space ('9354', '8480+'). None
+    when the number does not read as exactly one model; then the target
+    cannot veto on model."""
+    models = _model_keys(canonicalize_title(model_number))
+    if len(models) != 1:
+        return None
+    (key,) = models
+    return key
+
+
+def _blank(pattern: re.Pattern[str], text: str) -> str:
+    return pattern.sub(lambda m: " " * len(m.group(0)), text)
+
+
+@dataclass(frozen=True, slots=True)
+class _LockWording:
+    """The first match of each kind in one text: `unlocked` / `locked` are
+    un-negated assertions; `unlock_denied` / `lock_denied` are negated ones,
+    the lock state the text explicitly denies (see the window-rule note)."""
+
+    unlocked: re.Match[str] | None = None
+    locked: re.Match[str] | None = None
+    unlock_denied: re.Match[str] | None = None
+    lock_denied: re.Match[str] | None = None
+
+
+def _negated(text: str, start: int, stops: list[tuple[int, int]]) -> bool:
+    counted = 0
+    for token in reversed(list(_WINDOW_TOKEN.finditer(text, 0, start))):
+        if any(lo <= token.start() < hi for lo, hi in stops):
+            return False
+        word = re.sub(r"[ ']", "", token.group(0))
+        if word in _NEGATORS:
+            return True
+        if word not in _WINDOW_QUALIFIERS:
+            counted += 1
+            if counted == _NEGATION_WINDOW:
+                return False
+    return False
+
+
+def _lock_wording(text: str) -> _LockWording:
+    """Classify every lock/unlock assertion in `text` in the load-bearing scan
+    order described above, then apply the negation window to each."""
+    scans = ((_UNLOCK_PHRASES, True, True), (_UNLOCK_WORD, True, True))
+    scans += ((_UNLOCK_STEM, True, False), (_LOCK_WORD, False, True))
+    # (match, is an unlock assertion, may make a reading when not negated)
+    found: list[tuple[re.Match[str], bool, bool]] = []
+    rest = text
+    for pattern, unlock, reads in scans:
+        found += [(m, unlock, reads) for m in pattern.finditer(rest)]
+        rest = _blank(pattern, rest)
+    # Barriers: every earlier assertion, and every negator-owning phrase of
+    # the shared registry, whose negator is its own ("Unlocked No Warranty
+    # Dell Locked" keeps the lock standing against the unlock).
+    spans = [f[0].span() for f in found]
+    spans += [m.span() for m in NEGATOR_OWNING_PHRASE.finditer(text)]
+    first: dict[tuple[bool, bool], re.Match[str]] = {}
+    for m, unlock, reads in sorted(found, key=lambda f: f[0].start()):
+        denied = _negated(text, m.start(), [s for s in spans if s[1] <= m.start()])
+        if denied or reads:
+            first.setdefault((unlock, denied), m)
+    return _LockWording(
+        unlocked=first.get((True, False)),
+        locked=first.get((False, False)),
+        unlock_denied=first.get((True, True)),
+        lock_denied=first.get((False, True)),
+    )
+
+
+def _vendor_lock(title: str) -> Attribute[str] | None:
+    """The unit's stated vendor lock; None when the title states neither, or
+    both (a self-contradicting title is unknown, not whichever came first).
+    A negated unlock never yields unlocked: it is unknown, or locked when
+    explicit lock wording also stands; a negated lock likewise never yields
+    locked. The asymmetry is deliberate: a window-denied lock also blocks an
+    unlocked reading, because the window may have borrowed an unrelated
+    negator ('Unlocked No Heatsink Dell Locked') and unlocked satisfies a hard
+    requirement; a denied unlock beside explicit lock wording may still read
+    locked, the safe error. Deliberately negated lock phrases ('no vendor
+    lock', 'not locked') are unlock evidence, not a denied lock. See
+    _LOCK_REFERENCE for the scope."""
+    masked = _lock_wording(mask_reference_spans(title, _LOCK_REFERENCE))
+    # The reading comes from the masked text; the veto from the whole title.
+    # A reference mask may only ever turn a reading into unknown: wording it
+    # hides can remove evidence FOR a reading, never evidence AGAINST one. An
+    # over-wide span ('Unlocked works with Dell R7525 NOT UNLOCKED', no
+    # punctuation to end it) would otherwise hide the negation and leave a
+    # confident unlocked that satisfies require_vendor_unlocked. The cost is
+    # that lock wording about a cited product ('Unlocked, compatible with Dell
+    # locked servers') makes the unit's own reading unknown: a review, where
+    # the other error makes a locked CPU eligible.
+    whole = _lock_wording(title)
+    if (
+        masked.unlocked is not None
+        and masked.locked is None
+        and masked.unlock_denied is None
+        and masked.lock_denied is None
+    ):
+        if any(x is not None for x in (whole.unlock_denied, whole.locked, whole.lock_denied)):
+            return None
+        m, value = masked.unlocked, VENDOR_UNLOCKED
+    elif masked.locked is not None and masked.unlocked is None and masked.lock_denied is None:
+        if whole.unlocked is not None or whole.lock_denied is not None:
+            return None
+        m, value = masked.locked, VENDOR_LOCKED
+    else:
+        return None
+    return Attribute(value=value, confidence=0.9, layer=LAYER, source_text=m.group(0))
+
+
+def _is_amd(title: str) -> bool:
+    """The vendor-lock scope. The lock is AMD Platform Secure Boot; on an Intel
+    part "Unlocked"/"locked" states the multiplier (K-series), so reading it
+    there would satisfy an unlocked requirement with the wrong property. Read
+    on the unmasked title, not the identity-masked one: identity masking hides
+    'OEM Version of AMD EPYC 7763 unlocked', whose lock wording _vendor_lock
+    deliberately still reads, and a hidden brand would drop it."""
+    brand = _brand(title)
+    return brand is not None and brand.value == "amd"
 
 
 def extract(title: str) -> ExtractedAttributes:
@@ -336,6 +627,7 @@ def extract(title: str) -> ExtractedAttributes:
     # read the reference-masked title: "replacement for an engineering sample"
     # does not make the listed part one.
     identity = _identity_text(title)
+    brand = _brand(identity)
     payload = CpuAttributes(
         socket=sole_value(sockets, 0.9),
         cores=sole_value(cores, 0.85),
@@ -343,9 +635,17 @@ def extract(title: str) -> ExtractedAttributes:
         sample=_marker(_SAMPLE, identity),
         bundle=_marker(_BUNDLE, identity),
         multi_model=_multi_model(identity),
+        vendor_lock=_vendor_lock(title) if _is_amd(title) else None,
+        model=_listing_model(identity),
     )
-    brand = _brand(identity)
-    return replace(vocab.offer_terms(title), brand=brand, category_attrs=payload)
+    # quantity feeds ladder.decide's lot review (a "Lot of 4" CPU listing is
+    # not a single-unit offer); read from the one vocab table, like drive.
+    return replace(
+        vocab.offer_terms(title),
+        brand=brand,
+        category_attrs=payload,
+        quantity=vocab.extract_quantity(title),
+    )
 
 
 def with_structured_mpn(extracted: ExtractedAttributes, structured_mpn: str) -> ExtractedAttributes:
@@ -387,10 +687,11 @@ def extract_candidates(
     for vendor, pattern in _NAMES:
         for m in pattern.finditer(title):
             whole = m.group(0)
-            if m.groupdict().get("codename"):
-                # 'epyc genoa 9354' → 'epyc 9354': seeds alias the name without
-                # the codename, so the whole phrase would never join.
-                start, end = m.span("codename")
+            if m.groupdict().get("qualifiers"):
+                # 'epyc genoa sp5 9354' → 'epyc 9354': seeds alias the name
+                # without codename or platform words, so the whole phrase
+                # would never join.
+                start, end = m.span("qualifiers")
                 whole = title[m.start() : start] + title[end : m.end()]
             out.add(whole, TokenKind.MANUFACTURER_MPN, vendor=vendor, confidence=0.85)
             out.add(m.group("num"), TokenKind.MANUFACTURER_MPN, vendor=vendor, confidence=0.75)
@@ -400,9 +701,10 @@ def extract_candidates(
 
 
 def veto(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[str]:
-    """Fields where the listing and `cpu_spec` are both known and disagree, plus
-    'sample', 'bundle' and 'multi_model' whenever the listing carries that
-    marker, whatever the target."""
+    """Fields where the listing and the target are both known and disagree
+    (socket, cores, and the named `model`), plus 'sample', 'bundle' and
+    'multi_model' whenever the listing carries that marker, whatever the
+    target."""
     listing = extracted.category_attrs
     if not isinstance(listing, CpuAttributes):
         return []
@@ -432,4 +734,14 @@ def veto(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[str]:
         vetoed.append("socket")
     if listing.cores is not None and spec.cores is not None and listing.cores.value != spec.cores:
         vetoed.append("cores")
+    # The candidate that reached the target may be an OPN or ordering code
+    # while the title names a different model: '9354P ... 100-000000798'
+    # hits the seeded 9354 through its OPN, and 9354P has no alias to collide
+    # with, so no candidate-level guard sees two targets (and CPU runs without
+    # distinct_mpn_guard). Comparing the named model with the target's own is
+    # the only place the unseeded suffix variant is visible, and as a veto it
+    # also re-runs at rung 0, so an accepted listing re-titled to another
+    # model cannot inherit its prior (Codex s8 r1 #8).
+    if listing.model is not None and spec.model is not None and listing.model.value != spec.model:
+        vetoed.append("model")
     return vetoed

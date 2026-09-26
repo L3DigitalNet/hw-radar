@@ -317,8 +317,11 @@ def test_gpu_hint_on_drive_titled_listing_never_reaches_drive_model(site: Source
 @pytest.mark.usefixtures("auto_accept_on")
 def test_cross_category_prior_goes_to_review(site: SourceSite) -> None:
     # A listing accepted as a drive earlier, now hinted gpu: its drive prior is
-    # foreign to the dispatch category and must not be inherited.
-    drive_model = _model(_family("drive", _manufacturer("seagate"), "Exos"), "ST4000NM000A")
+    # foreign to the dispatch category and must not be inherited. The drive's
+    # manufacturer agrees with the title's "NVIDIA": a contradicting brand
+    # would re-decide the automated prior before rung 0 (resolver.
+    # _brand_reconsideration), and this case pins the guard itself.
+    drive_model = _model(_family("drive", _manufacturer("nvidia"), "Exos"), "ST4000NM000A")
     listing = _listing(site, "x-4", _A100_BARE)
     ListingResolution.objects.create(
         listing=listing,

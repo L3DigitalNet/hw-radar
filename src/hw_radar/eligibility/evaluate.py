@@ -39,6 +39,12 @@ Semantics (MS2-D-08):
   module) can only ever produce `no_match`, and only when it positively
   contradicts the requirement with confidence >= the category policy's
   threshold. Agreement at listing tier never produces `match`.
+- One exception: `cpu.vendor_lock` (a watch's `require_vendor_unlocked`). A
+  vendor (PSB) lock is a property of the particular unit, not of the model, so
+  the catalog can never know it and the listing's explicit statement is the
+  only evidence there is (matching.rules.cpu `vendor_lock`). Like the offer
+  clauses it therefore reads the listing directly: stated unlocked => `match`,
+  stated locked => `no_match`, unstated or contradictory => `unknown`.
 - Offer clauses (price, condition, stock, international) read the latest
   `OfferSnapshot` and the `Listing`.
 - The soft `Watch.target_unit_price_usd` is never read here (MS2-D-07, R11).
@@ -86,7 +92,7 @@ from hw_radar.catalog.models import (
 from hw_radar.eligibility.requirements import DRIVE_FORM_FACTOR_TOKENS, DRIVE_INTERFACE_TOKENS
 from hw_radar.matching import categories, vocab
 from hw_radar.matching.normalize import canonicalize_listing_text
-from hw_radar.matching.rules.cpu import CpuAttributes, socket_key
+from hw_radar.matching.rules.cpu import VENDOR_LOCKED, VENDOR_UNLOCKED, CpuAttributes, socket_key
 from hw_radar.matching.rules.gpu import GpuAttributes
 from hw_radar.matching.rules.ram import RamAttributes
 from hw_radar.matching.types import Attribute, ExtractedAttributes
@@ -95,7 +101,7 @@ from hw_radar.matching.types import Attribute, ExtractedAttributes
 # stored row whose evaluator_version differs is non-current (MS2-D-20), so a
 # bump makes every old verdict pending until re-evaluated. Forgetting it leaves
 # verdicts computed under the old rules looking current.
-EVALUATOR_VERSION: Final = "ms2c.2"
+EVALUATOR_VERSION: Final = "ms2c.3"
 # Bump when the CatalogInputs shape or its canonical JSON changes, so every
 # stored fingerprint stops matching instead of silently comparing across shapes.
 CATALOG_INPUTS_VERSION: Final = "1"
@@ -1098,7 +1104,53 @@ def _cpu_clauses(
             policy,
             source=source,
         ),
+        vendor_lock_clause(req.require_vendor_unlocked, title.vendor_lock, policy, source),
     ]
+
+
+def vendor_lock_clause(
+    require_unlocked: bool,
+    lock: Attribute[str] | None,
+    policy: CategoryPolicy,
+    source: Mapping[str, object],
+) -> ClauseResult:
+    """`cpu.vendor_lock`: see the module docstring for why this one product
+    clause is decided at listing tier. An unstated lock, or one extracted below
+    the policy's confidence, is `unknown` and never satisfies the requirement:
+    an unlocked requirement exists because a locked CPU will not boot in the
+    buyer's board, so only an explicit statement may pass it."""
+    src = dict(source)
+    clause = "cpu.vendor_lock"
+    if not require_unlocked:
+        return ClauseResult(
+            clause, EligibilityVerdict.MATCH, EvidenceTier.NONE, None, None, "no constraint", src
+        )
+    required = VENDOR_UNLOCKED
+    if lock is None or lock.confidence < policy.listing_min_confidence:
+        return ClauseResult(
+            clause,
+            EligibilityVerdict.UNKNOWN,
+            EvidenceTier.NONE,
+            required,
+            None,
+            "the listing does not state its vendor lock; only a stated unlock satisfies this",
+            src,
+        )
+    observed = {
+        "listing": {
+            "value": lock.value,
+            "confidence": lock.confidence,
+            "source_text": lock.source_text,
+        }
+    }
+    if lock.value == VENDOR_UNLOCKED:
+        outcome, detail = EligibilityVerdict.MATCH, "listing states the unit is unlocked"
+    elif lock.value == VENDOR_LOCKED:
+        outcome, detail = EligibilityVerdict.NO_MATCH, "listing states the unit is vendor locked"
+    else:
+        # A value this clause does not know is not evidence of either state.
+        outcome, detail = EligibilityVerdict.UNKNOWN, "unrecognized vendor-lock value"
+    return ClauseResult(clause, outcome, EvidenceTier.LISTING, required, observed, detail, src)
 
 
 type _Requirement = DriveRequirement | GpuRequirement | RamRequirement | CpuRequirement
@@ -1216,7 +1268,12 @@ class WatchEvaluator:
         return evaluate_listing(listing_id)
 
 
-def _offer_facts(listing: Listing, snapshot: OfferSnapshot | None, canonical: str) -> OfferFacts:
+def _offer_facts(
+    listing: Listing,
+    snapshot: OfferSnapshot | None,
+    canonical: str,
+    category: str,
+) -> OfferFacts:
     price: Decimal | None = None
     shipping_known = False
     if snapshot is not None:
@@ -1233,17 +1290,30 @@ def _offer_facts(listing: Listing, snapshot: OfferSnapshot | None, canonical: st
         price_usd=price,
         shipping_known=shipping_known,
         # Quantity comes from the one quantity vocabulary the codebase has
-        # (matching.vocab); the category rules modules extract none.
-        quantity=vocab.extract(canonical).quantity,
+        # (matching.vocab), in its pricing reading: a count the title
+        # contradicts ("Lot of 2 ... (1pc)") is never a trusted divisor.
+        quantity=vocab.offer_quantity(canonical),
         stock_status=None if snapshot is None else snapshot.stock_status,
         is_international=listing.is_international,
-        condition=vocab.offer_terms(canonical).condition,
+        condition=_listing_attributes(
+            category, canonical, listing.source_site.normalized_name
+        ).condition,
     )
 
 
-def _listing_attributes(category: str, canonical: str) -> ExtractedAttributes:
+def _listing_attributes(category: str, canonical: str, source_key: str) -> ExtractedAttributes:
+    """The listing's attributes exactly as the resolver reads them for its
+    variant: the category's own extract (drive's wider reference mask
+    included), then the source's declared offer terms.
+
+    Condition must come from here, not from the shared vocab.offer_terms: on
+    "WD Red Plus ... fit for used servers" the drive mask hides the "used" in
+    the drive-local reference phrase, so the resolver materialized the
+    store's factory recert while offer_terms read "used" (s8 Codex r1 finding
+    6). A category without rules reads nothing, as the resolver does."""
     rules = categories.rules_for(category)
-    return ExtractedAttributes() if rules is None else rules.extract(canonical)
+    extracted = ExtractedAttributes() if rules is None else rules.extract(canonical)
+    return vocab.with_source_offer_terms(extracted, source_key)
 
 
 def _is_expired(listing: Listing, now: datetime) -> bool:
@@ -1292,8 +1362,8 @@ def evaluate_listing(listing_id: int) -> ListingEvaluationResult:
     )
 
     canonical = canonicalize_listing_text(listing.title_raw, listing.condition_label_raw)
-    extracted = _listing_attributes(category, canonical)
-    facts = _offer_facts(listing, snapshot, canonical)
+    extracted = _listing_attributes(category, canonical, listing.source_site.normalized_name)
+    facts = _offer_facts(listing, snapshot, canonical, category)
     policy = policy_for(category)
     catalog_source: dict[str, object] = {
         "resolution_id": None if edge is None else edge.pk,

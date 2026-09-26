@@ -1,8 +1,11 @@
 # MS-1e expanded drive corpus: owner audit packet (2026-09-26)
 
-Status: **not ratifiable.** ADR 0019 stays `proposed`. The expanded corpus has
-718 rows, but only the 36 rows audited on 2026-09-25 carry owner labels. Every
-precision number below uses `claude_draft` labels and is provisional.
+Status (updated 2026-09-26, matcher `2026.09.3`): **owner-audited; composite FAIL on one open
+owner question.** The owner ruled on Q1–Q8 and delegated the stratified audit (§7). Measured
+precision is 366/366 with every source floor met and rung-0 green; the audit gate fails only
+because 7 sampled rows name legacy or rebranded family lines, a question the rulings do not
+settle ([OQ33](../open-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)).
+ADR 0019 stays `proposed`. Sections 1–6 below are the pre-ruling packet, kept as the record.
 
 Files:
 
@@ -174,3 +177,73 @@ report, which carries the prediction and label grain for every row.
 Only after that does the composite gate (≥100 accepts, ≥99.5% precision,
 audit PASS, rung-0 PASS, source floors met) become decidable. Until then the
 result is **FAIL on draft labels** and is not a ratification.
+
+## 7. Owner rulings applied and final measurement (2026-09-26, matcher `2026.09.3`)
+
+**Rulings (owner, 2026-09-26), applied in commit `2f75685`:**
+
+| # | Ruling | Rows |
+| --- | --- | --- |
+| Q1 | HC550/HC560/HC580 series are family "Ultrastar"; exact models unchanged | 63 packet rows `owner_corrected`; 11 more rows got the same taxonomy with status unchanged |
+| Q2 | An explicitly named family with a clear manufacturer and no conflict counts at family grain even when unseeded; no fuzzy inference | 19 packet rows, plus 4 found later (wd-0048, ebay-0332, ebay-0338, ebay-0525; commit `55a7ecf`) |
+| Q3 | HGST-branded Ultrastar keeps manufacturer `hgst` | 6 |
+| Q4 | Lot/multipack listings stay `none` | 3 confirmed |
+| Q5 | wd-0057/0061 → Red Plus model with recertified/factory variant; wd-0066 → family Gold (WD8004FRYZ unseeded) | 3 |
+| Q6 | WD recertified store listings carry `recert_channel=factory` (source provenance) | 6 variant rows |
+| Q7 | "New Pull" = used (ebay-0038 → variant used); "90%NEW" asserts nothing (ebay-0261 model) | 2 |
+| Q8 | WUH721818ALE6L4 + WD orderable 0F38467 = one model | 2 |
+
+ebay-0335 ("Seagate IronWolf ST10000NE0008") is labeled IronWolf Pro, not IronWolf: the title names
+the umbrella line and the first-party `NE` designation is IronWolf Pro.
+
+**Stratified audit (commit `4701dae`).** 296 unaudited rows — the reproducible 20% sample, every
+baseline disagreement, and every row with a lot, condition, 0F, HGST or WD-store feature — were
+labeled by two independent auditors who saw only the listing evidence, the seed index and the owner
+rules, never matcher output. Where both agreed, their verdict was applied (275 confirmed, 5 corrected).
+The orchestrator adjudicated the 8 split rows (6 confirmed, 3 corrected: ghd-0047 Hitachi Ultrastar
+SSD → hgst/Ultrastar, wd-0029 WD_BLACK → Black, wd-0075 "WD Red" → Red). The auditors' rules document
+listed family names as if closed, so rows naming WD_BLACK or WD Red were re-judged under Q2's open
+reading. **Eight rows stay `claude_draft`** because they raise a new question: legacy or rebranded
+family names (ebay-0446 "WD Red" on WD30EFRX, ghd-0085 WD RE, ghd-0062 Enterprise Capacity, ghd-0039
+Enterprise Performance, ghd-0033/0038 Constellation ES/ES.2, ghd-0011 Pipeline HD, ebay-0017
+Barracuda ES.2) → OQ33. Judgement calls recorded in row notes: misspelled "Baracuda" stays `none`
+(no fuzzy inference); a seller's wrong form factor does not defeat an exact MPN (R1 checks brand,
+capacity, interface).
+
+Final rollup: `claude_draft` 291, `owner_confirmed` 303, `owner_corrected` 124.
+
+**Matcher changes (2026.09.2 → 2026.09.3)** driven by the rulings and five Codex review rounds:
+percentage-qualified "new" and "like-new" assert nothing; "new pull" is used; negated condition
+words and recert channels are negative evidence (one 3-token negation window shared with the CPU
+lock reader, with a shared registry of negator-owning boilerplate such as "no warranty"); a listing
+that denies a condition and asserts none withdraws a stored or source-folded condition; a lot/multipack listing (lot of/lot N/N-pack/qty/Npcs/item-tied Nx,
+auction lot numbers excluded, memory kits excluded) reviews at every rung; WD-store listings get a
+source-proven factory channel unless the listing asserts or denies another condition; model priors
+re-decide on a newly asserted condition; brand-contradicted automated priors re-decide; contradicted variant aliases review; resolver and
+eligibility read one offer extraction; review dedup keys on a stable reason fingerprint. The eval
+harness now admits grammar-decoder vendor keys (`hgst`) as label keys.
+
+**Measurement** — `tests/db/test_ratification_corpus.py::test_ms1e_corpus_measurement`, production
+refdata pinned at `0f2db1a7…c6ce`, plus `tests/db/test_rung0_regression.py` in the same run:
+
+| Metric | Result |
+| --- | ---: |
+| Rows | 718 |
+| Auto-accepts | 366 |
+| Correct | 366 |
+| Precision | 100.0% (≥ 99.5% PASS) |
+| False positives | 0 |
+| False negatives (label family/model/variant, outcome none/review) | 192 |
+| Reviews | 10 |
+| eBay floor | met (132 qualifying) |
+| WD recertified floor | met (22) |
+| goHardDrive floor | met (9) |
+| Refdata pinned | yes |
+| Audit gate | FAIL — 7 sampled rows unaudited (OQ33); 0 unaudited disagreements |
+| Rung-0 suite | PASS (6/6) |
+| Composite | **FAIL (audit only)** |
+
+All 7 open rows resolve to `none`, so no answer to OQ33 can change precision: labeling them either
+way passes the audit gate, and at most adds recall misses. The false negatives are recall, not
+ratification: 184 are family-grain labels (mostly title-named Exos lines with unseeded MPNs, since
+`ST…NM…` alone no longer implies Exos) that the matcher leaves unresolved.

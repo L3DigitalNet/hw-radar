@@ -4,7 +4,7 @@ family/capacity/generation only, provenance-tiered."""
 
 import pytest
 
-from hw_radar.matching.grammars import decode
+from hw_radar.matching.grammars import DECODER_VENDORS, decode
 from hw_radar.matching.types import Provenance
 
 _TB = 1_000_000_000_000
@@ -92,6 +92,23 @@ def test_hgst_lineage_family_only() -> None:
 
 
 @pytest.mark.parametrize(
+    ("token", "vendor"),
+    [
+        # Owner ruling Q3 (2026-09-26): the HGST-era HUS/HUH prefixes stay HGST,
+        # WD's WUS/WUH re-issues are Western Digital; all are Ultrastar.
+        ("hus726060ale610", "hgst"),
+        ("huh721212ale604", "hgst"),
+        ("wus721010ale6l4", "western_digital"),
+        ("wuh721818ale6l4", "western_digital"),
+    ],
+)
+def test_ultrastar_prefix_vendor(token: str, vendor: str) -> None:
+    result = decode(token)
+    assert result is not None
+    assert (result.vendor, result.family_name) == (vendor, "ultrastar")
+
+
+@pytest.mark.parametrize(
     ("token", "family", "capacity_tb", "generation"),
     [
         ("mg08aca16te", "mg enterprise capacity", 16, "08"),
@@ -114,3 +131,17 @@ def test_toshiba_official_grammar(
 def test_non_mpn_tokens_do_not_decode() -> None:
     for token in ("abc123xyz99", "x477ar6", "005049070", "16tb", ""):
         assert decode(token) is None
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["st4000vn008", "wd40efpx", "wuh721818ale6l4", "hus726060ale610", "mg08aca16te"],
+)
+def test_decoder_vendor_is_a_declared_label_key(token: str) -> None:
+    # The eval harness admits DECODER_VENDORS as label manufacturer keys
+    # because the resolver creates them on a rung-2 decode without a seed; a
+    # decoder emitting an undeclared vendor would make its correct labels abort
+    # the measurement (the 2026-09-26 hgst failure).
+    result = decode(token)
+    assert result is not None
+    assert result.vendor in DECODER_VENDORS

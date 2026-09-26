@@ -286,17 +286,24 @@ def _variant_edge(listing: Listing, condition: str, evidence: dict[str, object])
     )
 
 
-def test_variant_decided_on_the_same_assertions_is_not_redecided(site: SourceSite) -> None:
-    # A variant-grain alias can land a listing on a variant whose tuple differs
-    # from what the title asserts; the origin recorded those assertions, so the
-    # difference was already decided and must not re-decide on every poll.
+def test_contradicted_variant_is_redecided_even_with_the_same_recorded_assertions(
+    site: SourceSite,
+) -> None:
+    # A variant-grain alias once landed a listing on a variant whose tuple the
+    # title contradicts, and the origin recorded those assertions. Such a
+    # record no longer settles anything (s8 Codex r1 finding 2): the listing
+    # is re-decided once, onto the variant it asserts, and then inherits.
     listing = _listing(site, "alias-variant", "Used Seagate ST12000NE0008 12TB HDD")
     _variant_edge(listing, "new", {"variant_attributes": {"condition": "used"}})
     edge = _resolve(listing)
-    assert "reconsidered_prior" not in edge.evidence
-    assert _edges(listing) == 1
+    assert edge.evidence["reconsidered_prior"] == {
+        "reason": "variant_attributes_changed",
+        "prior_variant_attributes": {"condition": "new"},
+    }
     assert listing.product_variant is not None
-    assert listing.product_variant.condition == "new"
+    assert listing.product_variant.condition == "used"
+    assert _resolve(listing).pk == edge.pk
+    assert _edges(listing) == 2
 
 
 def test_unrecorded_contradicted_variant_is_redecided_once(site: SourceSite) -> None:
