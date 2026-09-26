@@ -2010,6 +2010,16 @@ review N-02).**
     The legacy NULL drive scope and the local sources keep stale absence.
     Per-scope continuity above is unchanged; the reverse-hazard reasoning
     still applies to the NULL scope.
+  - *Amended again 2026-09-26 (session 7, review r3 R3-F):* the legacy eBay
+    NULL drive scope now opts out too (`_legacy_report` sets
+    `stale_absence_allowed=False`), superseding "the legacy NULL drive scope
+    keeps stale absence" above. Its one-page keyword sweep is incomplete
+    whenever Browse reports more matches than the page held, and a live
+    listing ranked past that page misses every sweep, so an incomplete legacy
+    sweep never delists; a provably complete one still marks
+    `ABSENT_FROM_SWEEP`. NULL-scope continuity is still recorded. The
+    `DelistScope` default (`True`) is unchanged, but eBay is the only local
+    DelistDetector today, so no production adapter reaches the stale path.
 - *Rejected (b):* moving the NULL scope into the new table too. It changes the
   mechanism that frozen tests pin, for no behavior gain.
 - *Consequence (assumption):* when Actor runs rotate scopes more slowly than
