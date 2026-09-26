@@ -354,10 +354,15 @@ _UNLOCK_PHRASES = NEGATED_LOCK_PHRASE
 _UNLOCK_WORD = re.compile(r"\bun-?locked\b")
 _UNLOCK_STEM = re.compile(r"\bun-?lock\b")
 # The bare word covers 'Dell Locked', 'vendor-locked', 'PSB locked', 'locked
-# to <vendor>' and the emphasized '(*locked*)'. '<OEM> only' ('LENOVO ONLY') is
-# an exclusivity claim, which for a CPU means it only boots in that OEM's
-# boards: a vendor lock stated in other words.
-_LOCK_WORD = re.compile(rf"\blocked\b|\b(?:vendor|psb)[-\s]lock\b|\b{LOCK_OEMS}\s+only\b")
+# to <vendor>' and the emphasized '(*locked*)'; the noun form needs a lock
+# qualifier ('vendor lock', 'Dell Lock'), since a bare 'lock' is too loose.
+# '<OEM> only' ('LENOVO ONLY') is an exclusivity claim, which for a CPU means
+# it only boots in that OEM's boards: a vendor lock stated in other words.
+# This set only widens toward locked/unknown; the unlock phrases stay narrow
+# ('No Dell Lock' is a window-denied lock, so unknown, not unlocked).
+_LOCK_WORD = re.compile(
+    rf"\blocked\b|\b(?:vendor|psb|{LOCK_OEMS})[-\s]lock\b|\b{LOCK_OEMS}\s+only\b"
+)
 
 
 def socket_key(value: str) -> str:

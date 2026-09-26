@@ -131,3 +131,18 @@ def test_a_window_denied_lock_blocks_an_unlocked_reading(suffix: str) -> None:
 @pytest.mark.parametrize("phrase", ["no vendor lock", "not vendor locked", "non-locked"])
 def test_negated_lock_phrases_stay_unlock_evidence(phrase: str) -> None:
     assert _lock(f"{_BASE} Unlocked {phrase}") == U
+
+
+@pytest.mark.parametrize(
+    ("suffix", "expected"),
+    [
+        # Verifier s8 r5 observation: the OEM noun form is lock wording, so it
+        # contradicts "Unlocked" instead of being ignored.
+        ("Unlocked Dell Lock", None),
+        ("Unlocked - HPE lock", None),
+        ("Lenovo Lock", L),
+        ("No Dell Lock", None),
+    ],
+)
+def test_an_oem_lock_noun_is_lock_wording(suffix: str, expected: str | None) -> None:
+    assert _lock(f"{_BASE} {suffix}") == expected

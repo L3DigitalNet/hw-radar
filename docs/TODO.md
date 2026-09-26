@@ -47,7 +47,8 @@ Instructions for AI agents:
 - [ ] Capture listing condition: the pilot measured 0% condition coverage on every source (eBay
   Browse `condition`/`conditionId` is not mapped). Condition feeds the drive matcher's variant
   grain, so change it only with a `matcher_version` bump after, or together with, the MS-1e
-  ratification.
+  ratification. Same change: keep the title/label join visible to the negation window (today
+  "... No Screws" + label "Used" denies the label; canonical text erases the " | " join).
 - [x] Seed CPU reference rows in production. **Done 2026-09-26** (`import_refdata --category cpu`
   on release `478baf0`: 2 manufacturers, 2 families, 9 models, 9 specs, 19 aliases). Remaining:
   extend seeds to cover the chosen F6 EPYC models; GPU/RAM production seeding stays deferred
