@@ -43,4 +43,15 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               kept; coordinated Xeon/Core models vetoed; title MPN kind kept.
 #               2026.09.2 also: plural repair preambles kept; numeric Xeon "or"
 #               alternatives vetoed; variant priors re-decided on changed condition.
-MATCHER_VERSION = "2026.09.2"
+#   2026.09.3 — owner audit rulings (2026-09-26): a percentage-qualified "new"
+#               ("90%NEW") asserts no condition and "new pull" is never new
+#               (Q7); a listing offering more than one unit (lot of/lot N/N-pack/
+#               qty/Npcs) reviews at every rung incl. rung 0, drive and CPU (Q4);
+#               WD recertified-store listings carry a source-proven factory
+#               recert channel unless the title contradicts it (Q6). CPU: the
+#               EPYC name phrase skips socket/Zen words and an AMD OPN fused with
+#               open/new/used is still that OPN (cpu-0082); AMD vendor_lock
+#               listing evidence (eligibility only, never identity). Edges stamped
+#               2026.09.2 are re-decided (C.3.5): e.g. "90%NEW" variant(new) priors
+#               and single-unit accepts of lot titles.
+MATCHER_VERSION = "2026.09.3"

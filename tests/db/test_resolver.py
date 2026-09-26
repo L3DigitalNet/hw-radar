@@ -555,9 +555,10 @@ def test_seagate_nm_mpn_without_catalog_alias_persists_no_family(site: SourceSit
     assert edge.product_family is None
     assert edge.evidence["outcome"] == "none"
     assert not ProductFamily.objects.exists()  # no provisional 'exos' materialized
-    # The edge is stamped with the matcher that stopped asserting nm → Exos, so
-    # a re-resolution diff can tell these apart from 2026.09.1 edges.
-    assert edge.matcher_version == MATCHER_VERSION == "2026.09.2"
+    # The edge is stamped with the current matcher (2026.09.2 stopped asserting
+    # nm → Exos), so a re-resolution diff can tell these apart from 2026.09.1
+    # edges; the literal pin moved to "never the pre-fix version" at 2026.09.3.
+    assert edge.matcher_version == MATCHER_VERSION != "2026.09.1"
 
 
 def test_exact_catalog_alias_still_resolves_an_nm_mpn_at_rung1(site: SourceSite) -> None:
