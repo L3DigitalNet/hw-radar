@@ -22,4 +22,6 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               automated priors re-decided.
 #               2026.09.2 also: reference spans computed before punctuation
 #               stripping; offer terms masked.
+#               2026.09.2 also: CPU reference masking, multi-model/OPN-suffix
+#               and ES/QS sample guards.
 MATCHER_VERSION = "2026.09.2"

@@ -356,3 +356,46 @@ def test_epyc_near_model_never_accepts_a_seeded_model(site: SourceSite, title: s
     edge = _resolve(listing)
     assert edge.evidence["outcome"] == "none"
     assert listing.product_model is None
+
+
+# --- engineering / qualification samples: different parts, never retail ---------
+
+
+@pytest.mark.usefixtures("seeded", "auto_accept_on")
+@pytest.mark.parametrize(
+    ("model_number", "title"),
+    [
+        ("EPYC 7763", "AMD EPYC 7763 QS 100-000000314-04 64-Core SP3"),
+        ("EPYC 7763", "AMD EPYC 7763 ES 64-Core 2.45GHz SP3 Server CPU"),
+        ("EPYC 9654", "AMD EPYC 9654 ES engineering sample 96-Core SP5"),
+        ("EPYC 9654", "AMD EPYC 9654 QS 96-Core 2.4GHz SP5 CPU"),
+    ],
+)
+def test_epyc_sample_title_reviews_instead_of_accepting_the_retail_model(
+    site: SourceSite, model_number: str, title: str
+) -> None:
+    # The retail name is still an exact alias hit on the seeded model; the
+    # sample veto is what turns that hit into a reviewable contradiction.
+    assert _candidate_alias_models("cpu", title) == {_seeded_model(model_number).pk}
+    listing = _hinted(site, "sample", title, "cpu")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["veto"] == ["sample"]
+    assert listing.product_model is None
+
+
+@pytest.mark.usefixtures("seeded", "auto_accept_on")
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Near-trigger tokens: 'es' inside words, sockets, memory, E-series.
+        "AMD EPYC 7763 64-Core SP3 for 7002/7003 Series Boards",
+        "AMD EPYC 7763 64-Core SP3 ESXi Tested Server CPU",
+        "AMD EPYC 9654 96-Core SP5 DDR5 Server Processor",
+    ],
+)
+def test_sample_false_trigger_titles_still_accept(site: SourceSite, title: str) -> None:
+    listing = _hinted(site, "retail", title, "cpu")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "accept"
+    assert listing.product_model is not None

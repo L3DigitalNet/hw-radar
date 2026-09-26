@@ -239,3 +239,74 @@ def test_suffixed_opn_is_not_the_seeded_opn(title: str) -> None:
     keys = set(_keys(title))
     assert "100000000312" not in keys
     assert "100000000314" not in keys
+
+
+# --- engineering / qualification samples (owner F6: different part, not retail) -
+
+
+def _vetoed(title: str) -> list[str]:
+    extracted = cpu.extract(canonicalize_title(title))
+    return cpu.veto(extracted, ladder.HardAttrs(category=cpu.CpuHard(socket="sp3", cores=64)))
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "AMD EPYC 7763 QS 100-000000314-04 64-Core SP3",
+        "AMD EPYC 7763 64-Core SP3 QS",
+        "AMD EPYC 7763 ES 64-Core SP3",
+        "AMD EPYC 7763-ES 64-Core SP3",
+        "AMD EPYC 7763 ES1 64-Core SP3",
+        "AMD EPYC 7763 ES/QS 64-Core SP3",
+        "AMD EPYC 7763 64-Core SP3 Engineering Sample",
+        "AMD EPYC 7763 64-Core SP3 Qualification Sample",
+        "AMD EPYC 7763 64-Core SP3 Sample",
+        "AMD EPYC 7763 64-Core SP3 Pre-Production",
+        "AMD EPYC 7763 64-Core SP3 preproduction",
+        # A suffixed OPN with no sample word is the sample marking itself.
+        "AMD EPYC 7763 64-Core SP3 100-000000312-04",
+    ],
+)
+def test_sample_marker_vetoes_any_target(title: str) -> None:
+    assert _vetoed(title) == ["sample"]
+
+
+def test_sample_marker_vetoes_even_without_a_catalog_spec() -> None:
+    # A seeded model with no cpu_spec row must not let a sample reach accept.
+    extracted = cpu.extract(canonicalize_title("AMD EPYC 9654 ES 96-Core SP5"))
+    assert cpu.veto(extracted, ladder.HardAttrs()) == ["sample"]
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "AMD EPYC 7763 64-Core SP3",
+        # 'es' inside words, Xeon E-series names, sockets and memory types.
+        "AMD EPYC 7763 64-Core SP3 for 7002/7003 Series Boards",
+        "AMD EPYC 7763 64-Core SP3 ESXi Tested",
+        "AMD EPYC 7763 64-Core SP3 Processes Tested Working",
+        "AMD EPYC 7763 64-Core SP3 DDR4 Server CPU",
+        "AMD EPYC 7763 64-Core SP3 100-000000312",
+    ],
+)
+def test_sample_marker_false_triggers_do_not_veto(title: str) -> None:
+    assert _vetoed(title) == []
+
+
+def test_xeon_e5_is_not_a_sample_marker() -> None:
+    attrs = _extract("Intel Xeon E5-2690 v4 14-Core LGA2011-3")
+    assert attrs.sample is None
+    attrs = _extract("AMD EPYC 9654 96-Core SP5 DDR5")
+    assert attrs.sample is None
+
+
+def test_sample_marker_reads_the_masked_title() -> None:
+    # The cited object of a reference phrase is not the listed part.
+    assert _extract("AMD EPYC 7763 64-Core SP3 replacement for engineering sample").sample is None
+
+
+def test_sample_title_still_names_the_retail_model() -> None:
+    # The candidate is kept (the veto, not candidate filtering, blocks accept),
+    # so the resolver reaches the seeded model and records a reviewable
+    # contradiction rather than a silent miss.
+    assert "epyc7763" in _keys("AMD EPYC 7763 QS 100-000000314-04 64-Core SP3")

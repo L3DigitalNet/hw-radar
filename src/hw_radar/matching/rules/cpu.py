@@ -14,8 +14,9 @@ separators: Intel ARK states 'FCLGA4677' while listings say 'LGA 4677', and
 those are one socket. `cpu_spec.socket` stays the seed's lowercase token; only
 the comparison is normalized.
 
-Veto fields: socket and cores. tdp_w is extracted but never vetoes, because
-configurable TDP makes a listing's quoted wattage an unreliable identity signal.
+Veto fields: socket and cores, plus the listing-only `sample` marker (see
+below). tdp_w is extracted but never vetoes, because configurable TDP makes a
+listing's quoted wattage an unreliable identity signal.
 
 Identity evidence (candidates and brand) is read from the title after
 `mask_reference_spans` with the CPU phrase set, exactly as the drive layers
@@ -29,6 +30,14 @@ authoritative identity:
     on the seeded one and read as unambiguous.
   - An AMD OPN followed by a '-NN' suffix ('100-000000314-04', a QS sample
     marking) is not the OPN, so it is not a candidate.
+
+Engineering and qualification samples ('ES', 'QS', 'engineering sample',
+'pre-production', a suffixed OPN) are different parts from the retail SKU:
+their own OPNs, stepping, clocks and often locked or unfinished firmware. A
+sample title still names the retail model ('EPYC 7763 QS'), so candidate
+filtering alone would leave that name as an exact alias hit. The marker is
+instead extracted as the `sample` attribute and always vetoes, which routes
+any alias hit to review (a contradiction) rather than an auto-accept.
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ from hw_radar.matching import vocab
 from hw_radar.matching.ladder import CategoryHardAttrs, HardAttrs
 from hw_radar.matching.normalize import mask_reference_spans, reference_phrase_pattern
 from hw_radar.matching.rules import (
+    LAYER,
     CandidateSet,
     add_code_tokens,
     add_house_skus,
@@ -63,6 +73,9 @@ class CpuAttributes(CategoryAttributes):
     socket: Attribute[str] | None = None  # socket_key form, e.g. 'lga4677', 'sp5'
     cores: Attribute[int] | None = None
     tdp_w: Attribute[int] | None = None
+    # The sample marker as the title printed it; None = no marker (retail or
+    # unstated). Unlike the other fields this is never compared to the catalog.
+    sample: Attribute[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -135,6 +148,15 @@ _EPYC_MODEL = re.compile(
     r"(?!\s?(?:ghz|mhz|mt/s|gb|mb|tb|w\b))"
 )
 _EPYC_NAME = re.compile(r"\bepyc\b")
+# Sample markers, matched as whole alphanumeric tokens: the lookarounds are on
+# [a-z0-9], not \b, so 'es' inside 'series', 'esxi', 'tested' or 'e5' never
+# fires while '7763-es' and 'es/qs' do. 'sample' alone covers the
+# 'engineering sample' and 'qualification sample' phrases. A suffixed AMD OPN is
+# the QS/ES marking itself even with no word beside it.
+_SAMPLE = re.compile(
+    r"(?<![a-z0-9])(?:es[12]?|qs|samples?|pre-?production|pre\s+production"
+    r"|100-\d{9}-[a-z0-9]+)(?![a-z0-9])"
+)
 
 
 def socket_key(value: str) -> str:
@@ -151,6 +173,13 @@ def _brand(title: str) -> Attribute[str] | None:
 
 def _identity_text(title: str) -> str:
     return mask_reference_spans(title, _REFERENCE)
+
+
+def _sample(identity: str) -> Attribute[str] | None:
+    m = _SAMPLE.search(identity)
+    if m is None:
+        return None
+    return Attribute(value=m.group(0), confidence=0.9, layer=LAYER, source_text=m.group(0))
 
 
 def _names_several_epyc_models(identity: str) -> bool:
@@ -171,12 +200,17 @@ def _names_several_epyc_models(identity: str) -> bool:
 def extract(title: str) -> ExtractedAttributes:
     sockets = [(socket_key(m.group(0)), m.group(0)) for p in _SOCKETS for m in p.finditer(title)]
     cores = [(int(m.group(1) or m.group(2)), m.group(0)) for m in _CORES.finditer(title)]
+    # The sample marker is identity evidence, so it reads the reference-masked
+    # title: "replacement for an engineering sample" does not make the listed
+    # part one.
+    identity = _identity_text(title)
     payload = CpuAttributes(
         socket=sole_value(sockets, 0.9),
         cores=sole_value(cores, 0.85),
         tdp_w=sole_value(((int(m.group(1)), m.group(0)) for m in _TDP.finditer(title)), 0.7),
+        sample=_sample(identity),
     )
-    brand = _brand(_identity_text(title))
+    brand = _brand(identity)
     return replace(vocab.offer_terms(title), brand=brand, category_attrs=payload)
 
 
@@ -207,12 +241,21 @@ def extract_candidates(
 
 
 def veto(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[str]:
-    """Fields where the listing and `cpu_spec` are both known and disagree."""
+    """Fields where the listing and `cpu_spec` are both known and disagree, plus
+    'sample' whenever the listing carries a sample marker, whatever the target."""
     listing = extracted.category_attrs
-    spec = catalog.category
-    if not isinstance(listing, CpuAttributes) or not isinstance(spec, CpuHard):
+    if not isinstance(listing, CpuAttributes):
         return []
     vetoed: list[str] = []
+    # Every catalog CPU is a retail SKU (cpu_spec has no sample field and no
+    # seed lists a sample part), so a sample listing contradicts any target,
+    # including one with no cpu_spec at all. Checked before the spec guard for
+    # that reason; a missing spec must not let a sample through to accept.
+    if listing.sample is not None:
+        vetoed.append("sample")
+    spec = catalog.category
+    if not isinstance(spec, CpuHard):
+        return vetoed
     if (
         listing.socket is not None
         and spec.socket is not None
