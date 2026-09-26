@@ -598,10 +598,13 @@ def _run_ladder(
             ),
         )
     spec = _SPEC_READERS[slug]
+    structured_mpn = _structured_mpn(attrs)
     extracted = rules.extract(canonical)
+    if rules.fold_structured is not None and structured_mpn is not None:
+        extracted = rules.fold_structured(extracted, structured_mpn)
     candidates = rules.extract_candidates(
         canonical,
-        structured_mpn=_structured_mpn(attrs),
+        structured_mpn=structured_mpn,
         source_key=listing.source_site.normalized_name,
     )
     # reconsider (C.3.4 catalog-refresh re-run): prior=None bypasses rung 0 so

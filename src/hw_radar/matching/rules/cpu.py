@@ -14,8 +14,9 @@ separators: Intel ARK states 'FCLGA4677' while listings say 'LGA 4677', and
 those are one socket. `cpu_spec.socket` stays the seed's lowercase token; only
 the comparison is normalized.
 
-Veto fields: socket and cores, plus the listing-only `sample` marker (see
-below). tdp_w is extracted but never vetoes, because configurable TDP makes a
+Veto fields: socket and cores, plus three listing-only identity markers that
+veto whatever the target — `sample`, `bundle` and `multi_model` (see below).
+tdp_w is extracted but never vetoes, because configurable TDP makes a
 listing's quoted wattage an unreliable identity signal.
 
 Identity evidence (candidates and brand) is read from the title after
@@ -30,6 +31,20 @@ authoritative identity:
     on the seeded one and read as unambiguous.
   - An AMD OPN followed by a '-NN' suffix ('100-000000314-04', a QS sample
     marking) is not the OPN, so it is not a candidate.
+  - A first-party AMD codename between 'EPYC' and the number ('EPYC Genoa
+    9354', 'EPYC Milan-X 7773X') is skipped when forming the name candidate,
+    which is emitted as 'epyc <number>'. The number keeps its suffix, so the
+    P-variant and multi-model guards see exactly what they would without it.
+
+Candidate filtering alone is not enough for multi-model titles: rung 0 never
+looks at candidates, so a listing accepted under one title and re-observed
+naming two models would inherit its prior. The ambiguity is therefore also
+extracted as `multi_model`, which vetoes, and the veto re-runs at rung 0.
+
+A listing that is a board, system or bundle carrying the CPU ('Supermicro
+H12DSi-N6 Motherboard With 2x AMD EPYC 7763') names the CPU exactly, so it
+reaches the alias. Its price is not a CPU price, so the product-type marker is
+extracted as `bundle` and vetoes (see _BUNDLE for what does and does not count).
 
 Engineering and qualification samples ('ES', 'QS', 'engineering sample',
 'pre-production', a suffixed OPN) are different parts from the retail SKU:
@@ -37,7 +52,10 @@ their own OPNs, stepping, clocks and often locked or unfinished firmware. A
 sample title still names the retail model ('EPYC 7763 QS'), so candidate
 filtering alone would leave that name as an exact alias hit. The marker is
 instead extracted as the `sample` attribute and always vetoes, which routes
-any alias hit to review (a contradiction) rather than an auto-accept.
+any alias hit to review (a contradiction) rather than an auto-accept. A sample
+marking in the merchant's structured MPN field counts too (`with_structured_mpn`,
+which the resolver applies through CategoryRules.fold_structured): a retail
+title over a '100-000000314-04' structured MPN is still a sample.
 """
 
 from __future__ import annotations
@@ -47,7 +65,11 @@ from dataclasses import dataclass, replace
 
 from hw_radar.matching import vocab
 from hw_radar.matching.ladder import CategoryHardAttrs, HardAttrs
-from hw_radar.matching.normalize import mask_reference_spans, reference_phrase_pattern
+from hw_radar.matching.normalize import (
+    canonicalize_title,
+    mask_reference_spans,
+    reference_phrase_pattern,
+)
 from hw_radar.matching.rules import (
     LAYER,
     CandidateSet,
@@ -76,6 +98,12 @@ class CpuAttributes(CategoryAttributes):
     # The sample marker as the title printed it; None = no marker (retail or
     # unstated). Unlike the other fields this is never compared to the catalog.
     sample: Attribute[str] | None = None
+    # The product-type marker when the listing is a board, system or bundle
+    # rather than a bare CPU; None = nothing says so.
+    bundle: Attribute[str] | None = None
+    # The distinct EPYC model numbers, space-joined, when the title names more
+    # than one; None = at most one.
+    multi_model: Attribute[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -109,7 +137,13 @@ _NAMES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("intel", re.compile(r"\bxeon\s+(?P<num>(?:e[357]|w|d)-?\s?\d{4,5}[a-z]{0,2}(?:\s+v\d)?)\b")),
     ("intel", re.compile(r"\bcore\s+(?P<num>i[3579]-?\s?\d{4,5}[a-z]{0,3})\b")),
     ("intel", re.compile(r"\bcore\s+ultra\s+[3579]\s+(?P<num>\d{3}[a-z]{0,2})\b")),
-    ("amd", re.compile(r"\bepyc\s+(?P<num>\d{4}[a-z]{0,2})\b")),
+    (
+        "amd",
+        re.compile(
+            r"\bepyc\s+(?:(?P<codename>naples|rome|milan(?:-x)?|genoa(?:-x)?|bergamo|siena"
+            r"|turin)\s+)?(?P<num>\d{4}[a-z]{0,2})\b"
+        ),
+    ),
     (
         "amd",
         re.compile(
@@ -135,8 +169,11 @@ _VOCAB_TAILS = re.compile(r"(?:\d(?:ghz|mhz|mb|gb|w)|lga\d+|\dc/\d+t|\d-?cores?)
 # Kept out of the shared list: drive masking is pinned by the A0 decision
 # oracle and tests/unit/test_reference_context.py, and no drive evidence says
 # the phrase names a different drive there (an OEM-relabelled drive can be
-# physically the cited model). Local, it leaves drive behavior unchanged by
-# construction.
+# physically the cited model). Kept local, drive MASKING is unchanged. Drive
+# canonical text is not fully untouched: the phrase must be registered in
+# normalize._CATEGORY_REFERENCE_PHRASES (reference_phrase_pattern rejects an
+# unregistered extra), and canonicalize_title keeps clause punctuation as " - "
+# for every registered phrase, drive titles included.
 _REFERENCE = reference_phrase_pattern("oem version of")
 # An EPYC model number as titles print it: generation digit first, last digit
 # the generation (1-5), letters allowed inside (7H12, 72F3, 9V84) and a short
@@ -159,6 +196,21 @@ _SAMPLE = re.compile(
 )
 
 
+# Product-type markers that make the LISTING a board, system or bundle, matched
+# as whole tokens on the reference-masked title (so "compatible with H12SSL
+# motherboard" does not fire). Deliberately absent: 'server', 'board' and
+# 'workstation'. Bare-CPU titles say "Server CPU", "Server Processor", "for
+# 7002/7003 Series Boards" and "Workstation CPU" all the time, so those words
+# would turn ordinary retail listings into reviews. The count forms need a
+# bundling word or a CPU noun beside them, because a bare 'Nx' is often a core
+# count ('32x 3.25GHz').
+_BUNDLE = re.compile(
+    r"(?<![a-z0-9])(?:mother-?boards?|mainboards?|mobo|barebones?|combos?|bundles?|kits?"
+    r"|(?:with|w/|incl|including|plus|\+)\s*[2-9]\s?x"
+    r"|[2-9]\s?x\s+(?:cpus?|processors?|amd|intel|epyc|xeon))(?![a-z0-9])"
+)
+
+
 def socket_key(value: str) -> str:
     """The comparison form of a socket name: lowercase alphanumerics with any
     'socket' word and Intel 'fc' package prefix dropped ('FCLGA4677' and
@@ -175,43 +227,73 @@ def _identity_text(title: str) -> str:
     return mask_reference_spans(title, _REFERENCE)
 
 
-def _sample(identity: str) -> Attribute[str] | None:
-    m = _SAMPLE.search(identity)
+def _marker(pattern: re.Pattern[str], text: str) -> Attribute[str] | None:
+    m = pattern.search(text)
     if m is None:
         return None
     return Attribute(value=m.group(0), confidence=0.9, layer=LAYER, source_text=m.group(0))
 
 
-def _names_several_epyc_models(identity: str) -> bool:
-    """Whether an EPYC title names more than one distinct model number.
+def _epyc_models(identity: str) -> set[str]:
+    """The distinct EPYC model numbers an EPYC title names; empty for a title
+    without 'epyc'.
 
     Read from the reference-masked title, so a model cited only as a
     reference object does not count. Suffixes count as distinct models
     ('9354' and '9354p' are two parts).
     """
     if _EPYC_NAME.search(identity) is None:
-        return False
+        return set()
     unsocketed = identity
     for pattern in _SOCKETS:
         unsocketed = pattern.sub(lambda m: " " * len(m.group(0)), unsocketed)
-    return len({m.group(0) for m in _EPYC_MODEL.finditer(unsocketed)}) > 1
+    return {m.group(0) for m in _EPYC_MODEL.finditer(unsocketed)}
+
+
+def _multi_model(identity: str) -> Attribute[str] | None:
+    models = _epyc_models(identity)
+    if len(models) < 2:
+        return None
+    joined = " ".join(sorted(models))
+    return Attribute(value=joined, confidence=0.9, layer=LAYER, source_text=joined)
 
 
 def extract(title: str) -> ExtractedAttributes:
     sockets = [(socket_key(m.group(0)), m.group(0)) for p in _SOCKETS for m in p.finditer(title)]
     cores = [(int(m.group(1) or m.group(2)), m.group(0)) for m in _CORES.finditer(title)]
-    # The sample marker is identity evidence, so it reads the reference-masked
-    # title: "replacement for an engineering sample" does not make the listed
-    # part one.
+    # The sample, bundle and multi-model markers are identity evidence, so they
+    # read the reference-masked title: "replacement for an engineering sample"
+    # does not make the listed part one.
     identity = _identity_text(title)
     payload = CpuAttributes(
         socket=sole_value(sockets, 0.9),
         cores=sole_value(cores, 0.85),
         tdp_w=sole_value(((int(m.group(1)), m.group(0)) for m in _TDP.finditer(title)), 0.7),
-        sample=_sample(identity),
+        sample=_marker(_SAMPLE, identity),
+        bundle=_marker(_BUNDLE, identity),
+        multi_model=_multi_model(identity),
     )
     brand = _brand(identity)
     return replace(vocab.offer_terms(title), brand=brand, category_attrs=payload)
+
+
+def with_structured_mpn(extracted: ExtractedAttributes, structured_mpn: str) -> ExtractedAttributes:
+    """`extracted` with a sample marking found in the merchant's structured MPN
+    field folded into `sample`; unchanged when the title already carries one or
+    the field has none.
+
+    The title-only `extract` cannot see the field, and the candidate guard that
+    drops a suffixed OPN only stops that token from being a hit: a clean title
+    ('AMD EPYC 7763 64-Core SP3') still hits the retail alias, so without this the
+    listing would accept although the merchant asserts a QS part.
+    """
+    payload = extracted.category_attrs
+    if not isinstance(payload, CpuAttributes) or payload.sample is not None:
+        return extracted
+    sample = _marker(_SAMPLE, canonicalize_title(structured_mpn))
+    if sample is None:
+        return extracted
+    return replace(extracted, category_attrs=replace(payload, sample=sample))
 
 
 def extract_candidates(
@@ -221,7 +303,7 @@ def extract_candidates(
     title = _identity_text(title)
     brand = _brand(title)
     add_structured(out, structured_mpn, TokenKind.MANUFACTURER_MPN, brand.value if brand else "")
-    if _names_several_epyc_models(title):
+    if len(_epyc_models(title)) > 1:
         # Only the merchant-asserted structured MPN survives: every title token
         # (names, OPNs, code tokens, house SKUs) could belong to either model.
         return out.result()
@@ -233,7 +315,13 @@ def extract_candidates(
             out.add(m.group(0), TokenKind.MANUFACTURER_MPN, vendor="intel", confidence=0.85)
     for vendor, pattern in _NAMES:
         for m in pattern.finditer(title):
-            out.add(m.group(0), TokenKind.MANUFACTURER_MPN, vendor=vendor, confidence=0.85)
+            whole = m.group(0)
+            if m.groupdict().get("codename"):
+                # 'epyc genoa 9354' → 'epyc 9354': seeds alias the name without
+                # the codename, so the whole phrase would never join.
+                start, end = m.span("codename")
+                whole = title[m.start() : start] + title[end : m.end()]
+            out.add(whole, TokenKind.MANUFACTURER_MPN, vendor=vendor, confidence=0.85)
             out.add(m.group("num"), TokenKind.MANUFACTURER_MPN, vendor=vendor, confidence=0.75)
     add_house_skus(out, title, source_key)
     add_code_tokens(out, title, _VOCAB_TAILS)
@@ -242,7 +330,8 @@ def extract_candidates(
 
 def veto(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[str]:
     """Fields where the listing and `cpu_spec` are both known and disagree, plus
-    'sample' whenever the listing carries a sample marker, whatever the target."""
+    'sample', 'bundle' and 'multi_model' whenever the listing carries that
+    marker, whatever the target."""
     listing = extracted.category_attrs
     if not isinstance(listing, CpuAttributes):
         return []
@@ -253,6 +342,14 @@ def veto(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[str]:
     # that reason; a missing spec must not let a sample through to accept.
     if listing.sample is not None:
         vetoed.append("sample")
+    # Same reasoning: no catalog CPU is a board or a bundle, and a title naming
+    # two models asserts neither. These are what keep a rung-0 prior from being
+    # inherited when a re-observed title turns into one (rung 0 reads no
+    # candidates, only this veto).
+    if listing.bundle is not None:
+        vetoed.append("bundle")
+    if listing.multi_model is not None:
+        vetoed.append("multi_model")
     spec = catalog.category
     if not isinstance(spec, CpuHard):
         return vetoed

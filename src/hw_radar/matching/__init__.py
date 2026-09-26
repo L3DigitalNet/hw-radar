@@ -26,4 +26,6 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               and ES/QS sample guards.
 #               2026.09.2 also: parentheticals do not end reference spans;
 #               category-local phrases keep clause punctuation.
+#               2026.09.2 also: CPU bundle/board, multi-model and structured-MPN
+#               sample vetoes; EPYC codenames skipped in the name candidate.
 MATCHER_VERSION = "2026.09.2"

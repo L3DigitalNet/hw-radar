@@ -310,3 +310,114 @@ def test_sample_title_still_names_the_retail_model() -> None:
     # so the resolver reaches the seeded model and records a reviewable
     # contradiction rather than a silent miss.
     assert "epyc7763" in _keys("AMD EPYC 7763 QS 100-000000314-04 64-Core SP3")
+
+
+# --- boards, systems and bundles (s7 audit: cpu-0207/-0248/-0269/-0279) -------
+
+# The four false merges of the first EPYC measurement share this title.
+_H12DSI_BUNDLE = "Supermicro H12DSi-N6 Motherboard With 2x AMD EPYC 7763 64 Core 2.45GHz CPU"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        _H12DSI_BUNDLE,
+        "AMD EPYC 7763 64-Core SP3 + H12SSL-i Mainboard",
+        "Gigabyte MZ32-AR0 Mobo AMD EPYC 7763 64-Core SP3",
+        "AMD EPYC 7763 SP3 Combo Supermicro H12SSL-NT",
+        "AMD EPYC 7763 CPU Bundle SP3",
+        "Dell AMD EPYC 7763 64-Core Processor Upgrade Kit",
+        "Barebone 1U AMD EPYC 7763 64-Core SP3",
+        "Supermicro H12DSi board w/ 2x AMD EPYC 7763",
+        "2x AMD EPYC 7763 64-Core SP3 Server CPU",
+        "AMD EPYC 7763 64-Core SP3 2x CPUs",
+    ],
+)
+def test_board_system_or_bundle_listing_vetoes(title: str) -> None:
+    assert _vetoed(title) == ["bundle"]
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # Bare-CPU titles from the EPYC corpus that say "Server CPU"/"Processor".
+        "AMD EPYC 9354 Server CPU 32C 64T 3.25GHz Base 3.8GHz Boost 256MB L3 SP5 DDR5",
+        "AMD EPYC 9354 32C Server Processor 32x 3.25GHz 256MB Cache 6096 SP5 CPU",
+        "AMD EPYC 9654 96C Server Processor 96x 2.40GHz 384MB Cache 6096 SP5 CPU",
+        "AMD EPYC Milan 7763 CPU 64 Cores SP3 Server Processor NO VENDOR LOCKED",
+        "AMD EPYC 7763 Processor 64-Core 2.45GHz 256MB 280W CPU 100-000000312",
+        "100-000000798 AMD EPYC Genoa 9354 3.25GHz 32-Core SP5 256MB Processor *UNLOCKED*",
+        # Compatibility notes and generation boards are not bundles.
+        "AMD EPYC 7763 64-Core SP3 for 7002/7003 Series Boards",
+        "AMD EPYC 9354 32-Core SP5 support Supermicro H13SSL-N",
+        "AMD EPYC 9354 SP5 socket board compatible",
+        "AMD EPYC 7763 64-Core SP3 compatible with H12SSL-i motherboard",
+        "AMD EPYC 7763 64-Core SP3 for server Workstation",
+    ],
+)
+def test_bare_cpu_titles_are_not_bundles(title: str) -> None:
+    assert _extract(title).bundle is None
+    assert _extract(title).multi_model is None
+
+
+def test_bundle_title_still_names_the_cpu() -> None:
+    # The veto, not candidate filtering, blocks the accept: the hit stays
+    # visible as a reviewable contradiction.
+    assert "epyc7763" in _keys(_H12DSI_BUNDLE)
+
+
+# --- EPYC codenames (s7 audit: 17 recall misses) -----------------------------
+
+
+@pytest.mark.parametrize(
+    ("title", "key"),
+    [
+        ("AMD EPYC Genoa 9354 280W 3.25GHz 32-Core 256MB DDR5 socket SP5", "epyc9354"),
+        ("AMD EPYC GENOA 9654 CPU SP5 ZEN4 2.4GHz DDR5 96 Cores", "epyc9654"),
+        ("AMD EPYC Milan 7763 CPU 64 Cores SP3 Server Processor", "epyc7763"),
+        ("AMD EPYC Rome 7742 64-Core SP3", "epyc7742"),
+        ("AMD EPYC Milan-X 7773X 64-Core SP3", "epyc7773x"),
+        ("AMD EPYC Genoa-X 9684X 96-Core SP5", "epyc9684x"),
+    ],
+)
+def test_codename_between_epyc_and_number_reaches_the_name(title: str, key: str) -> None:
+    assert key in _keys(title)
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        # The guards see the number exactly as without the codename.
+        "AMD EPYC Genoa 9354P 32-Core SP5",
+        "AMD EPYC Milan 7763 / 7713 64-Core SP3",
+        "AMD EPYC Genoa 9654 9554 SP5",
+    ],
+)
+def test_codename_keeps_the_p_variant_and_multi_model_guards(title: str) -> None:
+    assert _seeded_hits(title) == set()
+
+
+def test_unknown_word_between_epyc_and_number_is_not_skipped() -> None:
+    # Only first-party codenames are skipped; anything else still blocks the name.
+    assert "epyc9354" not in _keys("AMD EPYC Special 9354 SP5")
+
+
+# --- ambiguity and structured-MPN samples (Codex N3/N4) -----------------------
+
+
+def test_multi_model_title_records_the_ambiguity_and_vetoes() -> None:
+    attrs = _extract("AMD EPYC 7763 / 7742 64-Core SP3")
+    assert attrs.multi_model is not None and attrs.multi_model.value == "7742 7763"
+    assert _vetoed("AMD EPYC 7763 / 7742 64-Core SP3") == ["multi_model"]
+
+
+def test_structured_mpn_sample_marking_sets_sample() -> None:
+    extracted = cpu.extract(canonicalize_title("AMD EPYC 7763 64-Core SP3"))
+    folded = cpu.with_structured_mpn(extracted, "100-000000314-04")
+    spec = ladder.HardAttrs(category=cpu.CpuHard(socket="sp3", cores=64))
+    assert cpu.veto(folded, spec) == ["sample"]
+
+
+def test_retail_structured_mpn_leaves_attributes_unchanged() -> None:
+    extracted = cpu.extract(canonicalize_title("AMD EPYC 7763 64-Core SP3"))
+    assert cpu.with_structured_mpn(extracted, "100-000000312") == extracted
