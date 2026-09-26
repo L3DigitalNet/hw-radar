@@ -180,3 +180,24 @@ def test_plain_new_still_asserts_new(title: str) -> None:
     condition = vocab.extract(canonicalize_title(title)).condition
     assert condition is not None
     assert condition.value == "new"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "2x Kingston 16GB DDR4 2666 ECC RDIMM Server Memory",
+        "2x Samsung 32GB DDR5 4800 RDIMM",
+        "2 x Crucial 8GB SODIMM laptop RAM",
+    ],
+)
+def test_memory_kit_count_is_not_a_trusted_lot(title: str) -> None:
+    # One kit of N modules: the count must stay below the lot/pricing bar,
+    # or eligibility would divide the kit price by the module count.
+    quantity = vocab.extract_quantity(canonicalize_title(title))
+    assert quantity is None or quantity.confidence < vocab.LOT_MIN_CONFIDENCE
+
+
+def test_memory_brand_drive_multipack_still_ties_the_count() -> None:
+    quantity = vocab.extract_quantity(canonicalize_title("2x Samsung 870 EVO 1TB SATA SSD"))
+    assert quantity is not None
+    assert (quantity.value, quantity.confidence >= vocab.LOT_MIN_CONFIDENCE) == (2, True)

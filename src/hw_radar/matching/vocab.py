@@ -189,12 +189,8 @@ _LOT_ITEM_WORDS: Final = (
     "hitachi",
     "seagate",
     "toshiba",
-    "samsung",
     "solidigm",
     "intel",
-    "micron",
-    "crucial",
-    "kingston",
     "kioxia",
     "amd",
     "epyc",
@@ -210,6 +206,12 @@ _LOT_ITEM_WORDS: Final = (
     "cpus?",
     "processors?",
 )
+# Brands that also sell memory: "2x kingston 16gb ddr4" is ONE kit of two
+# modules, and eligibility divides the price by this count for every category.
+# These brands tie the count only when the title carries no memory marker, so
+# "2x samsung 870 evo 1tb ssd" still reviews as a drive multipack.
+_LOT_MEMORY_BRANDS: Final = ("samsung", "micron", "crucial", "kingston")
+_MEMORY_MARKER: Final = r"(?!.*\b(?:ddr\d?|dimm|rdimm|udimm|lrdimm|sodimm|so-dimm|memory|ram)\b)"
 # Offer words that may sit between the count and the item ("2x new seagate",
 # "3x brand new wd"): the count still describes the item, and requiring
 # adjacency would let "2x " prepended to a "New Seagate ..." title escape.
@@ -229,6 +231,13 @@ _QUANTITIES: tuple[tuple[re.Pattern[str], float], ...] = (
         re.compile(
             r"\b(\d{1,3}) ?x (?:" + _LOT_OFFER_WORDS + r" )*"
             r"(?:(?:" + "|".join(_LOT_ITEM_WORDS) + r")\b|\d+(?:\.\d+)? ?tb\b)"
+        ),
+        0.9,
+    ),
+    (
+        re.compile(
+            r"\b(\d{1,3}) ?x (?:" + _LOT_OFFER_WORDS + r" )*"
+            r"(?:" + "|".join(_LOT_MEMORY_BRANDS) + r")\b" + _MEMORY_MARKER
         ),
         0.9,
     ),
