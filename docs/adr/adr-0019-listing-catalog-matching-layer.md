@@ -124,3 +124,13 @@ Owner decisions of 2026-09-26, resolving [OQ24](../resolved-questions.md#oq24--p
 **Consequence — OQ31, source × category admission matrix.** The global SA-004 enable order (`docs/handoff/deployed.md`) is replaced by a source × category admission matrix: each (source, category) combination is admitted independently, and unrelated sources or categories are never a prerequisite for one another. SA-004's checks run per combination, immediately before that combination's enable bit changes. ServerPartDeals and Seagate-recertified are retired from the currently enableable set — their reviewed current Terms conflict with the automated collection those connectors perform; not enabled privately, and not routed through Apify, since Apify does not change source-policy eligibility. Status: retired / permission-required, not production-enableable under current Terms; code and history are preserved. Re-admission needs materially changed Terms or written merchant permission, confirmed by a fresh source-admission review — it is never automatic.
 
 **Consequence — OQ24, no production merchant source now.** No production Actor-backed merchant source is introduced at this milestone; F5b is deferred until a future source-admission review identifies an actually eligible source. No `permission-required` merchant is treated as approved by that status alone, and no merchant solicitation, Actor, or paid unblocker/proxy path is pursued to reach `eligible`. Reopen only on new source-admission evidence. OQ24/F5b does not block F6 or MS-2.
+
+**Ratification status — 2026-09-26 (matcher `2026.09.3`, owner-audited corpus).** The owner ruled on
+the MS-1e audit questions Q1–Q8 and delegated the stratified audit
+([packet §7](../evidence/2026-09-26-ms1e-expanded-audit-packet.md#7-owner-rulings-applied-and-final-measurement-2026-09-26-matcher-2026093)).
+On the pinned production refdata the gate measures 366/366 auto-accepts correct, every declared
+source floor met, and rung-0 PASS. The audit gate still fails on 7 sampled rows naming legacy or
+rebranded family lines ([OQ33](../open-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)),
+so the composite is FAIL and **the status stays `proposed`**. Q3 keeps HGST-branded HUS/HUH drives
+under manufacturer `hgst`, and Q2 confirms the family-grain rule of amendment 1 for families that
+are named but unseeded.

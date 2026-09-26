@@ -1,5 +1,9 @@
 # CPU (AMD EPYC) draft corpus: owner audit packet (2026-09-26)
 
+Status (updated 2026-09-26, matcher `2026.09.3`): **owner audit applied; identity gate PASS;
+`auto_accept` stays False pending a scope decision** ([OQ34](../open-questions.md#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family)).
+See §9. Sections 1–8 are the pre-audit packet, kept as the record.
+
 This packet prepares the first F6 cell ratification: **eBay Browse × CPU × a narrow AMD EPYC
 set**. It serves owner gate **R4** (MS2-D-05): CPU ships with `auto_accept=False`, and only an
 owner-ratified category corpus may flip it. It stops before the owner audit. Every label is a
@@ -220,3 +224,61 @@ HW_RADAR_CATEGORY_WOULD_ACCEPT=1 \
 HW_RADAR_MS1E_CORPUS=<dir>/corpus.jsonl HW_RADAR_MS1E_REPORT=<dir>/report.json \
 uv run pytest tests/db/test_ratification_corpus.py -k test_category_would_accept_measurement -s
 ```
+
+## 9. Owner audit applied and final measurement (2026-09-26, matcher `2026.09.3`)
+
+**Owner audit (commit `cb70484`):** the 60 ids in §7 — 55 `owner_confirmed`, 5 `owner_corrected`:
+
+| id | Correction | Reason |
+| --- | --- | --- |
+| cpu-0013 | EPYC 9354, variant condition `new` | "+NEW+" is explicit condition evidence; Dell lock state is compatibility, not identity |
+| cpu-0071 | EPYC 9354, variant `used` | "Used" |
+| cpu-0149 | EPYC 7763, variant `used` | "Pulled from Cisco UCS"; the lock marking is compatibility |
+| cpu-0180 | EPYC 7763, variant `new` | "New" |
+| cpu-0283 | EPYC 7763 (model) | price is not identity evidence; the $399 anomaly belongs to eligibility, trust, deal and review |
+
+**Owner decisions:** C1 is amended — an exact seeded CPU model with no condition is model grain, and
+with an explicit supported condition it is variant grain (as for other `variant_on_demand`
+categories). A vendor-locked CPU keeps its model identity. The four landed CPU fixes (§3) are
+accepted as landed. Rollup: `claude_draft` 224, `owner_confirmed` 55, `owner_corrected` 5.
+
+**cpu-0082** ("AMD EPYC GENOA SP5 ZEN4 9354 … 100-000000798Open"): before, `none` (the only
+candidate was the fused token `100000000798open`); after, would-accept EPYC 9354 at model grain.
+The EPYC name phrase now skips up to three socket/Zen/codename words, and an AMD OPN fused with
+`open`/`openbox`/`new`/`used` still reads as that OPN (longer digit runs, boxed `…WOF` codes, and
+`-04` sample suffixes are not collapsed). A title naming a different model than its target (9354P
+beside the 9354 OPN) now reviews at every rung, and pin counts ("4094-pin") are never read as models.
+
+**Vendor lock (listing evidence, never identity).** `CpuAttributes.vendor_lock` is `locked`,
+`unlocked`, or absent (unknown), read from explicit wording on AMD parts only (on Intel K-series parts
+"Unlocked" means the multiplier). Locked: "Dell Locked", "Lenovo Locked", "(*locked*)", "vendor/PSB
+locked", "<OEM> only". Unlocked: "Unlocked", "NO VENDOR LOCK", "not vendor locked", "non-locked".
+Unknown: branding alone ("AMD Dell EPYC 9354", "Pulled from Cisco UCS"), negated unlocks ("NOT
+UNLOCKED", "no longer unlocked"), wording that lies only in a reference span, or both states. Over
+the 284 rows: 9 locked, 102 unlocked, 173 unknown. It lives on the listing, not `CpuSpec`, because
+PSB lock is a property of the unit and channel, not of the CPU model. The watch side is a typed
+column, `CpuRequirement.require_vendor_unlocked` (migration `0024`, default False): when required,
+the `cpu.vendor_lock` clause is match for unlocked, no_match for locked, and unknown otherwise —
+unknown never satisfies it. `EVALUATOR_VERSION` is `ms2c.3`. The first EPYC F6 watch must set it.
+
+**Measurement** (would-accept mode: `auto_accept` forced True for `cpu` inside the test only):
+
+| Metric | Result |
+| --- | ---: |
+| Rows | 284 |
+| Would-accepts | 105 |
+| Correct (strict grain + target) | 105 |
+| Precision | 100.0% |
+| False positives | 0 |
+| False negatives | 0 |
+| Right model, wrong grain | 0 |
+| Reviews | 18 (`veto: sample` 14, `veto: bundle` 4) |
+| Audit gate | PASS (57-id sample + every disagreement owner-audited; rollup consistent) |
+
+**Gate.** MS-2 names no CPU-specific threshold beyond R4 ("an owner-ratified category corpus"), so
+this applies the harness's precision bar (≥ 100 would-accepts, ≥ 99.5%) and the audit gate: both
+PASS, on a pinned CPU seed (`amd-epyc.json` sha256 `e38e350b…d1e7`). The OQ32 ≥3-source floor is the
+drive/ADR-0019 rule and does not bind a single `(ebay, cpu)` cell. **The identity gate passes, but
+`auto_accept` is not flipped:** the flag is category-wide, while this corpus covers only the four
+seeded EPYC models, and production also carries five Intel Xeon models this corpus never measured
+(OQ34). eBay × CPU stays `NOT_ADMITTED` until the per-cell live checklist passes.

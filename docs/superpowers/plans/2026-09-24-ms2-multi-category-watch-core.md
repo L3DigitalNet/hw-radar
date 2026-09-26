@@ -4894,7 +4894,8 @@ empty frozen-file diff for every other pre-B test file.
 - A family-grain spec value counts only when every family member has it and
   they agree.
 - Only the currently accepted catalog edge supplies catalog evidence.
-- `EVALUATOR_VERSION` is `ms2c.2`.
+- `EVALUATOR_VERSION` is `ms2c.2` (bumped to `ms2c.3` on 2026-09-26 for the CPU `vendor_lock`
+  clause; see the MS-1e/CPU owner-audit packets).
 
 **Acceptance:**
 - AC-2 holds.

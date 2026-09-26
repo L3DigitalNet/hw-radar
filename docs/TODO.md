@@ -74,29 +74,22 @@ Instructions for AI agents:
   smoke is ever wanted; the synthetic Actor is not a production collection source.
 - [x] Keep provider identity separate from marketplace/source identity: proven by D7
   (`test_provider_switch_preserves_identity_history_and_watch_state`, AC-4).
-- [ ] MS-1e drive-matcher ratification: matcher `2026.09.2` is live (5 Codex review rounds); the
-  expanded corpus is a provisional FAIL on draft labels (369/271;
-  `docs/evidence/2026-09-26-ms1e-expanded-audit-packet.md`). Waiting on the owner: MS-1e Q1-Q8
-  decisions plus the stratified audit. Then run the full verification gate and flip ADR-0019 only
-  on a composite PASS.
+- [ ] MS-1e drive-matcher ratification: owner-audited corpus measures 366/366 at `2026.09.3`
+  (floors met, rung-0 PASS); the audit gate waits only on OQ33 (8 legacy-family rows, 7 sampled).
+  After the owner answers: relabel those rows, re-measure on the pinned refdata, and flip ADR-0019
+  only on a composite PASS. Re-measure under a new digest after the 2026-10-01 refresh.
 - [ ] Add category-specific validation corpora/gates before auto-accepting GPU/RAM/CPU matches;
   drive-corpus precision does not validate other categories. F4 harvest done 2026-09-25: eBay,
   1,888 unlabeled entries (GPU 851, RAM 991, CPU 16, drive 30) in the git-ignored
   `.harvest/f4-ebay/` on the workstation; regenerate with `manage.py harvest_corpus --source ebay
   --out .harvest/f4-ebay`. Labeling and ratification are owner work (R4); CPU coverage is thin
   because the pilot sweep queries only "EPYC 7302".
-- [ ] CPU EPYC owner audit (60 ids), then a CPU gate decision. Packet:
-  `docs/evidence/2026-09-26-cpu-epyc-audit-packet.md` (would-accept 104/99 = 95.19%,
-  `auto_accept` False pending the audit).
-- [ ] F6 (eBay x CPU x EPYC) is blocked on the CPU owner gate above plus the SA-004 per-cell live
-  checklist (`docs/handoff/deployed.md`). Listing-condition extraction (0% capture, see above) is
-  a separate, unblocking track.
-- [ ] Residual latent CPU matcher gaps found in review: Ryzen/Core "or" alternatives are unflagged
-  because their lines are unseeded (cannot alias-hit), and model-grain priors do not upgrade to a
-  variant when a condition later appears on the same listing.
-- [ ] Owner decision: after the 2026-10-01 07:00Z monthly refdata refresh moves the 3 HC550 models
-  to family "Ultrastar", decide whether to delete the resulting empty "Ultrastar DC HC550" family
-  (harmless if left).
+- [ ] CPU `auto_accept` flip waits on OQ34 (category-wide vs EPYC-scoped). The owner-audited EPYC
+  corpus passes the identity gate (105/105, audit PASS; packet §9).
+- [ ] F6 (eBay x CPU x EPYC) is blocked on OQ34 plus the per-cell live checklist
+  (`docs/handoff/deployed.md`); its watch must set `require_vendor_unlocked`.
+- [ ] Residual latent CPU matcher gap: Ryzen/Core "or" alternatives are unflagged because their
+  lines are unseeded (cannot alias-hit). (Model priors now upgrade on a new condition: 2026.09.3.)
 - [ ] Deliberately admit each `(source, category)` cell in the admission matrix
   (`src/hw_radar/acquisition/admission.py`) only after its operational, retention/ToS,
   completeness, match-quality, and cost gates pass, then flip the source's `enabled` bit. Before

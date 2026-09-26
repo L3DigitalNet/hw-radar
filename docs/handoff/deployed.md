@@ -16,10 +16,9 @@ Last updated: 2026-09-26 (release `478baf0`)
 - Post-deploy `import_refdata --category cpu` (rehearsed first on a production-shaped DB): 2
   manufacturers, 2 families, 9 models, 9 specs, 19 aliases; `product_model` 15 -> 24 (cpu 9,
   drive 15 unchanged). GPU and RAM refdata are still 0 rows in production.
-- Expected at the monthly refresh (2026-10-01 07:00Z): re-imports only present categories (drive,
-  cpu; skips gpu/ram) and adds 253 first-party drive models (drive 15 -> 268), moving the 3
-  HC550 models to family "Ultrastar" and leaving an empty "Ultrastar DC HC550" family reported as
-  unreconciled (harmless; owner may delete it later). Rehearsed on the production-shaped DB.
+- Monthly refresh (2026-10-01 07:00Z, rehearsed): re-imports drive + cpu only, adds 253 drive
+  models, moves the 3 HC550 models to "Ultrastar"; the empty "Ultrastar DC HC550" family stays
+  (owner, 2026-09-26: leave it; no manual deletion).
 - Delist rule amendment (ADR 0020, 2026-09-26): no eBay scope (legacy drive or category) may
   stale-delist unless the sweep is provably complete.
 - Apify stays fail-closed in production: no `APIFY` variable is rendered, so admission denies by
@@ -65,8 +64,8 @@ drives only, so its GPU/RAM/CPU cells are `NOT_APPLICABLE` and are not shown as 
 
 | Source × category | Terms/policy | Connector/API | Retention | Completeness | Refdata seeded (prod) | Corpus ratified | Identifier quality | Condition/shipping | Cost/budget | Cell state |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| eBay × drive | Official Browse API | Legacy keyword sweep, live | `ebay_listing_observation` ≤6h, delete-on-delist; never stale-delists an unprovably-complete scope (ADR 0020 amendment, 2026-09-26) | not verified | Yes (MS-1 drive seed) | ADR-0019 pending — expanded corpus FAIL on draft labels, 369/271 | not verified | 0% condition coverage (pilot, 2026-09-25) | No direct cost (unmetered) | `NOT_ADMITTED` |
-| eBay × CPU | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above; same amendment applies | Single-page only provable (F1) | Yes — CPU refdata now seeded in prod (2026-09-26) | Would-accept 104/99 = 95.19%, `auto_accept` False; owner CPU audit pending | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
+| eBay × drive | Official Browse API | Legacy keyword sweep, live | `ebay_listing_observation` ≤6h, delete-on-delist; never stale-delists an unprovably-complete scope (ADR 0020 amendment, 2026-09-26) | not verified | Yes (MS-1 drive seed) | ADR-0019 pending — owner-audited 366/366 at `2026.09.3`, floors met; audit gate blocked only by OQ33 | not verified | 0% condition coverage (pilot, 2026-09-25) | No direct cost (unmetered) | `NOT_ADMITTED` |
+| eBay × CPU | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above; same amendment applies | Single-page only provable (F1) | Yes — CPU refdata now seeded in prod (2026-09-26) | Owner-audited EPYC corpus: would-accept 105/105, audit PASS; `auto_accept` False pending OQ34 scope; F6 watch must set `require_vendor_unlocked` | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
 | eBay × GPU | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above | Single-page only provable (F1) | No — 0 rows in production | Harvested unlabeled (F4: 851 GPU entries); not ratified | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
 | eBay × RAM | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above | Single-page only provable (F1) | No — 0 rows in production | Harvested unlabeled (F4: 991 RAM entries); not ratified | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
 | WD-recertified × drive | not verified | Live connector, deployed | not verified | not verified | Yes (MS-1 drive seed) | ADR-0019 pending (same gate as eBay×drive) | SKU carries no part number (MS-1e finding F2) | not verified | No direct cost (unmetered) | `NOT_ADMITTED` |
@@ -91,6 +90,7 @@ Every box below is unchecked: nothing has been enabled.
 - [ ] This category's refdata is seeded in production (`import_refdata --category <slug>`) and its
       matching corpus is owner-ratified, with `matcher_version` matching the ratified run
       (`src/hw_radar/matching/__init__.py`).
+- [ ] CPU cells: every buying watch sets `require_vendor_unlocked` (unknown lock never passes).
 - [ ] Source-policy status re-checked against current Terms (not the date of this table).
 - [ ] Rollback path confirmed: flip the cell back to `NOT_ADMITTED` / disable the source, release.
 - [ ] Observability (`scraper_runs` alerting, production-container disk-space alert) is active, and this cell's
