@@ -59,18 +59,44 @@ _REFERENCE_PHRASES: tuple[str, ...] = (
 )
 
 
+# Category-local reference phrases: masked only by the category that passes
+# them to reference_phrase_pattern(), but registered HERE because
+# canonicalize_title must know every phrase any category masks. Its
+# punctuation-preserving branch triggers on this full set; a phrase missing from
+# it gets its clause punctuation erased, and the category's span then runs on
+# through asserted evidence ("oem version of 7b13; qs ..." lost the QS sample
+# marker — review finding N2). A static tuple, not registration at call time:
+# canonical text must not depend on which rule modules happen to be imported.
+#   "oem version of" — rules/cpu.py (a different CPU SKU, e.g. 7J13 vs 7763).
+_CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of",)
+
+
+def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str]:
+    alternation = "|".join(re.escape(p) for p in phrases)
+    return re.compile(rf"\b(?:{alternation})\b")
+
+
 def reference_phrase_pattern(*extra: str) -> re.Pattern[str]:
     """The shared reference-phrase pattern, widened by category-local phrases.
 
     For a category whose titles cite other products in a phrase the shared
     (drive) list must not carry. Build it once at import and pass it to
     mask_reference_spans(phrases=...); with no extras it is the shared pattern.
+    Raises ValueError for an extra not in _CATEGORY_REFERENCE_PHRASES, since
+    canonicalize_title would not preserve that phrase's clause boundaries.
     """
-    alternation = "|".join(re.escape(p) for p in (*_REFERENCE_PHRASES, *extra))
-    return re.compile(rf"\b(?:{alternation})\b")
+    unregistered = [p for p in extra if p not in _CATEGORY_REFERENCE_PHRASES]
+    if unregistered:
+        raise ValueError(
+            f"reference phrases {unregistered!r} must be added to "
+            "normalize._CATEGORY_REFERENCE_PHRASES"
+        )
+    return _phrase_pattern((*_REFERENCE_PHRASES, *extra))
 
 
 _REFERENCE_PHRASE = reference_phrase_pattern()
+# The canonicalization trigger: every phrase ANY category masks.
+_ANY_REFERENCE_PHRASE = _phrase_pattern((*_REFERENCE_PHRASES, *_CATEGORY_REFERENCE_PHRASES))
 # Raw clause punctuation that _NOISE would erase. A comma between two digits is
 # a thousands separator ("1,000GB"), not a clause break.
 _CLAUSE_PUNCT = re.compile(r"[;|]|(?<!\d),|,(?!\d)")
@@ -87,10 +113,10 @@ def canonicalize_title(text: str) -> str:
 
     NFKC, dash folding, casefold, boilerplate removal, then every character
     outside the MPN/capacity alphabet becomes a space. One exception keeps
-    reference masking honest: when the result contains a reference phrase,
-    raw clause punctuation (",", ";", "|") is rewritten to " - " instead of
-    being erased, so mask_reference_spans can still see where the cited
-    clause ends. A title with no reference phrase is canonicalized exactly as
+    reference masking honest: when the result contains a reference phrase
+    (shared or category-local), raw clause punctuation (",", ";", "|") is
+    rewritten to " - " instead of being erased, so mask_reference_spans can
+    still see where the cited clause ends. A title with no reference phrase is canonicalized exactly as
     if the exception did not exist."""
 
     folded = unicodedata.normalize("NFKC", text).translate(_DASHES).casefold()
@@ -107,7 +133,7 @@ def canonicalize_title(text: str) -> str:
     # stripped ("compatible*with") still gets its boundaries; the output is
     # idempotent because a second pass sees the same phrase and no raw
     # punctuation left to rewrite.
-    if _REFERENCE_PHRASE.search(plain) is None:
+    if _ANY_REFERENCE_PHRASE.search(plain) is None:
         return plain
     return _strip_noise(_CLAUSE_PUNCT.sub(_CANONICAL_BOUNDARY, cleaned))
 
@@ -154,31 +180,21 @@ def _open_paren_depth(text: str) -> int:
 def _span_end(title: str, start: int, *, inside_parens: bool) -> int:
     """Return the exclusive end of a reference span whose phrase ends at `start`."""
 
-    obj = start
-    while obj < len(title) and title[obj] == " ":
-        obj += 1
-    if obj < len(title) and title[obj] == "(":
-        # A parenthesized object IS the comparison target ("comparable to
-        # (Seagate ST12000NE0008)"): mask through its matching ")". Treating the
-        # "(" as a boundary instead leaks the cited brand and exact catalog MPN
-        # as identity evidence (review finding F1).
-        depth = 0
-        for i in range(obj, len(title)):
-            if title[i] == "(":
-                depth += 1
-            elif title[i] == ")":
-                depth -= 1
-                if depth == 0:
-                    return i + 1
-        # Unclosed: fall back to the first clause boundary, so the appended
-        # condition label (see canonicalize_listing_text) is never swallowed.
-        boundary = _SPAN_BOUNDARY.search(title, obj)
-        return boundary.start() if boundary is not None else len(title)
-
+    # Parentheses opened inside the span are part of the comparison object and
+    # never end it: "comparable to (Seagate ST12000NE0008)" masks the whole
+    # group (review finding F1), and "comparable to (Seagate) ST12000NE0008"
+    # masks on past the ")" to the clause boundary, because the group may only
+    # qualify the object. Stopping at that ")" leaked the cited exact-alias MPN
+    # (F1 residual) and let "(factory) recertified drives" become the listing's
+    # condition (F4 residual). Over-masking only costs identity evidence
+    # (unresolved), whereas under-masking is a false merge.
     depth = 0
+    unclosed_at = -1
     for i in range(start, len(title)):
         ch = title[i]
         if ch == "(":
+            if depth == 0:
+                unclosed_at = i
             depth += 1
         elif ch == ")":
             if depth:
@@ -188,6 +204,14 @@ def _span_end(title: str, start: int, *, inside_parens: bool) -> int:
                 return i
         elif depth == 0 and _SPAN_BOUNDARY.match(title, i):
             return i
+    if depth:
+        # An unclosed "(" would otherwise hide every later boundary, including
+        # the one canonicalize_listing_text puts before the seller's condition
+        # label, which must never be masked. Fall back to the first boundary
+        # after the unclosed opener.
+        boundary = _SPAN_BOUNDARY.search(title, unclosed_at)
+        if boundary is not None:
+            return boundary.start()
     return len(title)
 
 
@@ -203,8 +227,10 @@ def mask_reference_spans(title: str, phrases: re.Pattern[str] = _REFERENCE_PHRAS
       parentheses ("(compatible with Dell R740)");
     - the end of the title.
 
-    When the phrase is immediately followed by "(", that parenthesized group is
-    the comparison target and the span runs through its matching ")".
+    Parentheses the span itself opens never end it: a group right after the
+    phrase ("comparable to (Seagate) ST12000NE0008") is part of the comparison
+    object, and the span runs past its ")" to the clause boundary. If such a
+    group is never closed, the span ends at the first boundary after its "(".
 
     Text outside spans is returned unchanged and the length is preserved, so
     offsets and word boundaries elsewhere are stable. A title with no phrase

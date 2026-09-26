@@ -24,4 +24,6 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               stripping; offer terms masked.
 #               2026.09.2 also: CPU reference masking, multi-model/OPN-suffix
 #               and ES/QS sample guards.
+#               2026.09.2 also: parentheticals do not end reference spans;
+#               category-local phrases keep clause punctuation.
 MATCHER_VERSION = "2026.09.2"

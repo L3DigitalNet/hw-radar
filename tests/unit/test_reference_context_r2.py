@@ -19,12 +19,14 @@ from hw_radar.matching.normalize import (
     canonicalize_listing_text,
     canonicalize_title,
     mask_reference_spans,
+    reference_phrase_pattern,
 )
 
 _REPO = Path(__file__).resolve().parents[2]
 _CORPORA = (
     _REPO / "tests" / "fixtures" / "matching_corpus" / "synthetic.jsonl",
     _REPO / "docs" / "evidence" / "2026-09-25-ms1e-draft-corpus.jsonl",
+    _REPO / "docs" / "evidence" / "2026-09-26-cpu-epyc-draft-corpus.jsonl",
 )
 
 
@@ -108,6 +110,60 @@ def test_unclosed_parenthesized_object_stops_at_the_condition_boundary() -> None
     assert condition is not None and condition.value == "new"
 
 
+def test_parenthetical_qualifier_does_not_end_the_span() -> None:
+    # F1 residual: "(Seagate)" only qualifies the comparison object; ending the
+    # span at its ")" exposed the exact-alias MPN to rung 1.
+    canonical = canonicalize_listing_text("WL 12TB comparable to (Seagate) ST12000NE0008", "New")
+    assert mpn.extract_candidates(canonical) == []
+    assert vocab.extract(canonical).brand is None
+    condition = vocab.offer_terms(canonical).condition
+    assert condition is not None and condition.value == "new"
+
+
+def test_span_past_a_parenthetical_still_stops_at_a_clause_boundary() -> None:
+    title = "WD 12TB comparable to (Seagate) ST12000NE0008, WD120EFBX"
+    assert _normalized(title) == {"wd120efbx"}
+    assert _brand(title) == "western_digital"
+
+
+def test_parenthetical_condition_qualifier_creates_no_recertified_variant() -> None:
+    # F4 residual: "recertified" outranks the seller's "New" label, so leaving
+    # "recertified drives" unmasked after "(factory)" filed a recertified variant.
+    canonical = canonicalize_listing_text(
+        "Seagate ST12000NE0008 12TB comparable to (factory) recertified drives", "New"
+    )
+    assert "recertified" not in mask_reference_spans(canonical)
+    for extracted in (vocab.extract(canonical), vocab.offer_terms(canonical)):
+        assert extracted.condition is not None and extracted.condition.value == "new"
+        assert extracted.recert_channel is None
+    assert {c.normalized for c in mpn.extract_candidates(canonical)} == {"st12000ne0008"}
+
+
+def test_unclosed_paren_later_in_the_object_keeps_the_condition_label() -> None:
+    canonical = canonicalize_listing_text("WL 12TB comparable to Seagate (ST12000NE0008", "New")
+    assert mpn.extract_candidates(canonical) == []
+    condition = vocab.offer_terms(canonical).condition
+    assert condition is not None and condition.value == "new"
+
+
+def test_category_phrase_preserves_clause_punctuation() -> None:
+    # N2: "oem version of" is CPU-local, so a trigger reading only the shared
+    # phrases erased the ";" and the CPU span swallowed the asserted QS marker.
+    canonical = canonicalize_title("AMD EPYC 7763 OEM version of 7B13; QS 64-Core SP3")
+    assert canonical == "amd epyc 7763 oem version of 7b13 - qs 64-core sp3"
+    masked = mask_reference_spans(canonical, reference_phrase_pattern("oem version of"))
+    assert "7b13" not in masked
+    assert "qs" in masked.split()
+    assert canonicalize_title(canonical) == canonical  # idempotent
+
+
+def test_unregistered_category_phrase_is_rejected() -> None:
+    # An extra phrase outside the canonicalization registry would silently lose
+    # its clause boundaries (the N2 failure), so building its pattern fails.
+    with pytest.raises(ValueError, match="_CATEGORY_REFERENCE_PHRASES"):
+        reference_phrase_pattern("successor to")
+
+
 def test_reference_offer_terms_create_no_variant_identity() -> None:
     # F4: 'factory recertified' ranks above 'new' in the condition table, so an
     # unmasked read turned a New listing into a factory-recertified variant.
@@ -170,7 +226,7 @@ _HIST_BOILERPLATE = re.compile(
 )
 _HIST_PHRASE = re.compile(
     r"\b(?:comparable to|compatible with|replacement for|equivalent to|equiv to|"
-    r"alternative to|substitute for|replaces)\b"
+    r"alternative to|substitute for|replaces|oem version of)\b"
 )
 
 
@@ -203,8 +259,8 @@ def _extraction(canonical: str) -> tuple[object, ...]:
 
 
 def test_phrase_free_corpus_titles_are_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Over the synthetic oracle corpus and the MS-1e draft corpus: a title with
-    no reference phrase gets the historical canonical text (with and without a
+    """Over the synthetic oracle corpus and the MS-1e and CPU EPYC draft
+    corpora: a title with no reference phrase (shared or category-local) gets the historical canonical text (with and without a
     condition label), and brand, offer terms and MPN candidates equal what the
     extractors return with masking switched off entirely — the pre-change
     behavior for these titles."""
@@ -234,7 +290,8 @@ def test_phrase_free_corpus_titles_are_byte_identical(monkeypatch: pytest.Monkey
     before = [_extraction(_historical_canonical(f"{t} {lbl}".strip())) for t, lbl in cases]
     assert after == before
 
-    # Both corpora contribute, and at least one row (ebay-0021) has a phrase, so
-    # the partition is not vacuous in either direction.
+    # Every corpus contributes, and phrase rows exist (ebay-0021; the CPU
+    # corpus's "oem version of" titles), so the partition is not vacuous in
+    # either direction.
     assert contributing == set(_CORPORA)
     assert phrase_titles

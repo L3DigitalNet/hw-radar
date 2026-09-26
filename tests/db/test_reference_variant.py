@@ -107,6 +107,35 @@ def test_reference_condition_text_creates_no_recertified_variant(
     assert not ProductVariant.objects.filter(condition=Condition.RECERTIFIED).exists()
 
 
+def test_parenthetical_qualifier_condition_creates_no_recertified_variant(
+    site: SourceSite, ironwolf_pro_12tb: ProductModel
+) -> None:
+    # F4 residual: the span used to end at "(factory)"'s ")", leaving
+    # "recertified drives" to outrank the seller's New label.
+    listing = _resolve(
+        site,
+        "f4paren",
+        "Seagate ST12000NE0008 12TB comparable to (factory) recertified drives",
+        "New",
+    )
+    assert listing.resolution_grain == ResolutionGrain.VARIANT
+    variant = listing.product_variant
+    assert variant is not None
+    assert variant.product_model == ironwolf_pro_12tb
+    assert variant.condition == Condition.NEW
+    assert variant.recert_channel == RecertChannel.UNKNOWN
+    assert not ProductVariant.objects.filter(condition=Condition.RECERTIFIED).exists()
+
+
+def test_parenthetical_qualifier_does_not_expose_the_cited_mpn(
+    site: SourceSite, ironwolf_pro_12tb: ProductModel
+) -> None:
+    listing = _resolve(site, "f1paren", "WL 12TB comparable to (Seagate) ST12000NE0008", "New")
+    assert listing.resolution_grain == ResolutionGrain.NONE
+    assert listing.product_model is None
+    assert not ProductVariant.objects.filter(product_model=ironwolf_pro_12tb).exists()
+
+
 def test_condition_label_after_an_open_ended_span_still_makes_the_variant(
     site: SourceSite, ironwolf_pro_12tb: ProductModel
 ) -> None:
