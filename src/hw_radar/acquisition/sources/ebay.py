@@ -48,8 +48,11 @@ unchanged while one live item slides across the boundary unseen. No check on
 the pages we got can rule that out, and a false complete sweep delists a live
 listing on the spot and redacts it (IR-002). A multi-page sweep is therefore
 incomplete (`multi_page_unprovable`): its observations and continuity still
-count, and its absences go through the grace/stale path like any truncated
-sweep. One page is a single ranking snapshot, so there is no boundary to fall
+count, but its absences prove nothing. Category scopes set
+stale_absence_allowed=False, so an incomplete sweep never delists, however
+long a listing goes unseen (the legacy drive sweep keeps its grace/stale
+path); the 6h expires_policy stops showing such an offer without claiming it
+ended. One page is a single ranking snapshot, so there is no boundary to fall
 through.
 
 Category sweeps never cost the drive sweep: the legacy GET runs first with its
@@ -122,7 +125,8 @@ SEARCH_PARAMS = {"q": "recertified enterprise hard drive", "limit": "200"}
 # Mint the token this many seconds before its stated expiry so a request never
 # rides an about-to-expire token across the eBay boundary.
 _TOKEN_SKEW_S = 300
-# CR-004 absence grace for a TRUNCATED sweep. Deliberately the same 6h as
+# CR-004 absence grace for a TRUNCATED legacy drive sweep (category scopes
+# carry it too but never use it: they opt out of stale absence). Deliberately the same 6h as
 # _expires_in_6h: DR-008 says an eBay observation older than 6h may not be shown,
 # so a listing that has missed every sweep across that whole window has no
 # defensible claim to still be live, whatever Browse's ranking did to it.
@@ -872,6 +876,15 @@ class EbayAdapter:
                 complete=why_not is None,
                 absence_grace=DELIST_ABSENCE_GRACE,
                 scope_key=key,
+                # Only a provably complete category sweep may delist (owner
+                # invariant; review r2 N1). An incomplete one (a `next`, a
+                # total above what was seen, an unstable total, a parse drop,
+                # a page cap, any multi-page sweep) keeps no stale path: a
+                # listing ranked past the page cap is invisible to every sweep
+                # for as long as it stays live, so six hours of misses there
+                # is not evidence that it ended. The _expires_in_6h TTL hides
+                # such an offer from Listing.objects.active() instead.
+                stale_absence_allowed=False,
             )
             reason = stopped or why_not or "complete"
             reports.append(ScopeSweepReport(key, scope, len(pages), reason))

@@ -145,6 +145,24 @@ def test_gate_remote_complete_evidence_with_incomplete_scope_is_none() -> None:
     assert gate_delist_scope(scope, evidence) is None
 
 
+@pytest.mark.parametrize("scope_complete", [True, False])
+@pytest.mark.parametrize("eligible", [True, False])
+@pytest.mark.parametrize("completeness", list(RunCompleteness))
+def test_gate_scope_without_stale_absence_passes_only_a_complete_sweep(
+    completeness: RunCompleteness, *, eligible: bool, scope_complete: bool
+) -> None:
+    # Review r2 N1 / owner invariant: an eBay category scope opts out of stale
+    # absence, so no evidence — not even local stale-absence-eligible
+    # TRUNCATED, the path that used to reach ABSENT_STALE — may carry an
+    # incomplete sweep of it into the delist stage.
+    scope = replace(_scope(complete=scope_complete), stale_absence_allowed=False)
+    gated = gate_delist_scope(scope, _evidence(completeness, eligible=eligible))
+    if completeness is RunCompleteness.COMPLETE and scope_complete:
+        assert gated is scope
+    else:
+        assert gated is None
+
+
 @pytest.mark.parametrize("completeness", list(RunCompleteness))
 def test_gate_passes_none_scope_through(completeness: RunCompleteness) -> None:
     assert gate_delist_scope(None, _evidence(completeness, eligible=True)) is None

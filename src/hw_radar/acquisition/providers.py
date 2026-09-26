@@ -70,6 +70,12 @@ def gate_delist_scope(
       otherwise None;
     - partial_failure / failed: None.
 
+    Either incomplete path also needs the scope's own `stale_absence_allowed`:
+    a scope that opted out (eBay category sweeps) is gated to None whenever it
+    is not complete, so no elapsed continuity can turn it into ABSENT_STALE.
+    Continuity is unaffected — counts_toward_sweep_continuity reads evidence
+    only, so such a sweep still records that its scope was polled.
+
     None means the delist stage does nothing for this run. The downgrade matters
     because a provider's DelistScope is its own claim: a remote provider that
     stopped at its item or budget limit may still describe what it saw as a
@@ -79,10 +85,14 @@ def gate_delist_scope(
     if scope is None:
         return None
     if evidence.completeness is RunCompleteness.COMPLETE:
-        if scope.complete or evidence.stale_absence_eligible:
+        if scope.complete or (evidence.stale_absence_eligible and scope.stale_absence_allowed):
             return scope
         return None
-    if evidence.completeness is RunCompleteness.TRUNCATED and evidence.stale_absence_eligible:
+    if (
+        evidence.completeness is RunCompleteness.TRUNCATED
+        and evidence.stale_absence_eligible
+        and scope.stale_absence_allowed
+    ):
         return replace(scope, complete=False)
     # Fail closed: partial_failure, failed, an ineligible truncation, and any
     # completeness value added later all prove nothing about absence.
@@ -165,8 +175,9 @@ class LocalCollectionProvider:
     complete=True is COMPLETE; anything else — complete=False, no scope, no
     DelistDetector, or a non-FULL run — is stale-absence-eligible TRUNCATED. That
     keeps the local absence heuristics exactly as they were: truncated local
-    sweeps still reach the grace-plus-continuity stale path and still advance
-    lane continuity, which scope-less sources have always done.
+    sweeps still reach the grace-plus-continuity stale path (unless the scope
+    itself sets stale_absence_allowed=False, which gate_delist_scope honors)
+    and still advance lane continuity, which scope-less sources have always done.
     """
 
     provider_key = "local"
