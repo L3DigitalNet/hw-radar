@@ -9,6 +9,7 @@ the ledger's own read counters stayed at zero.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,15 @@ from hw_radar.catalog.models import (
 # The start job and the poller run their own transactions (sync_to_async), as
 # in test_apify_recovery_probe, whose fixtures this module reuses.
 pytestmark = pytest.mark.django_db(transaction=True, serialized_rollback=True)
+
+
+@pytest.fixture(autouse=True)
+def admitted_cells(admit: Callable[..., None]) -> None:
+    # The production admission matrix admits nothing, and recovery_probe_job
+    # skips a source with no admitted category; these tests exercise probe
+    # mechanics, so the fixture sources they probe are admitted here.
+    admit(("synthetic", "drive"))
+
 
 ACCOUNT_PREFIX = "/v2/users"
 BUILD_ID = "build-no-account-reads"

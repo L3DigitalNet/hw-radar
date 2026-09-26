@@ -7,6 +7,7 @@ The fake adapter is both a HeartbeatProbe (probe()) and a SourceAdapter
 """
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -175,32 +176,36 @@ def test_ebay_heartbeat_rows_carry_ebay_listing_observation_class() -> None:
     assert evt.expires_at is not None and (evt.expires_at - evt.observed_at) <= timedelta(hours=6)
 
 
-def test_poll_heartbeat_admits_records_and_applies_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_poll_heartbeat_admits_records_and_applies_outcome(
+    monkeypatch: pytest.MonkeyPatch, admit: Callable[..., None]
+) -> None:
     # poll_heartbeat mirrors poll_source: admission (run_kind=heartbeat) -> run_heartbeat
     # -> apply_run_outcome -> reschedule on interval change (CR-006 residual).
     from hw_radar.acquisition import sources
 
-    adapter = FakeHeartbeatAdapter("serverpartdeals", [_reading("HB-1", "in_stock")])
-    monkeypatch.setitem(sources.ADAPTERS, "serverpartdeals", lambda: adapter)
-    SourceConfig.objects.filter(source_site__normalized_name="serverpartdeals").update(
+    admit(("wd-recertified", "drive"))
+
+    adapter = FakeHeartbeatAdapter("wd-recertified", [_reading("HB-1", "in_stock")])
+    monkeypatch.setitem(sources.ADAPTERS, "wd-recertified", lambda: adapter)
+    SourceConfig.objects.filter(source_site__normalized_name="wd-recertified").update(
         enabled=True,
         lifecycle_state=LifecycleState.ACTIVE,
         cadence_baseline_s=3600,
         cadence_ceiling_s=300,
     )
     registry = BucketRegistry()
-    registry.configure_source("serverpartdeals", rate_per_min=60.0, burst=3, now_s=0.0)
+    registry.configure_source("wd-recertified", rate_per_min=60.0, burst=3, now_s=0.0)
     configs = list(
         SourceConfig.objects.select_related("source_site").filter(
-            source_site__normalized_name="serverpartdeals"
+            source_site__normalized_name="wd-recertified"
         )
     )
     hb_lane = configs[0].lane_state(SchedulingLane.HEARTBEAT)
     hb_lane.current_interval_s = 900
     hb_lane.save()
     scheduler = build_scheduler(registry, load_schedules(configs))
-    asyncio.run(poll_heartbeat("serverpartdeals", registry, scheduler))
+    asyncio.run(poll_heartbeat("wd-recertified", registry, scheduler))
 
-    config = SourceConfig.objects.get(source_site__normalized_name="serverpartdeals")
+    config = SourceConfig.objects.get(source_site__normalized_name="wd-recertified")
     assert config.last_run_at is not None
     assert AvailabilityHeartbeatObservation.objects.filter(source_sku="HB-1").count() == 1

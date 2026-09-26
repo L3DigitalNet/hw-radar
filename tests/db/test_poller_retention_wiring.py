@@ -9,7 +9,7 @@ the DR-001 sweeper can never reclaim it, breaking IR-002/DR-008.
 
 import asyncio
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import timedelta
 
 import httpx
@@ -147,10 +147,13 @@ def test_retention_sweep_job_logs_redaction_counts(
     )
 
 
-def test_recovery_probe_persists_bounded_ebay_retention(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_recovery_probe_persists_bounded_ebay_retention(
+    monkeypatch: pytest.MonkeyPatch, admit: Callable[..., None]
+) -> None:
     # The ADR-0017 probe replays the full pipeline against a paused source, so it
     # persists real rows and needs the same forwarding as the scheduled poll.
     registry = _register_ebay(monkeypatch)
+    admit(("ebay", "drive"))
     SourceConfig.objects.filter(source_site__normalized_name="ebay").update(
         enabled=True, lifecycle_state=LifecycleState.PAUSED_PENDING_FIX
     )

@@ -18,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -74,6 +74,15 @@ from hw_radar.poller import service
 # transaction=True: the jobs write from sync_to_async threads.
 # serialized_rollback=True keeps the migration-seeded SourceSite rows.
 pytestmark = pytest.mark.django_db(transaction=True, serialized_rollback=True)
+
+
+@pytest.fixture(autouse=True)
+def admitted_cells(admit: Callable[..., None]) -> None:
+    # The production admission matrix admits nothing, and recovery_probe_job
+    # skips a source with no admitted category; these tests exercise probe
+    # mechanics, so the fixture sources they probe are admitted here.
+    admit(("synthetic", "drive"), ("demo", "drive"))
+
 
 FIXTURE_DIR: Final = Path(__file__).resolve().parents[1] / "fixtures" / "apify_contract" / "v1"
 SITE: Final = "synthetic"

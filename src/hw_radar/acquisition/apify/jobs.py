@@ -80,6 +80,7 @@ from django.db.models import Q
 from django.utils import timezone
 from pydantic import ValidationError
 
+from hw_radar.acquisition.admission import is_retired
 from hw_radar.acquisition.apify import importer, reconcile, synthetic
 from hw_radar.acquisition.apify.budget import AdmissionRequest, BudgetClass, RunShape
 from hw_radar.acquisition.apify.client import (
@@ -337,6 +338,7 @@ class StartRefusal(StrEnum):
     ACTOR_UNCONFIGURED = "actor_unconfigured"
     CLIENT_UNAVAILABLE = "client_unavailable"
     SCOPE_RUN_OUTSTANDING = "scope_run_outstanding"
+    SOURCE_RETIRED = "source_retired"
 
 
 # The DENIED reason when _create_run finds its reservation already closed.
@@ -427,6 +429,11 @@ async def start_provider_run(
     tag still has to resolve to a build on the contract's major.
     """
     site_key = config.source_site.normalized_name
+    # OQ31: an Actor is only a different collector, and retirement bars the
+    # source, not a collector. Checked before the spec lookup so a run_specs
+    # entry for a retired site can never start a billable run.
+    if is_retired(site_key):
+        return StartResult(StartStatus.REFUSED, StartRefusal.SOURCE_RETIRED)
     specs = RUN_SPECS if run_specs is None else run_specs
     factory = specs.get(site_key)
     spec = None if factory is None else factory(config, run_kind)

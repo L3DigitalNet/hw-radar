@@ -21,7 +21,7 @@ from django.utils import timezone
 
 from hw_radar.acquisition.contracts import NullResolver, RawBatch, RawItem
 from hw_radar.acquisition.pipeline import FETCH_TIMEOUT_S, run_source
-from hw_radar.acquisition.sources import ADAPTERS, ebay
+from hw_radar.acquisition.sources import HARVEST_ADAPTERS, ebay
 from hw_radar.acquisition.sources.ebay import (
     _TOKEN_CACHE,  # pyright: ignore[reportPrivateUsage]
     CATEGORY_DEADLINE_S,
@@ -665,8 +665,9 @@ def test_malformed_category_summary_is_a_parse_drop_not_a_run_failure(
 
 
 def test_scheduled_adapter_sweeps_every_category() -> None:
-    # The registry entry is what the poller and harvest_corpus build.
-    adapter = ADAPTERS["ebay"]()
+    # harvest_corpus's entry carries every sweep; the poller's is matrix-filtered
+    # (tests/db/test_source_admission.py).
+    adapter = HARVEST_ADAPTERS["ebay"]()
     assert isinstance(adapter, EbayAdapter)
     batch = RawBatch(source="ebay", fetched_at=timezone.now(), items=[])
     assert adapter.delist_scopes(batch, []) == []  # nothing fetched, nothing reported

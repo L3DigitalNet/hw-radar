@@ -36,8 +36,10 @@ query-scoped Browse sweep per CategorySweep. Each sweep's listings carry
 category_hint=<slug> and collection_scope="ebay:<slug>:<query_id>", and
 delist_scopes() reports one scope per sweep, so the pipeline applies absence and
 continuity per scope: a complete GPU sweep can never delist RAM, CPU, or legacy
-drive (NULL-scope) listings. The class default is legacy-only; the production
-registry entry is category_sweep_adapter(), which adds CATEGORY_SWEEPS.
+drive (NULL-scope) listings. The class default is legacy-only;
+category_sweep_adapter() adds every CATEGORY_SWEEPS entry (harvest), and the
+scheduled registry entry, sources.admitted_ebay_adapter(), keeps only the
+sweeps the source x category admission matrix admits.
 
 Only a SINGLE-PAGE category sweep can be complete. Browse pages by offset over
 a Best Match ranking that moves while we page: a removal before the page
@@ -445,6 +447,7 @@ class EbayAdapter:
         client: httpx.AsyncClient | None = None,
         *,
         category_sweeps: Sequence[CategorySweep] = (),
+        drive_sweep: bool = True,
     ) -> None:
         # Inject-or-own-and-close: tests inject a MockTransport client (not
         # closed by us); production leaves this None and gets a fresh client
@@ -452,8 +455,13 @@ class EbayAdapter:
         self._client = client
         # Legacy-only by default: every MS-1 caller and frozen test builds
         # EbayAdapter() and expects exactly the single drive GET. Production
-        # opts in through category_sweep_adapter().
+        # opts in through sources.admitted_ebay_adapter() (scheduled) or
+        # category_sweep_adapter() (harvest).
         self._sweeps = validate_sweeps(category_sweeps)
+        # False when (ebay, drive) is not admitted (sources.admitted_ebay_adapter):
+        # fetch() then skips the legacy drive GET and probe() sends nothing, since
+        # that GET is itself the drive sweep and the heartbeat.
+        self._drive_sweep = drive_sweep
         self._sweep_by_query = {(s.category_id, s.q): s for s in self._sweeps}
         # Set by probe(). The heartbeat job probes and then, on a transition,
         # runs the SAME instance as a FULL run; that fired run skips the
@@ -597,24 +605,30 @@ class EbayAdapter:
         base = _api_base()
         deadline = asyncio.get_running_loop().time() + CATEGORY_DEADLINE_S
         try:
-            # The legacy GET keeps its MS-1 error semantics: an exception here
-            # still fails the run.
-            resp = await self._search(client, base, SEARCH_PARAMS)
-            items = [
-                RawItem(
-                    url=str(resp.url),
-                    http_status=resp.status_code,
-                    content_type=resp.headers.get("content-type", "application/json"),
-                    payload_json=resp.json() if resp.status_code == 200 else None,
-                    payload_text=resp.text,
+            items: list[RawItem] = []
+            legacy_ok = True
+            if self._drive_sweep:
+                # The legacy GET keeps its MS-1 error semantics: an exception
+                # here still fails the run.
+                resp = await self._search(client, base, SEARCH_PARAMS)
+                items.append(
+                    RawItem(
+                        url=str(resp.url),
+                        http_status=resp.status_code,
+                        content_type=resp.headers.get("content-type", "application/json"),
+                        payload_json=resp.json() if resp.status_code == 200 else None,
+                        payload_text=resp.text,
+                    )
                 )
-            ]
+                legacy_ok = resp.status_code == 200
             stops: dict[str, str] = {}
             # A failed legacy GET fails the whole run in _classify_batch, as it
             # always has; sweeping categories behind it would only spend quota
             # on pages that run discards. It is also the throttling canary:
-            # the quota is per application, so a 429 lands here too.
-            if resp.status_code == 200 and not self._heartbeat_probed:
+            # the quota is per application, so a 429 lands here too. Without
+            # the drive sweep there is no canary, and each category page's own
+            # failure handling ends only its sweep.
+            if legacy_ok and not self._heartbeat_probed:
                 for sweep in self._sweeps:
                     pages, stops[sweep.scope_key] = await self._sweep_pages(
                         client, base, sweep, deadline
@@ -827,6 +841,10 @@ class EbayAdapter:
         # stays one request and a FULL run the heartbeat fires on this same
         # instance costs one more (see __init__).
         self._heartbeat_probed = True
+        if not self._drive_sweep:
+            # The probe IS the legacy drive GET; with drive not admitted there
+            # is nothing this source may probe.
+            return []
         batch = await self.fetch()
         endpoint = _search_url(_api_base())
         return [
@@ -845,9 +863,10 @@ class EbayAdapter:
 
 
 def category_sweep_adapter() -> EbayAdapter:
-    """The production eBay adapter: legacy drive sweep plus CATEGORY_SWEEPS.
+    """The unfiltered eBay adapter: legacy drive sweep plus every CATEGORY_SWEEPS entry.
 
-    The ADAPTERS registry entry, so the poller and harvest_corpus both get the
-    category sweeps (harvest: at most 1 + RUN_PAGE_BUDGET Browse calls).
+    harvest_corpus's entry (sources.HARVEST_ADAPTERS; at most 1 +
+    RUN_PAGE_BUDGET Browse calls). The poller never uses it: its entry is
+    sources.admitted_ebay_adapter, which drops non-admitted sweeps.
     """
     return EbayAdapter(category_sweeps=CATEGORY_SWEEPS)

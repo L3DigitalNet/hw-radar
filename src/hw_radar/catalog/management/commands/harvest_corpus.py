@@ -28,8 +28,9 @@ from typing import Any
 
 from django.core.management.base import BaseCommand, CommandError, CommandParser
 
+from hw_radar.acquisition.admission import RETIRED_REASON, is_retired
 from hw_radar.acquisition.contracts import ParsedListing, SourceAdapter
-from hw_radar.acquisition.sources import ADAPTERS
+from hw_radar.acquisition.sources import HARVEST_ADAPTERS
 from hw_radar.matching.mpn import extract_candidates
 from hw_radar.matching.normalize import canonicalize_title
 from hw_radar.matching.types import TokenKind
@@ -37,7 +38,9 @@ from hw_radar.matching.types import TokenKind
 # The five real registry keys of SA-002. `demo` and `synthetic` are in ADAPTERS
 # but are fixture sources (FIXTURE_SOURCE_KEYS), and corpus schema validation
 # rejects any key outside this tuple — a fixture entry would be unloadable by
-# the evaluator.
+# the evaluator. The OQ31-retired keys stay listed so `--source <retired>`
+# reaches handle()'s explicit refusal instead of argparse's bare "invalid
+# choice"; `--all` harvests ACTIVE_HARVEST_SOURCES only.
 HARVEST_SOURCES: tuple[str, ...] = (
     "serverpartdeals",
     "goharddrive",
@@ -45,6 +48,7 @@ HARVEST_SOURCES: tuple[str, ...] = (
     "seagate-recertified",
     "ebay",
 )
+ACTIVE_HARVEST_SOURCES: tuple[str, ...] = tuple(k for k in HARVEST_SOURCES if not is_retired(k))
 
 DEFAULT_OUT = Path(".harvest")
 
@@ -157,7 +161,9 @@ class Command(BaseCommand):
     def add_arguments(self, parser: CommandParser) -> None:
         group = parser.add_mutually_exclusive_group(required=True)
         group.add_argument("--source", choices=HARVEST_SOURCES, help="harvest one source")
-        group.add_argument("--all", action="store_true", help="harvest all five sources")
+        group.add_argument(
+            "--all", action="store_true", help="harvest every source that is not retired"
+        )
         parser.add_argument(
             "--limit", type=int, default=None, help="cap parsed listings per source"
         )
@@ -169,6 +175,11 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args: Any, **options: Any) -> None:
+        # This command bypasses `enabled` on purpose, but OQ31 retirement bars
+        # collection itself, harvest included — refused before any request.
+        source: str | None = options["source"]
+        if source is not None and is_retired(source):
+            raise CommandError(f"{source} is retired: {RETIRED_REASON}")
         out_dir: Path = options["out"]
         limit: int | None = options["limit"]
         if limit is not None and limit < 1:
@@ -179,7 +190,7 @@ class Command(BaseCommand):
                 "repository. Pass --allow-repo-output only for a curated, labeled corpus."
             )
 
-        sources = HARVEST_SOURCES if options["all"] else (options["source"],)
+        sources = ACTIVE_HARVEST_SOURCES if source is None else (source,)
         entries: list[dict[str, Any]] = []
         report: dict[str, dict[str, Any]] = {}
         for key in sources:
@@ -210,7 +221,7 @@ class Command(BaseCommand):
             )
             return [], {"status": "skipped_no_credentials", "harvested": 0, "skipped_malformed": 0}
         try:
-            parsed, dropped_in_parse = asyncio.run(_fetch_parse(ADAPTERS[key]()))
+            parsed, dropped_in_parse = asyncio.run(_fetch_parse(HARVEST_ADAPTERS[key]()))
         except Exception as exc:
             self.stderr.write(f"{key} failed: {exc!r}")
             return [], {

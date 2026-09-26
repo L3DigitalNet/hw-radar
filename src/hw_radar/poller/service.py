@@ -9,8 +9,9 @@ configured, and this module is only imported *after* that — by ``__main__.py``
 settings during collection). That is why the package ``__init__`` no longer
 bootstraps Django at import time; see ``poller/__init__.py``.
 
-Per-source interval jobs are registered from SourceConfig rows; the admission
-gate (buckets → back-off → lifecycle) runs inside each job, so a denied tick
+Per-source interval jobs are registered only for enabled SourceConfig rows that
+the source x category matrix (acquisition.admission) allows; the per-tick
+scheduling.admission gate (buckets → back-off → lifecycle) runs inside each job, so a denied tick
 is cheap. Auto-ramp/back-off changes to a lane's current_interval_s reschedule
 that lane's job in place. Django ORM calls go through sync_to_async.
 
@@ -35,6 +36,7 @@ from asgiref.sync import sync_to_async
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
+from hw_radar.acquisition.admission import scheduling_block
 from hw_radar.acquisition.apify import jobs as apify_jobs
 from hw_radar.acquisition.apify.jobs import APIFY_POLL_SECONDS, apify_poll_tick, start_provider_run
 from hw_radar.acquisition.apify.reconcile import resolve_stale_monitoring_markers
@@ -303,6 +305,14 @@ async def recovery_probe_job(registry: BucketRegistry) -> None:
         )
     )()
     for config in paused:
+        # This job reads enabled rows straight from the DB rather than from
+        # build_scheduler's filtered set, so it needs its own matrix gate: an
+        # enabled row for a retired or unadmitted source would otherwise be
+        # probed — and, on success, reactivated — every day.
+        block = scheduling_block(config.source_site.normalized_name)
+        if block is not None:
+            logger.warning("probe for %s skipped: %s", config.source_site.normalized_name, block)
+            continue
         if config.collection_provider == ProviderKind.APIFY.value:  # .value: django-types quirk
             # Dispatched before the adapter lookup: the local adapter must never
             # run for an Actor-backed source, even when one is registered — its
@@ -451,6 +461,16 @@ def build_scheduler(
     for schedule in schedules:
         config = schedule.config
         key = config.source_site.normalized_name
+        # The admission matrix is the ceiling above `enabled` (acquisition.
+        # admission): an enabled row for a retired source, or for one with no
+        # admitted category, gets no job at all. Skipping here rather than
+        # denying per tick keeps a retired source from ever reaching a fetch,
+        # a heartbeat probe, or an Apify start, and the warning makes an
+        # enabled-but-blocked row visible instead of silently idle.
+        block = scheduling_block(key)
+        if block is not None:
+            logger.warning("source %s is enabled but not scheduled: %s", key, block)
+            continue
         registry.configure_source(
             key,
             rate_per_min=config.bucket_rate_per_min,

@@ -2,8 +2,10 @@
 
 Every adapter here is a local fake: the command drives real connectors against
 live marketplaces, so exercising it in the suite must never touch the network,
-the database, or a real credential. The fakes are registered under the five real
-registry keys (SA-002) because the command's source whitelist is keyed off them.
+the database, or a real credential. The fakes are registered under the real
+registry keys (SA-002) because the command's source whitelist is keyed off them;
+the OQ31-retired keys are faked too, so the refusal tests prove the command, not
+a missing registry entry, keeps them from being fetched.
 """
 
 from __future__ import annotations
@@ -80,7 +82,7 @@ def _install(
 ) -> dict[str, FakeAdapter]:
     monkeypatch.setattr(
         harvest_corpus,
-        "ADAPTERS",
+        "HARVEST_ADAPTERS",
         {key: (lambda a=adapter: a) for key, adapter in adapters.items()},
     )
     return adapters
@@ -105,32 +107,32 @@ def test_staging_shape_and_counts(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     _install(
         monkeypatch,
         {
-            "serverpartdeals": FakeAdapter(
-                "serverpartdeals",
-                [_listing("SPD-1"), _listing("SPD-2"), _listing("SPD-3", title="   ")],
+            "wd-recertified": FakeAdapter(
+                "wd-recertified",
+                [_listing("WD-1"), _listing("WD-2"), _listing("WD-3", title="   ")],
             )
         },
     )
 
-    call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(tmp_path))
+    call_command("harvest_corpus", "--source", "wd-recertified", "--out", str(tmp_path))
 
     entries, meta = _read_staging(tmp_path)
-    assert [e["id"] for e in entries] == ["serverpartdeals:SPD-1", "serverpartdeals:SPD-2"]
-    assert {e["source"] for e in entries} == {"serverpartdeals"}
+    assert [e["id"] for e in entries] == ["wd-recertified:WD-1", "wd-recertified:WD-2"]
+    assert {e["source"] for e in entries} == {"wd-recertified"}
     first = entries[0]
     assert first["title"] == "Seagate Exos X18 ST18000NM000J 18TB"
     assert first["listing"] == {
-        "source_listing_key": "SPD-1",
-        "url": "https://example.invalid/SPD-1",
+        "source_listing_key": "WD-1",
+        "url": "https://example.invalid/WD-1",
         "price": "199.00",
         "currency": "USD",
         "condition_label": "Recertified",
-        "attrs": {"sku": "SPD-1"},
+        "attrs": {"sku": "WD-1"},
     }
     # Staging is unlabeled: labeling is the separate owner-in-the-loop step.
     assert "label" not in first
     assert first["oem_dual_label"] is False
-    assert meta["sources"]["serverpartdeals"] == {
+    assert meta["sources"]["wd-recertified"] == {
         "status": "ok",
         "harvested": 2,
         "skipped_malformed": 1,
@@ -144,14 +146,14 @@ def test_oem_dual_label_prefill(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
     _install(
         monkeypatch,
         {
-            "serverpartdeals": FakeAdapter(
-                "serverpartdeals",
-                [_listing("SPD-9", title="EMC 005051385 Seagate ST18000NM000J 18TB")],
+            "wd-recertified": FakeAdapter(
+                "wd-recertified",
+                [_listing("WD-9", title="EMC 005051385 Seagate ST18000NM000J 18TB")],
             )
         },
     )
 
-    call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(tmp_path))
+    call_command("harvest_corpus", "--source", "wd-recertified", "--out", str(tmp_path))
 
     entries, _ = _read_staging(tmp_path)
     assert entries[0]["oem_dual_label"] is True
@@ -179,13 +181,26 @@ def test_ebay_skipped_without_credentials(monkeypatch: pytest.MonkeyPatch, tmp_p
         "skipped_malformed": 0,
     }
     assert not adapters["ebay"].fetched
-    assert {e["source"] for e in entries} == {
-        "serverpartdeals",
-        "goharddrive",
-        "wd-recertified",
-        "seagate-recertified",
-    }
-    assert meta["total_harvested"] == 4
+    # Fakes are installed for the retired keys too, so only the command's own
+    # OQ31 filter can keep --all from harvesting them.
+    assert not adapters["serverpartdeals"].fetched
+    assert not adapters["seagate-recertified"].fetched
+    assert set(meta["sources"]) == {"goharddrive", "wd-recertified", "ebay"}
+    assert {e["source"] for e in entries} == {"goharddrive", "wd-recertified"}
+    assert meta["total_harvested"] == 2
+
+
+@pytest.mark.parametrize("key", ["serverpartdeals", "seagate-recertified"])
+def test_retired_source_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, key: str
+) -> None:
+    adapters = _install(monkeypatch, {key: FakeAdapter(key, [_listing("R-1")])})
+
+    with pytest.raises(CommandError, match="retired / permission-required"):
+        call_command("harvest_corpus", "--source", key, "--out", str(tmp_path))
+
+    assert not adapters[key].fetched
+    assert not (tmp_path / "staging.jsonl").exists()
 
 
 def test_ebay_harvested_with_credentials(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -207,8 +222,8 @@ def test_source_failure_does_not_halt_sweep(
     _install(
         monkeypatch,
         {
-            "serverpartdeals": FakeAdapter(
-                "serverpartdeals", [], fetch_error=RuntimeError("upstream 503")
+            "wd-recertified": FakeAdapter(
+                "wd-recertified", [], fetch_error=RuntimeError("upstream 503")
             ),
             "goharddrive": FakeAdapter("goharddrive", [_listing("GHD-1")]),
         },
@@ -217,10 +232,10 @@ def test_source_failure_does_not_halt_sweep(
     call_command("harvest_corpus", "--all", "--out", str(tmp_path))
 
     entries, meta = _read_staging(tmp_path)
-    assert meta["sources"]["serverpartdeals"]["status"] == "error"
+    assert meta["sources"]["wd-recertified"]["status"] == "error"
     # Type name only: the persisted manifest must never carry exception detail
     # (request URLs / token-exchange text); the full repr goes to stderr.
-    assert meta["sources"]["serverpartdeals"]["error"] == "RuntimeError"
+    assert meta["sources"]["wd-recertified"]["error"] == "RuntimeError"
     assert "upstream 503" not in json.dumps(meta)
     assert [e["id"] for e in entries] == ["goharddrive:GHD-1"]
 
@@ -229,21 +244,21 @@ def test_limit_truncates_after_parse(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     _install(
         monkeypatch,
         {
-            "serverpartdeals": FakeAdapter(
-                "serverpartdeals", [_listing(f"SPD-{n}") for n in range(1, 6)]
+            "wd-recertified": FakeAdapter(
+                "wd-recertified", [_listing(f"WD-{n}") for n in range(1, 6)]
             )
         },
     )
 
     call_command(
-        "harvest_corpus", "--source", "serverpartdeals", "--limit", "2", "--out", str(tmp_path)
+        "harvest_corpus", "--source", "wd-recertified", "--limit", "2", "--out", str(tmp_path)
     )
 
     entries, meta = _read_staging(tmp_path)
-    assert [e["id"] for e in entries] == ["serverpartdeals:SPD-1", "serverpartdeals:SPD-2"]
-    assert meta["sources"]["serverpartdeals"]["harvested"] == 2
+    assert [e["id"] for e in entries] == ["wd-recertified:WD-1", "wd-recertified:WD-2"]
+    assert meta["sources"]["wd-recertified"]["harvested"] == 2
     # Truncation is not malformed: the three dropped tail listings were healthy.
-    assert meta["sources"]["serverpartdeals"]["skipped_malformed"] == 0
+    assert meta["sources"]["wd-recertified"]["skipped_malformed"] == 0
 
 
 def test_skipped_malformed_sums_adapter_and_staging_drops(
@@ -255,18 +270,18 @@ def test_skipped_malformed_sums_adapter_and_staging_drops(
     _install(
         monkeypatch,
         {
-            "serverpartdeals": FakeAdapter(
-                "serverpartdeals",
-                [_listing("SPD-1"), _listing("SPD-2", title="  ")],
+            "wd-recertified": FakeAdapter(
+                "wd-recertified",
+                [_listing("WD-1"), _listing("WD-2", title="  ")],
                 parse_skipped=3,
             )
         },
     )
 
-    call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(tmp_path))
+    call_command("harvest_corpus", "--source", "wd-recertified", "--out", str(tmp_path))
 
     _, meta = _read_staging(tmp_path)
-    assert meta["sources"]["serverpartdeals"] == {
+    assert meta["sources"]["wd-recertified"] == {
         "status": "ok",
         "harvested": 1,
         "skipped_malformed": 4,
@@ -281,21 +296,21 @@ def test_adapter_reported_drops_survive_limit(
     _install(
         monkeypatch,
         {
-            "serverpartdeals": FakeAdapter(
-                "serverpartdeals",
-                [_listing(f"SPD-{n}") for n in range(1, 6)],
+            "wd-recertified": FakeAdapter(
+                "wd-recertified",
+                [_listing(f"WD-{n}") for n in range(1, 6)],
                 parse_skipped=2,
             )
         },
     )
 
     call_command(
-        "harvest_corpus", "--source", "serverpartdeals", "--limit", "2", "--out", str(tmp_path)
+        "harvest_corpus", "--source", "wd-recertified", "--limit", "2", "--out", str(tmp_path)
     )
 
     _, meta = _read_staging(tmp_path)
-    assert meta["sources"]["serverpartdeals"]["harvested"] == 2
-    assert meta["sources"]["serverpartdeals"]["skipped_malformed"] == 2
+    assert meta["sources"]["wd-recertified"]["harvested"] == 2
+    assert meta["sources"]["wd-recertified"]["skipped_malformed"] == 2
 
 
 @pytest.fixture
@@ -317,7 +332,7 @@ def sandbox_repo(tmp_path: Path) -> Path:
 def _one_fake(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(
         monkeypatch,
-        {"serverpartdeals": FakeAdapter("serverpartdeals", [_listing("SPD-1")])},
+        {"wd-recertified": FakeAdapter("wd-recertified", [_listing("WD-1")])},
     )
 
 
@@ -328,7 +343,7 @@ def test_tracked_output_refused_without_optin(
     tracked = sandbox_repo / "tests" / "fixtures" / "matching_corpus"
 
     with pytest.raises(CommandError, match="--allow-repo-output"):
-        call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(tracked))
+        call_command("harvest_corpus", "--source", "wd-recertified", "--out", str(tracked))
 
     assert not (tracked / "staging.jsonl").exists()
 
@@ -342,14 +357,14 @@ def test_tracked_output_allowed_with_optin(
     call_command(
         "harvest_corpus",
         "--source",
-        "serverpartdeals",
+        "wd-recertified",
         "--out",
         str(tracked),
         "--allow-repo-output",
     )
 
     entries, _ = _read_staging(tracked)
-    assert [e["id"] for e in entries] == ["serverpartdeals:SPD-1"]
+    assert [e["id"] for e in entries] == ["wd-recertified:WD-1"]
 
 
 def test_ignored_output_dir_needs_no_optin(
@@ -358,7 +373,7 @@ def test_ignored_output_dir_needs_no_optin(
     _one_fake(monkeypatch)
 
     call_command(
-        "harvest_corpus", "--source", "serverpartdeals", "--out", str(sandbox_repo / ".harvest")
+        "harvest_corpus", "--source", "wd-recertified", "--out", str(sandbox_repo / ".harvest")
     )
 
     entries, _ = _read_staging(sandbox_repo / ".harvest")
@@ -395,9 +410,9 @@ def test_genuinely_outside_a_work_tree_needs_no_optin(
         )
 
     monkeypatch.setattr(harvest_corpus.subprocess, "run", fake_run)
-    call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(out))
+    call_command("harvest_corpus", "--source", "wd-recertified", "--out", str(out))
     entries, _ = _read_staging(out)
-    assert [e["id"] for e in entries] == ["serverpartdeals:SPD-1"]
+    assert [e["id"] for e in entries] == ["wd-recertified:WD-1"]
 
 
 def test_dubious_ownership_refusal_fails_closed(
@@ -417,7 +432,7 @@ def test_dubious_ownership_refusal_fails_closed(
 
     monkeypatch.setattr(harvest_corpus.subprocess, "run", fake_run)
     with pytest.raises(CommandError, match="--allow-repo-output"):
-        call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(out))
+        call_command("harvest_corpus", "--source", "wd-recertified", "--out", str(out))
     assert not (out / "staging.jsonl").exists()
 
 
@@ -436,7 +451,7 @@ def test_empty_rev_parse_stdout_fails_closed(
 
     monkeypatch.setattr(harvest_corpus.subprocess, "run", fake_run)
     with pytest.raises(CommandError, match="--allow-repo-output"):
-        call_command("harvest_corpus", "--source", "serverpartdeals", "--out", str(out))
+        call_command("harvest_corpus", "--source", "wd-recertified", "--out", str(out))
     assert not (out / "staging.jsonl").exists()
 
 

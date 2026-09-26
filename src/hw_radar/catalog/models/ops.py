@@ -14,10 +14,12 @@ ERR-007 crash recovery.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import Any, ClassVar
 
+from django.core.exceptions import ValidationError
 from django.db import models
 
+from hw_radar.acquisition.admission import RETIRED_REASON, is_retired
 from hw_radar.catalog.models.base import TimeStamped
 from hw_radar.catalog.models.market import SourceSite
 
@@ -209,6 +211,23 @@ class SourceConfig(TimeStamped):
 
     def __str__(self) -> str:
         return f"{self.source_site.normalized_name} [{self.tier}]"
+
+    def clean(self) -> None:
+        super().clean()
+        self._refuse_enabling_retired()
+
+    def save(self, *args: Any, **kwargs: Any) -> None:
+        # save() repeats clean()'s check because ORM callers (shell, commands,
+        # tests) never run full_clean. A queryset .update() still bypasses both;
+        # the poller's matrix gate (poller.service.build_scheduler) is the
+        # backstop that keeps such a row from ever being scheduled.
+        self._refuse_enabling_retired()
+        super().save(*args, **kwargs)
+
+    def _refuse_enabling_retired(self) -> None:
+        key = self.source_site.normalized_name
+        if self.enabled and is_retired(key):
+            raise ValidationError({"enabled": f"{key} cannot be enabled: {RETIRED_REASON}"})
 
     def lane_state(self, lane: SchedulingLane) -> SourceLaneState:
         """Return this source's scheduling state for `lane`, creating it if absent.
