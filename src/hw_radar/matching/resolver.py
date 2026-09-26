@@ -72,7 +72,7 @@ from hw_radar.catalog.models import (
     WarrantyChannel,
 )
 from hw_radar.matching import MATCHER_VERSION, categories, ladder
-from hw_radar.matching.normalize import canonicalize_title
+from hw_radar.matching.normalize import canonicalize_listing_text, canonicalize_title
 from hw_radar.matching.rules import basic, cpu, gpu, ram
 from hw_radar.matching.types import (
     DecodeResult,
@@ -573,7 +573,7 @@ def _apply_category_gates(
 def _run_ladder(
     listing: Listing, *, reconsider: bool = False
 ) -> tuple[str, ExtractedAttributes, list[MpnCandidate], ladder.Verdict]:
-    canonical = canonicalize_title(f"{listing.title_raw} {listing.condition_label_raw}".strip())
+    canonical = canonicalize_listing_text(listing.title_raw, listing.condition_label_raw)
     attrs = _latest_snapshot_attrs(listing)
     hint = _category_hint(attrs)
     slug = categories.dispatch_category(hint)

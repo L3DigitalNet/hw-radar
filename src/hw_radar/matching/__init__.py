@@ -20,4 +20,6 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               rung-2 Seagate/Exos families that 2026.09.2 would not assert.
 #               2026.09.2 also: contradicted exact alias -> review; older-version
 #               automated priors re-decided.
+#               2026.09.2 also: reference spans computed before punctuation
+#               stripping; offer terms masked.
 MATCHER_VERSION = "2026.09.2"

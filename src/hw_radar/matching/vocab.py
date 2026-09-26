@@ -18,6 +18,7 @@ catalog contradicts the equivalence."""
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from hw_radar.matching.normalize import mask_reference_spans
 from hw_radar.matching.types import Attribute, ExtractedAttributes
@@ -238,21 +239,43 @@ def offer_terms(title: str) -> ExtractedAttributes:
     The category rules modules build on this so every category reads condition
     and warranty from the one set of tables above, and the resolver's
     variant-on-demand path gets the same TextChoices literals for all of them.
-    Every other field stays None. Each field comes from the same helper call
-    extract() makes, so the two can never disagree on a title."""
-    condition, recert_channel = _condition(title)
+    Every other field stays None. Both functions read these fields through
+    _offer_fields, so the two can never disagree on a title.
+
+    Offer terms are read with reference spans masked: "comparable to factory
+    recertified drives" says nothing about this item's condition."""
+    return _offer_fields(mask_reference_spans(title))
+
+
+def _offer_fields(masked: str) -> ExtractedAttributes:
+    # Caller passes mask_reference_spans output. condition, packaging,
+    # recert_channel and warranty_channel are VARIANT identity:
+    # resolver._materialize get_or_creates the ProductVariant from exactly
+    # these four, so reading them from a reference span would file the listing
+    # under a sellable variant it never offered (review finding F4).
+    condition, recert_channel = _condition(masked)
     return ExtractedAttributes(
         condition=condition,
         recert_channel=recert_channel,
-        packaging=_first_pattern(title, _PACKAGING, 0.85),
-        warranty_months=_int_pattern(title, _WARRANTY_YEARS, scale=12),
-        warranty_channel=_first_pattern(title, _WARRANTY_CHANNELS, 0.9),
+        packaging=_first_pattern(masked, _PACKAGING, 0.85),
+        warranty_months=_int_pattern(masked, _WARRANTY_YEARS, scale=12),
+        warranty_channel=_first_pattern(masked, _WARRANTY_CHANNELS, 0.9),
     )
 
 
 def extract(title: str) -> ExtractedAttributes:
-    condition, recert_channel = _condition(title)
-    return ExtractedAttributes(
+    masked = mask_reference_spans(title)
+    offer = _offer_fields(masked)
+    return replace(
+        offer,
+        # Hard-attribute fields read the UNMASKED title. The ladder consults
+        # them only in contradiction vetoes (ladder.contradictions), and every
+        # veto outcome is REVIEW: a value read from a reference span can send a
+        # match to review but can never create or select an identity. Masking
+        # them instead would let an over-reaching span hide the listing's own
+        # contradicting capacity or interface, trading a visible review for a
+        # silent accept. quantity is neither identity nor veto (eligibility
+        # reads it for lot pricing) and keeps its historical unmasked read.
         capacity_bytes=_capacity(title),
         interface=_first_pattern(title, _INTERFACES, 0.9),
         link_speed_gbps=_link_speed(title),
@@ -262,16 +285,8 @@ def extract(title: str) -> ExtractedAttributes:
         sector_format=_sector(title),
         recording_tech=_recording(title),
         security=_security(title),
-        condition=condition,
-        recert_channel=recert_channel,
-        packaging=_first_pattern(title, _PACKAGING, 0.85),
-        warranty_months=_int_pattern(title, _WARRANTY_YEARS, scale=12),
-        warranty_channel=_first_pattern(title, _WARRANTY_CHANNELS, 0.9),
         quantity=_quantity(title),
-        # Brand is identity evidence (it satisfies the rung-1 brand gate), so a
-        # brand word cited in a reference span ("comparable to Seagate Exos")
-        # must not supply it. Only brand is masked: the ladder uses the other
-        # fields solely in hard-attribute vetoes, where a field read from a span
-        # can send a match to review but can never create one.
-        brand=_first_pattern(mask_reference_spans(title), _BRANDS, 0.9),
+        # Brand satisfies the rung-1 brand gate, so it is identity evidence
+        # and reads the masked text like the offer terms.
+        brand=_first_pattern(masked, _BRANDS, 0.9),
     )

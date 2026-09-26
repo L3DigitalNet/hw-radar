@@ -65,7 +65,7 @@ from hw_radar.catalog.models import (
 )
 from hw_radar.eligibility import evaluate
 from hw_radar.eligibility.service import RowCurrency, candidate_rows, row_currency
-from hw_radar.matching.normalize import canonicalize_title
+from hw_radar.matching.normalize import canonicalize_listing_text
 
 # Assumption (plan C4): two baseline cadences without a new observation is
 # the point where a row's price can no longer be read as live.
@@ -226,7 +226,7 @@ def shortlist(watch_id: int) -> list[ShortlistRow]:
         e, listing, snapshot = s.evaluation, s.evaluation.listing, s.live.snapshot
         # Must equal evaluate_listing's canonical offer text, or quantity and
         # condition (and so meets_target) would be read differently here.
-        canonical = canonicalize_title(f"{listing.title_raw} {listing.condition_label_raw}".strip())
+        canonical = canonicalize_listing_text(listing.title_raw, listing.condition_label_raw)
         facts = evaluate._offer_facts(listing, snapshot, canonical)
         observed_at = None if snapshot is None else snapshot.observed_at
         site_id = cast("int", listing.source_site.pk)

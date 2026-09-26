@@ -1,9 +1,12 @@
 """N1 text canonicalization + the single-normalizer alias key (ADR-0019 rule 1).
 
-- canonicalize_title() is the N1 pass every extraction layer reads from.
+- canonicalize_title() is the N1 pass every extraction layer reads from;
+  canonicalize_listing_text() is the title + seller-condition-label form the
+  resolver and the eligibility evaluator read.
 - mask_reference_spans() blanks comparison/reference clauses out of a canonical
-  title so the drive identity layers (mpn.extract_candidates, the vocab brand
-  table) never read a cited product as the listed one. See its docstring.
+  title so the drive identity layers (mpn.extract_candidates; the vocab brand
+  and offer-term tables) never read a cited product as the listed one. It is
+  span detection, not a normalizer. See its docstring.
 - normalize_alias_text() is the JOIN KEY for product_alias. Catalog ingest
   (MS-1c refdata) and listing-side candidates MUST both call it; the CI parity
   test in tests/db/test_resolver.py asserts that. Never fork a second
@@ -38,24 +41,6 @@ _BOILERPLATE = re.compile(
 )
 
 
-def canonicalize_title(text: str) -> str:
-    folded = unicodedata.normalize("NFKC", text).translate(_DASHES).casefold()
-    # Boilerplate BEFORE noise-stripping: patterns like 'l@@k' contain characters
-    # the noise pass removes — the other order makes them unreachable.
-    cleaned = _BOILERPLATE.sub(" ", folded)
-    cleaned = _NOISE.sub(" ", cleaned)
-    return _WS.sub(" ", cleaned).strip()
-
-
-def normalize_alias_text(text: str) -> str:
-    """Alias join key: NFKC → casefold → strip every non-alphanumeric.
-
-    'MZ-77E1T0B/AM', 'mz 77e1t0b/am', and 'MZ_77E1T0B.AM' all become
-    'mz77e1t0bam' — separator styling never splits an alias join."""
-
-    return _ALNUM_ONLY.sub("", unicodedata.normalize("NFKC", text).casefold())
-
-
 # Reference phrases whose OBJECT names a product other than the one listed.
 # Deliberately closed and unambiguous: every entry is pinned by
 # tests/unit/test_reference_context.py. Rejected as too ambiguous: bare
@@ -86,41 +71,164 @@ def reference_phrase_pattern(*extra: str) -> re.Pattern[str]:
 
 
 _REFERENCE_PHRASE = reference_phrase_pattern()
-# Clause boundaries that end a reference span. Only " - ", "(" and ")" survive
-# canonicalize_title; ",", "|" and ";" are listed so the rule still holds on a
-# non-canonical caller, but _NOISE turns them into spaces first (see the trap
-# in mask_reference_spans).
-_CLAUSE_BOUNDARY = re.compile(r" - |[()|,;]")
+# Raw clause punctuation that _NOISE would erase. A comma between two digits is
+# a thousands separator ("1,000GB"), not a clause break.
+_CLAUSE_PUNCT = re.compile(r"[;|]|(?<!\d),|,(?!\d)")
+# The canonical clause boundary: the one separator _NOISE lets through.
+_CANONICAL_BOUNDARY = " - "
+
+
+def _strip_noise(text: str) -> str:
+    return _WS.sub(" ", _NOISE.sub(" ", text)).strip()
+
+
+def canonicalize_title(text: str) -> str:
+    """Return the N1 canonical form every extraction layer reads.
+
+    NFKC, dash folding, casefold, boilerplate removal, then every character
+    outside the MPN/capacity alphabet becomes a space. One exception keeps
+    reference masking honest: when the result contains a reference phrase,
+    raw clause punctuation (",", ";", "|") is rewritten to " - " instead of
+    being erased, so mask_reference_spans can still see where the cited
+    clause ends. A title with no reference phrase is canonicalized exactly as
+    if the exception did not exist."""
+
+    folded = unicodedata.normalize("NFKC", text).translate(_DASHES).casefold()
+    # Boilerplate BEFORE noise-stripping: patterns like 'l@@k' contain characters
+    # the noise pass removes — the other order makes them unreachable.
+    cleaned = _BOILERPLATE.sub(" ", folded)
+    plain = _strip_noise(cleaned)
+    # Conditional on purpose. Keeping clause punctuation in EVERY title would
+    # change the canonical text of every comma-bearing listing — the persisted
+    # title_normalized, provisional family keys built by refdata.persist, and
+    # patterns that read across the old space ("2, pack" is "2 pack" today) —
+    # to serve a masking step that only runs when a phrase is present.
+    # Detection reads `plain` so a phrase that only appears once noise is
+    # stripped ("compatible*with") still gets its boundaries; the output is
+    # idempotent because a second pass sees the same phrase and no raw
+    # punctuation left to rewrite.
+    if _REFERENCE_PHRASE.search(plain) is None:
+        return plain
+    return _strip_noise(_CLAUSE_PUNCT.sub(_CANONICAL_BOUNDARY, cleaned))
+
+
+def canonicalize_listing_text(title: str, condition_label: str = "") -> str:
+    """Return the canonical text of a listing title plus its seller condition
+    label — the one string the resolver and the eligibility evaluator read.
+
+    The label is joined behind a clause boundary so a reference span running
+    to the end of the title stops before it: the seller's structured condition
+    is asserted evidence about this item, never part of a cited product. For a
+    title with no reference phrase the result equals the historical
+    canonicalize_title(f"{title} {condition_label}".strip())."""
+
+    return canonicalize_title(" | ".join(p for p in (title, condition_label) if p.strip()))
+
+
+def normalize_alias_text(text: str) -> str:
+    """Alias join key: NFKC → casefold → strip every non-alphanumeric.
+
+    'MZ-77E1T0B/AM', 'mz 77e1t0b/am', and 'MZ_77E1T0B.AM' all become
+    'mz77e1t0bam' — separator styling never splits an alias join."""
+
+    return _ALNUM_ONLY.sub("", unicodedata.normalize("NFKC", text).casefold())
+
+
+# Clause boundaries that end a reference span outside parentheses. Canonical
+# titles carry only " - " (canonicalize_title rewrites ",", ";" and "|" to it
+# when a phrase is present); the raw characters are accepted too so the rule
+# holds on text that skipped canonicalization.
+_SPAN_BOUNDARY = re.compile(r" - |[,;|]")
+
+
+def _open_paren_depth(text: str) -> int:
+    depth = 0
+    for ch in text:
+        if ch == "(":
+            depth += 1
+        elif ch == ")" and depth:
+            depth -= 1
+    return depth
+
+
+def _span_end(title: str, start: int, *, inside_parens: bool) -> int:
+    """Return the exclusive end of a reference span whose phrase ends at `start`."""
+
+    obj = start
+    while obj < len(title) and title[obj] == " ":
+        obj += 1
+    if obj < len(title) and title[obj] == "(":
+        # A parenthesized object IS the comparison target ("comparable to
+        # (Seagate ST12000NE0008)"): mask through its matching ")". Treating the
+        # "(" as a boundary instead leaks the cited brand and exact catalog MPN
+        # as identity evidence (review finding F1).
+        depth = 0
+        for i in range(obj, len(title)):
+            if title[i] == "(":
+                depth += 1
+            elif title[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    return i + 1
+        # Unclosed: fall back to the first clause boundary, so the appended
+        # condition label (see canonicalize_listing_text) is never swallowed.
+        boundary = _SPAN_BOUNDARY.search(title, obj)
+        return boundary.start() if boundary is not None else len(title)
+
+    depth = 0
+    for i in range(start, len(title)):
+        ch = title[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth:
+                depth -= 1
+            elif inside_parens:
+                # "(compatible with Dell R740)": the enclosing group is the clause.
+                return i
+        elif depth == 0 and _SPAN_BOUNDARY.match(title, i):
+            return i
+    return len(title)
 
 
 def mask_reference_spans(title: str, phrases: re.Pattern[str] = _REFERENCE_PHRASE) -> str:
     """Blank every reference span of a canonical title with spaces.
 
-    A span runs from a reference phrase ("comparable to", "compatible with",
-    "replacement for", ...) up to, not including, the next clause boundary
-    (" - ", "(", ")") or the end of the title. Text outside spans is
-    returned unchanged and the length is preserved, so offsets and word
-    boundaries elsewhere are stable. A title with no phrase is returned as is.
-    `phrases` defaults to the shared list every drive layer uses; a category
-    passes reference_phrase_pattern(...) to add its own.
+    A span starts at a reference phrase ("comparable to", "compatible with",
+    "replacement for", ...) and ends, exclusive, at the first of:
 
-    Identity-only contract: callers mask before mining IDENTITY evidence (MPN
-    candidates, OEM vendor gates, brand words) and never before reading
-    physical attributes, so a span that over-reaches costs identity alone.
+    - a clause boundary (" - ", or a raw ",", ";", "|") outside any parentheses
+      the span itself opened;
+    - the ")" closing the group the phrase sits in, when the phrase is inside
+      parentheses ("(compatible with Dell R740)");
+    - the end of the title.
 
-    Known trap: canonicalization erases ",", "|" and ";", so in the resolver a
-    span runs past what were clause breaks in the raw title — and past the
-    condition label the resolver appends — to the next surviving boundary or
-    the end. "Compatible with ST16000NM002G, Seagate ST18000NM000J" therefore
-    masks BOTH MPNs. That over-reach is the intended failure direction: an
-    unresolved listing queues, while a false merge poisons a model's price
-    history (ADR-0019)."""
+    When the phrase is immediately followed by "(", that parenthesized group is
+    the comparison target and the span runs through its matching ")".
+
+    Text outside spans is returned unchanged and the length is preserved, so
+    offsets and word boundaries elsewhere are stable. A title with no phrase
+    is returned as is. `phrases` defaults to the shared list every drive layer
+    uses; a category passes reference_phrase_pattern(...) to add its own.
+
+    Contract with the callers: every field that establishes product or variant
+    identity reads the masked text — MPN candidates and OEM vendor gates
+    (mpn.extract_candidates), brand and the offer terms that
+    resolver._materialize turns into a variant (vocab). Hard-attribute veto
+    fields read the unmasked title; see vocab.extract for why.
+
+    This is span DETECTION over canonical text, not a second normalizer: it
+    produces no join key and never feeds normalize_alias_text's alias
+    comparison (ADR-0019 rule 1). It depends on canonicalize_title keeping
+    clause punctuation as " - " for phrase-bearing titles — without that,
+    "Compatible with ST16000NM002G, Seagate ST18000NM000J" would mask the
+    listed MPN too."""
 
     pieces: list[str] = []
     pos = 0
     while (phrase := phrases.search(title, pos)) is not None:
-        boundary = _CLAUSE_BOUNDARY.search(title, phrase.end())
-        end = boundary.start() if boundary is not None else len(title)
+        inside = _open_paren_depth(title[: phrase.start()]) > 0
+        end = _span_end(title, phrase.end(), inside_parens=inside)
         pieces.append(title[pos : phrase.start()])
         pieces.append(" " * (end - phrase.start()))
         pos = end

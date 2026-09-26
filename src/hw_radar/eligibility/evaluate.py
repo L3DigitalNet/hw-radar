@@ -85,7 +85,7 @@ from hw_radar.catalog.models import (
 )
 from hw_radar.eligibility.requirements import DRIVE_FORM_FACTOR_TOKENS, DRIVE_INTERFACE_TOKENS
 from hw_radar.matching import categories, vocab
-from hw_radar.matching.normalize import canonicalize_title
+from hw_radar.matching.normalize import canonicalize_listing_text
 from hw_radar.matching.rules.cpu import CpuAttributes, socket_key
 from hw_radar.matching.rules.gpu import GpuAttributes
 from hw_radar.matching.rules.ram import RamAttributes
@@ -1291,7 +1291,7 @@ def evaluate_listing(listing_id: int) -> ListingEvaluationResult:
         else {cast("int", r.pk): r for r in requirement_model.objects.filter(watch__in=watches)}
     )
 
-    canonical = canonicalize_title(f"{listing.title_raw} {listing.condition_label_raw}".strip())
+    canonical = canonicalize_listing_text(listing.title_raw, listing.condition_label_raw)
     extracted = _listing_attributes(category, canonical)
     facts = _offer_facts(listing, snapshot, canonical)
     policy = policy_for(category)
