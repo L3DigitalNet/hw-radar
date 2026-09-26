@@ -7038,6 +7038,19 @@ follow-up R12-01).**
     `.harvest/f4-ebay/`. eBay is the only source with category sweeps. CPU is thin
     because the pilot sweep queries one model; widen `CATEGORY_SWEEPS` before
     labeling if the owner wants a broader CPU corpus.
+  - **Landed 2026-09-26 (owner decisions, OQ31/OQ32; not an F4 code change):** the local-connector
+    Terms review this section's F2 relied on ([`2026-09-25-local-connector-terms-review.md`](../../research/2026-09-25-local-connector-terms-review.md))
+    became an owner decision: ServerPartDeals and Seagate-recertified are retired
+    (`RETIRED_SOURCES`, `src/hw_radar/acquisition/admission.py`; migration `0023`), for any
+    execution venue, local or Apify — F2's "no change" finding stands, permanently. The global
+    SA-004 enable order this plan never restated is retired too, replaced by a per-`(source,
+    category)` admission matrix (`ADMISSION_MATRIX`, same module); every cell is `NOT_ADMITTED`.
+    Separately, OQ32 replaced the five-source ratification floor the MS-1e audit packet found
+    unsatisfiable with a metadata-declared ≥3-source floor (`ratification_sources`,
+    `MIN_RATIFICATION_SOURCES`), evaluated against production refdata rather than the unit-test
+    `seeded_catalog`; F4's owner-in-the-loop labeling and ratification path (above) is otherwise
+    unchanged. `matcher_version` bumped to `2026.09.2` in the same window (comparison-phrase MPN
+    masking, the Seagate `nm`→Exos false-merge fix, WD SKU→MPN structured evidence).
 - **F5 — Actor proof.** Revision 5 (owner-clarified (s2, 2026-09-24); OQ24
   split) replaces revision 4's single owner-gated merchant proof with two tasks.
   Revision 4's step "open the Actor PR in the separate Actor repository" is

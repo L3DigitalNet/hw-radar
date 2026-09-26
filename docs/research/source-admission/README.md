@@ -25,7 +25,13 @@ candidate. A record whose recommendation is `eligible` is the precondition for p
   its TTL is verified (MS-2 plan MS2-D-33, risk R20).
 - **No grandfathering.** An existing local connector is not admitted to an Actor path because it
   exists. If a review finds that an existing, disabled local connector conflicts with this
-  acquisition posture, record that finding separately (its own record or an open question).
+  acquisition posture, record that finding separately (its own record or an open question). The
+  2026-09-25 local-connector Terms review found exactly this for ServerPartDeals and
+  Seagate-recertified: [OQ31](../../resolved-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access)
+  retired both (permission-required — not production-enableable under current Terms, for any
+  execution venue) — `RETIRED_SOURCES` in `src/hw_radar/acquisition/admission.py`. Re-admission
+  needs a fresh source-admission review on materially changed Terms or written merchant
+  permission; nothing re-admits a retired source automatically.
 - **Newegg is excluded** (Terms of Use prohibit automated access and scraping; MS-2 plan R1).
 - **Public repository.** Record public URLs and quoted public terms only. No credentials, account
   identifiers, private hostnames, or private addresses.
