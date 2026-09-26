@@ -84,6 +84,7 @@ from hw_radar.matching.eval.report import (
     build_report,
     ms1_ratification_gate,
 )
+from hw_radar.matching.grammars import DECODER_VENDORS
 from hw_radar.matching.ladder import Outcome
 from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.types import Grain
@@ -446,8 +447,33 @@ def test_an_unseeded_manufacturer_key_aborts_the_run(db: None) -> None:
     every affected entry as a precision miss."""
     entries = load_corpus(SYNTHETIC_JSONL)
     meta = load_meta(SYNTHETIC_META)
-    with pytest.raises(UnknownManufacturerError):
-        evaluate_corpus(entries, meta)
+    labeled = next(e for e in entries if e.label.expected_target.manufacturer_key == "seagate")
+    typo = labeled.model_copy(
+        update={
+            "label": labeled.label.model_copy(
+                update={
+                    "expected_target": labeled.label.expected_target.model_copy(
+                        update={"manufacturer_key": "seagte"}
+                    )
+                }
+            )
+        }
+    )
+    with pytest.raises(UnknownManufacturerError, match="seagte"):
+        evaluate_corpus([typo], meta)
+
+
+def test_a_decoder_vendor_label_key_needs_no_seed(db: None) -> None:
+    """Owner Q3 labels HUS/HUH drives `hgst`; no seed names HGST, but the WD
+    grammar emits it and the resolver creates it on decode, so the run proceeds
+    on an empty catalog instead of aborting."""
+    entries = [
+        e
+        for e in load_corpus(SYNTHETIC_JSONL)
+        if e.label.expected_target.manufacturer_key in DECODER_VENDORS
+    ]
+    assert {e.label.expected_target.manufacturer_key for e in entries} >= {"hgst"}
+    evaluate_corpus(entries, load_meta(SYNTHETIC_META))
 
 
 def test_synthetic_fixture_cannot_reach_a_passing_gate(seeded_catalog: None) -> None:

@@ -43,17 +43,21 @@ from hw_radar.catalog.models import (
     SourceSite,
 )
 from hw_radar.matching.eval.corpus import CorpusEntry, CorpusMeta, GroundTruthLabel
+from hw_radar.matching.grammars import DECODER_VENDORS
 from hw_radar.matching.ladder import Outcome
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.matching.types import Grain
 
 
 class UnknownManufacturerError(ValueError):
-    """A label names a `manufacturer_key` absent from the seeded catalog.
+    """A label names a `manufacturer_key` the matcher can never produce: absent
+    from the seeded catalog and from the grammar decoders' vendor keys.
 
-    Hard failure, never a skipped entry: an unseeded key can only ever compare
+    Hard failure, never a skipped entry: such a key can only ever compare
     unequal, so tolerating it would quietly convert a labeling or seeding mistake
-    into a precision miss (or, worse, into a shrunken denominator).
+    into a precision miss (or, worse, into a shrunken denominator). Decoder
+    vendors count as known because the resolver creates them on a rung-2 decode
+    with no seed (an owner-ruled `hgst` label is correct, not a typo).
     """
 
 
@@ -87,8 +91,9 @@ def seeded_manufacturer_keys() -> set[str]:
 
 
 def validate_manufacturer_keys(entries: Iterable[CorpusEntry]) -> None:
-    """Raise UnknownManufacturerError if any label names an unseeded manufacturer."""
-    seeded = seeded_manufacturer_keys()
+    """Raise UnknownManufacturerError if any label names a manufacturer that is
+    neither seeded nor a grammar decoder's vendor."""
+    seeded = seeded_manufacturer_keys() | DECODER_VENDORS
     unknown = sorted(
         {
             key

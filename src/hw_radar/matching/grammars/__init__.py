@@ -18,6 +18,13 @@ _DECODERS: tuple[Callable[[str], DecodeResult | None], ...] = (
     toshiba.decode,
 )
 
+# Every manufacturer key a decoder can emit (DecodeResult.vendor). The resolver
+# creates these manufacturers on a rung-2 decode without any seed, so they are
+# valid label keys even when no seed document names them (HGST: the owner's Q3
+# ruling keeps HUS/HUH drives under `hgst`). The eval harness admits them;
+# tests/unit/test_grammars.py pins that each decoder stays inside this set.
+DECODER_VENDORS: frozenset[str] = frozenset({"seagate", "western_digital", "hgst", "toshiba"})
+
 
 def decode(normalized_token: str) -> DecodeResult | None:
     for decoder in _DECODERS:
