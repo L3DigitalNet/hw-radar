@@ -22,6 +22,12 @@ production refdata on the real draft corpus, so it is never authoritative for
 ratification. `_composite_run` re-checks the catalog before evaluating and a
 structural test pins which fixture the composite paths request, so pointing the
 gate back at a fixture fails a test.
+
+Two opt-in measurements ride the same composite path and never gate anything:
+`test_ms1e_corpus_measurement` (production behavior) and
+`test_category_would_accept_measurement`, which lifts one non-drive category's
+`auto_accept=False` inside the test only, to show which reviews are merely the
+R4 flag and which are real vetoes. Both skip unless their env vars are set.
 """
 
 from __future__ import annotations
@@ -31,7 +37,7 @@ import io
 import json
 import os
 from collections.abc import Sequence
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -46,6 +52,7 @@ from hw_radar.catalog.models import (
     Condition,
     DriveSpec,
     Listing,
+    ListingResolution,
     Manufacturer,
     MediaType,
     OfferSnapshot,
@@ -54,6 +61,7 @@ from hw_radar.catalog.models import (
     ProductModel,
     RetentionClass,
 )
+from hw_radar.matching import categories
 from hw_radar.matching.eval.corpus import (
     CorpusEntry,
     CorpusMeta,
@@ -101,6 +109,25 @@ FIXTURE_CATALOG_DIGEST = "0" * 64
 # Opt-in measurement (test_ms1e_corpus_measurement).
 MEASUREMENT_CORPUS_ENV = "HW_RADAR_MS1E_CORPUS"
 MEASUREMENT_REPORT_ENV = "HW_RADAR_MS1E_REPORT"
+# Opt-in would-accept measurement (test_category_would_accept_measurement); it
+# reads the corpus and report paths from the two variables above.
+CATEGORY_WOULD_ACCEPT_ENV = "HW_RADAR_CATEGORY_WOULD_ACCEPT"
+
+# Evidence keys that say why an edge is REVIEW rather than ACCEPT. Cross-file
+# contract: these are the keys `ladder.decide` and `resolver._apply_category_gates`
+# (plus the resolver's error fallback) write. A new gate key missing here shows up
+# as an empty `review_reason` on a REVIEW row, never as a wrong reason.
+REVIEW_REASON_KEYS = (
+    "veto",
+    "no_brand_evidence",
+    "brand_contradicts_exact_alias",
+    "conflicting_targets",
+    "brand_contradicts_decode",
+    "cross_category",
+    "acceptance_policy",
+    "auto_accept_disabled",
+    "error",
+)
 
 # One resolvable listing shape reused for the generated gate cases: it hits the
 # seeded ST16000NM001G alias at rung 1 and carries a factory-recert condition, so
@@ -740,6 +767,114 @@ def test_ms1e_corpus_measurement(production_catalog: str) -> None:
     )
 
 
+def _corpus_category(entries: Sequence[CorpusEntry]) -> str:
+    hints = {entry.listing.category_hint for entry in entries}
+    slug = next(iter(hints)) if len(hints) == 1 else None
+    if slug is None or slug == categories.DRIVE:
+        pytest.fail(
+            f"would-accept measurement needs one non-drive category_hint on every entry, "
+            f"got {sorted(str(hint) for hint in hints)}"
+        )
+    return slug
+
+
+def _review_reason(entry: CorpusEntry) -> dict[str, object]:
+    """The gate keys on the entry's current edge; empty when there is no edge (a
+    first-time miss writes none) or the edge is not a review."""
+    edge = ListingResolution.objects.filter(
+        listing__source_site__normalized_name=entry.source,
+        listing__source_listing_key=entry.listing.source_listing_key,
+        is_current=True,
+    ).first()
+    if edge is None:
+        return {}
+    return {key: edge.evidence[key] for key in REVIEW_REASON_KEYS if key in edge.evidence}
+
+
+def test_category_would_accept_measurement(
+    production_catalog: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opt-in: what a non-drive category corpus WOULD auto-accept with its R4
+    `auto_accept=False` lifted, through the exact composite path.
+
+    Skipped unless `HW_RADAR_CATEGORY_WOULD_ACCEPT=1`; corpus and report paths
+    come from `HW_RADAR_MS1E_CORPUS` / `HW_RADAR_MS1E_REPORT` as in
+    `test_ms1e_corpus_measurement`. Every entry must carry the same non-drive
+    `category_hint`; only that category's `auto_accept` is forced True, and only
+    via monkeypatch inside this test, so production behavior and every other test
+    are untouched. The AcceptancePolicy, cross-category guard and vetoes still
+    run, so an ACCEPT here is exactly what a ratified flip would accept. Each
+    prediction gains `review_reason` (the gate keys on its current edge, e.g.
+    `{"veto": ["sample"]}`). Evidence for an owner audit, never a ratification.
+
+        HW_RADAR_CATEGORY_WOULD_ACCEPT=1 \\
+        HW_RADAR_MS1E_CORPUS=/tmp/probe/corpus.jsonl \\
+        HW_RADAR_MS1E_REPORT=/tmp/probe/report.json \\
+        uv run pytest tests/db/test_ratification_corpus.py -k would_accept -s
+    """
+    if os.environ.get(CATEGORY_WOULD_ACCEPT_ENV) != "1":
+        pytest.skip(f"{CATEGORY_WOULD_ACCEPT_ENV} not set to 1")
+    corpus_path = os.environ.get(MEASUREMENT_CORPUS_ENV)
+    report_path = os.environ.get(MEASUREMENT_REPORT_ENV)
+    if not corpus_path or not report_path:
+        pytest.fail(f"{MEASUREMENT_CORPUS_ENV} and {MEASUREMENT_REPORT_ENV} must both be set")
+    jsonl = Path(corpus_path)
+    entries = load_corpus(jsonl)
+    meta = load_meta(jsonl.with_suffix(".meta.json"))
+    slug = _corpus_category(entries)
+    production_rules = categories.rules_for(slug)
+    if production_rules is None:
+        pytest.fail(f"category {slug!r} has no registered rules")
+    production_rules_for = categories.rules_for
+
+    def would_accept_rules_for(requested: str) -> categories.CategoryRules | None:
+        rules = production_rules_for(requested)
+        if rules is None or requested != slug:
+            return rules
+        return replace(rules, auto_accept=True)
+
+    # The resolver reads `categories.rules_for` as a module attribute on every
+    # listing (the registry holds factories for the same reason), so patching the
+    # function reaches it; the assertion below proves the patch took effect.
+    monkeypatch.setattr(categories, "rules_for", would_accept_rules_for)
+    predictions, report = _composite_run(entries, meta)
+    reasons = {entry.id: _review_reason(entry) for entry in entries}
+    still_disabled = sorted(
+        entry_id for entry_id, reason in reasons.items() if "auto_accept_disabled" in reason
+    )
+    assert still_disabled == [], (
+        f"auto_accept override did not reach the resolver: {still_disabled}"
+    )
+    payload = _report_payload(entries, predictions, report)
+    rows: list[dict[str, Any]] = payload["predictions"]
+    for row in rows:
+        row["review_reason"] = reasons[row["entry_id"]]
+    payload["evaluated_against"] = production_catalog
+    payload["would_accept"] = {
+        "category": slug,
+        "production_auto_accept": production_rules.auto_accept,
+        "measured_auto_accept": True,
+    }
+    Path(report_path).write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    reason_counts: dict[str, int] = {}
+    for reason in reasons.values():
+        for key in reason:
+            reason_counts[key] = reason_counts.get(key, 0) + 1
+    print(
+        json.dumps(
+            {
+                "category": slug,
+                "would_accepts": report.auto_accepts,
+                "correct_would_accepts": report.correct_auto_accepts,
+                "precision": report.precision,
+                "review_reasons": reason_counts,
+            },
+            indent=2,
+            default=str,
+        )
+    )
+
+
 # ---------------------------------------------------------------------------
 # The gate's catalog is the production import, and only that
 # ---------------------------------------------------------------------------
@@ -762,7 +897,14 @@ def test_the_catalog_guard_refuses_a_fixture_row_on_top_of_refdata(
         _composite_run([], load_meta(SYNTHETIC_META))
 
 
-@pytest.mark.parametrize("gate", [test_ms1_ratification_gate, test_ms1e_corpus_measurement])
+@pytest.mark.parametrize(
+    "gate",
+    [
+        test_ms1_ratification_gate,
+        test_ms1e_corpus_measurement,
+        test_category_would_accept_measurement,
+    ],
+)
 def test_composite_paths_request_the_production_catalog(gate: object) -> None:
     """Structural pin: a future edit pointing the gate at a test fixture fails here
     even while the committed corpus is absent and the gate itself skips."""
