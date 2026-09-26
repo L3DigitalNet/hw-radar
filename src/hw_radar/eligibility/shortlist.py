@@ -224,10 +224,12 @@ def shortlist(watch_id: int) -> list[ShortlistRow]:
     rows: list[ShortlistRow] = []
     for s in matches:
         e, listing, snapshot = s.evaluation, s.evaluation.listing, s.live.snapshot
-        # Must equal evaluate_listing's canonical offer text, or quantity and
-        # condition (and so meets_target) would be read differently here.
+        # Must equal evaluate_listing's canonical offer text and category (the
+        # watch's, which is the listing's dispatch category evaluate_listing
+        # evaluated it under), or quantity and condition (and so meets_target)
+        # would be read differently here.
         canonical = canonicalize_listing_text(listing.title_raw, listing.condition_label_raw)
-        facts = evaluate._offer_facts(listing, snapshot, canonical)
+        facts = evaluate._offer_facts(listing, snapshot, canonical, e.watch.category.slug)
         observed_at = None if snapshot is None else snapshot.observed_at
         site_id = cast("int", listing.source_site.pk)
         paused_reason = paused.get(site_id)

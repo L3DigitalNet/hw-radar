@@ -1268,7 +1268,12 @@ class WatchEvaluator:
         return evaluate_listing(listing_id)
 
 
-def _offer_facts(listing: Listing, snapshot: OfferSnapshot | None, canonical: str) -> OfferFacts:
+def _offer_facts(
+    listing: Listing,
+    snapshot: OfferSnapshot | None,
+    canonical: str,
+    category: str,
+) -> OfferFacts:
     price: Decimal | None = None
     shipping_known = False
     if snapshot is not None:
@@ -1285,22 +1290,30 @@ def _offer_facts(listing: Listing, snapshot: OfferSnapshot | None, canonical: st
         price_usd=price,
         shipping_known=shipping_known,
         # Quantity comes from the one quantity vocabulary the codebase has
-        # (matching.vocab); the category rules modules extract none.
-        quantity=vocab.extract(canonical).quantity,
+        # (matching.vocab), in its pricing reading: a count the title
+        # contradicts ("Lot of 2 ... (1pc)") is never a trusted divisor.
+        quantity=vocab.offer_quantity(canonical),
         stock_status=None if snapshot is None else snapshot.stock_status,
         is_international=listing.is_international,
-        # With the source's declared terms folded in, exactly as the resolver
-        # does, so a WD-store listing's condition here is the one its variant
-        # was materialized from.
-        condition=vocab.with_source_offer_terms(
-            vocab.offer_terms(canonical), listing.source_site.normalized_name
+        condition=_listing_attributes(
+            category, canonical, listing.source_site.normalized_name
         ).condition,
     )
 
 
-def _listing_attributes(category: str, canonical: str) -> ExtractedAttributes:
+def _listing_attributes(category: str, canonical: str, source_key: str) -> ExtractedAttributes:
+    """The listing's attributes exactly as the resolver reads them for its
+    variant: the category's own extract (drive's wider reference mask
+    included), then the source's declared offer terms.
+
+    Condition must come from here, not from the shared vocab.offer_terms: on
+    "WD Red Plus ... fit for used servers" the drive mask hides the "used" in
+    the drive-local reference phrase, so the resolver materialized the
+    store's factory recert while offer_terms read "used" (s8 Codex r1 finding
+    6). A category without rules reads nothing, as the resolver does."""
     rules = categories.rules_for(category)
-    return ExtractedAttributes() if rules is None else rules.extract(canonical)
+    extracted = ExtractedAttributes() if rules is None else rules.extract(canonical)
+    return vocab.with_source_offer_terms(extracted, source_key)
 
 
 def _is_expired(listing: Listing, now: datetime) -> bool:
@@ -1349,8 +1362,8 @@ def evaluate_listing(listing_id: int) -> ListingEvaluationResult:
     )
 
     canonical = canonicalize_listing_text(listing.title_raw, listing.condition_label_raw)
-    extracted = _listing_attributes(category, canonical)
-    facts = _offer_facts(listing, snapshot, canonical)
+    extracted = _listing_attributes(category, canonical, listing.source_site.normalized_name)
+    facts = _offer_facts(listing, snapshot, canonical, category)
     policy = policy_for(category)
     catalog_source: dict[str, object] = {
         "resolution_id": None if edge is None else edge.pk,

@@ -81,15 +81,19 @@ _CONDITIONS: tuple[tuple[re.Pattern[str], str, str | None, float], ...] = (
     (re.compile(r"\bserver pull\b|\bpull(?:ed)?\b|\bused\b"), "used", None, 0.8),
     # "new" asserts nothing in three positions, each excluded here rather than
     # left to the table order:
-    # - "like new" (a cosmetic grade);
-    # - after a percentage ("90%new", "95% new"): seller marketing for a used
-    #   drive (owner ruling Q7, MS-1e ebay-0261), not a condition, and it must
-    #   not fall through to any other condition either;
+    # - "like new" / "like-new" (a cosmetic grade; canonicalize_title keeps the
+    #   hyphen, so both separators are excluded);
+    # - next to a percentage on EITHER side ("90%new", "95 % new", "new 90%"):
+    #   seller marketing for a used drive (owner ruling Q7, MS-1e ebay-0261),
+    #   not a condition, and it must not fall through to any other condition;
     # - before "pull"/"pulled": "new pull" is a used server pull (Q7). The used
     #   rule above also claims it, but only because it happens to come first;
     #   the lookahead keeps a reordering from turning pulls into new drives.
     (
-        re.compile(r"\bfactory sealed\b|(?<!like )(?<!%)(?<!% )\bnew\b(?![- ]pull)"),
+        re.compile(
+            r"\bfactory sealed\b"
+            r"|(?<!like )(?<!like-)(?<!%)(?<!% )\bnew\b(?![- ]pull)(?! ?\d{1,3}(?:\.\d+)? ?%)"
+        ),
         "new",
         None,
         0.8,
@@ -105,31 +109,6 @@ _WARRANTY_CHANNELS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bno warranty\b"), "none"),
     (re.compile(r"\bmanufacturer warranty\b"), "manufacturer"),
     (re.compile(r"\bseller warranty\b"), "seller"),
-)
-
-# Quantity: digit-FIRST forms only. The 'xN' form (e.g. 'x16') is deliberately
-# unsupported — it collides with Seagate family names (Exos X16/X18/X24).
-# Ordered, first match wins, so an explicit lot form outranks a stray "Nx".
-#
-# Two readers with different bars. Eligibility divides the price by any
-# quantity at or above its policy confidence (lot pricing). ladder.decide
-# reviews every accept whose quantity is above 1 at LOT_MIN_CONFIDENCE or
-# more (owner ruling Q4: a lot is not a single-unit offer). Every form at that
-# bar was checked against all 718 MS-1e drive and 284 CPU corpus titles and
-# matched only real multi-unit offers or an explicit quantity of 1. The "Nx"
-# form sits below it on purpose: "32x 3.25ghz" is a CPU thread count (corpus
-# cpu-0010) and "2x amd epyc" a board bundle, so as a veto it would review
-# single-unit listings; "(lot of 4x)" is claimed by the lot form instead.
-LOT_MIN_CONFIDENCE: Final = 0.9
-_QUANTITIES: tuple[tuple[re.Pattern[str], float], ...] = (
-    (re.compile(r"\blot of (\d{1,3})x?\b"), 0.95),
-    # "Lot 10 Supermicro Seagate ..." (MS-1e ebay-0282/0288).
-    (re.compile(r"\blot (\d{1,3})x?\b"), 0.9),
-    (re.compile(r"\b(\d{1,3})[- ]pack\b"), 0.9),
-    (re.compile(r"\bqty:? ?(\d{1,3})\b"), 0.9),
-    # "2pcs AMD EPYC ...", "1pcs new Seagate ..." (cpu-0260, ebay-0296).
-    (re.compile(r"\b(\d{1,3}) ?pcs?\b"), 0.9),
-    (re.compile(r"\b(\d{1,3})\s?x\b"), 0.7),
 )
 
 # Longest-married-name first so 'western digital' wins over 'wd'.
@@ -180,6 +159,86 @@ _WD_BRAND_ADJACENT = re.compile(
     r"\b(?:wd|western digital)\s+"
     r"(red plus|red pro|red|gold|purple pro|purple|blue|black|green)\b"
 )
+
+
+# Quantity: digit-FIRST forms only. The 'xN' form (e.g. 'x16') is deliberately
+# unsupported — it collides with Seagate family names (Exos X16/X18/X24).
+# Ordered, first match wins, so an explicit lot form outranks a stray "Nx".
+#
+# Two readers with different bars. Eligibility divides the price by any
+# quantity at or above its policy confidence (lot pricing; offer_quantity).
+# ladder.decide reviews every accept whose quantity is above 1 at
+# LOT_MIN_CONFIDENCE or more (owner ruling Q4: a lot is not a single-unit
+# offer). Every form at that bar was checked against all 718 MS-1e drive and
+# 284 CPU corpus titles and matched only real multi-unit offers, board bundles
+# the CPU bundle veto already reviews, or an explicit quantity of 1.
+#
+# "Nx" is at the bar only when the count is tied to the item: followed by a
+# brand, a drive line, a drive/CPU noun or a TB capacity ("2x seagate",
+# "10x amd epyc", "2 x 16tb"; s8 Codex r1 finding 3). A bare "Nx" stays
+# below it: "32x 3.25ghz" is a CPU thread count (corpus cpu-0010). Capacity
+# is TB only: "2x16gb" / "2x 16gb" is a RAM kit shape, and eligibility reads
+# this table for every category, so a GB form would start dividing RAM kit
+# prices by their module count.
+LOT_MIN_CONFIDENCE: Final = 0.9
+_LOT_ITEM_WORDS: Final = (
+    "western digital",
+    "wd",
+    "sandisk",
+    "hgst",
+    "hitachi",
+    "seagate",
+    "toshiba",
+    "samsung",
+    "solidigm",
+    "intel",
+    "micron",
+    "crucial",
+    "kingston",
+    "kioxia",
+    "amd",
+    "epyc",
+    "xeon",
+    "ultrastar",
+    *(name for names in _DISTINCT_FAMILIES.values() for name in names),
+    r"hard (?:disk )?drives?",
+    r"hard disks?",
+    "hdds?",
+    "ssds?",
+    "drives?",
+    "disks?",
+    "cpus?",
+    "processors?",
+)
+# Offer words that may sit between the count and the item ("2x new seagate",
+# "3x brand new wd"): the count still describes the item, and requiring
+# adjacency would let "2x " prepended to a "New Seagate ..." title escape.
+_LOT_OFFER_WORDS: Final = (
+    r"(?:brand|new|used|sealed|genuine|original|oem|bulk|retail|pulled"
+    r"|refurb(?:ished)?|recert(?:ified)?|factory|enterprise|internal)"
+)
+_QUANTITIES: tuple[tuple[re.Pattern[str], float], ...] = (
+    (re.compile(r"\blot of (\d{1,3})x?\b"), 0.95),
+    # "Lot 10 Supermicro Seagate ..." (MS-1e ebay-0282/0288).
+    (re.compile(r"\blot (\d{1,3})x?\b"), 0.9),
+    (re.compile(r"\b(\d{1,3})[- ]pack\b"), 0.9),
+    (re.compile(r"\bqty:? ?(\d{1,3})\b"), 0.9),
+    # "2pcs AMD EPYC ...", "1pcs new Seagate ..." (cpu-0260, ebay-0296).
+    (re.compile(r"\b(\d{1,3}) ?pcs?\b"), 0.9),
+    (
+        re.compile(
+            r"\b(\d{1,3}) ?x (?:" + _LOT_OFFER_WORDS + r" )*"
+            r"(?:(?:" + "|".join(_LOT_ITEM_WORDS) + r")\b|\d+(?:\.\d+)? ?tb\b)"
+        ),
+        0.9,
+    ),
+    (re.compile(r"\b(\d{1,3})\s?x\b"), 0.7),
+)
+# Auction catalogue numbers ("Auction Lot 42:", "Lot #42", "Lot No. 42") name
+# the sale, not a unit count; they are blanked before the quantity scan. The
+# "lot N" form would otherwise read "auction lot 42" as 42 units, send a
+# single drive to lot review and divide its price by 42 in eligibility.
+_AUCTION_LOT = re.compile(r"\bauction lot (?:#|no\.? ?)?\d+|\blot (?:#|no\.? ?)\d+")
 
 
 def _alternation(names: tuple[str, ...]) -> re.Pattern[str]:
@@ -292,19 +351,89 @@ def _condition(title: str) -> tuple[Attribute[str] | None, Attribute[str] | None
     return None, None
 
 
-def extract_quantity(title: str) -> Attribute[int] | None:
-    """The listing's stated unit count, or None when it states none. Public for
-    the category rules modules, so every category reads the one table above."""
+def _condition_conflict(title: str) -> Attribute[tuple[str, ...]] | None:
+    """Every distinct condition the text asserts, when it asserts more than one.
+
+    Informational for ordinary listings: the first-match precedence of
+    _CONDITIONS still picks their condition. with_source_offer_terms and
+    source_offer_conflict read it, because a source's proven condition must
+    not be folded over a listing that also asserts another."""
+    found = [
+        (value, m.group(0))
+        for pattern, value, _channel, _confidence in _CONDITIONS
+        if (m := pattern.search(title)) is not None
+    ]
+    values = tuple(dict.fromkeys(value for value, _ in found))
+    if len(values) < 2:
+        return None
+    return Attribute(
+        value=values,
+        confidence=0.9,
+        layer=_LAYER,
+        source_text=", ".join(text for _, text in found),
+    )
+
+
+def _quantity_statements(title: str) -> tuple[Attribute[int] | None, tuple[int, ...]]:
+    """The first-match quantity of _QUANTITIES, plus every distinct count the
+    title states at LOT_MIN_CONFIDENCE or more; auction catalogue numbers are
+    blanked first."""
+    text = _AUCTION_LOT.sub(" ", title)
+    first: Attribute[int] | None = None
+    counts: set[int] = set()
     for pattern, confidence in _QUANTITIES:
-        m = pattern.search(title)
-        if m:
-            return Attribute(
-                value=int(m.group(1)),
-                confidence=confidence,
-                layer=_LAYER,
-                source_text=m.group(0),
-            )
-    return None
+        for m in pattern.finditer(text):
+            if first is None:
+                first = Attribute(
+                    value=int(m.group(1)),
+                    confidence=confidence,
+                    layer=_LAYER,
+                    source_text=m.group(0),
+                )
+            if confidence >= LOT_MIN_CONFIDENCE:
+                counts.add(int(m.group(1)))
+    return first, tuple(sorted(counts))
+
+
+def _conflict(counts: tuple[int, ...], confidence: float) -> Attribute[int]:
+    return Attribute(
+        value=max(counts),
+        confidence=confidence,
+        layer=_LAYER,
+        source_text="conflicting quantities: " + ", ".join(str(c) for c in counts),
+    )
+
+
+def extract_quantity(title: str) -> Attribute[int] | None:
+    """The listing's stated unit count for IDENTITY (ladder.decide's lot
+    review), or None when it states none. Public for the category rules
+    modules, so every category reads the one table above.
+
+    Conflicting counts at the lot bar ("Lot of 2 ... (1pc)") return the
+    largest at the bar: the title cannot prove a single unit, so the lot
+    review must fire. Pricing must not use this value as a divisor; it reads
+    offer_quantity instead."""
+    first, counts = _quantity_statements(title)
+    if len(counts) > 1:
+        return _conflict(counts, LOT_MIN_CONFIDENCE)
+    return first
+
+
+# Below every eligibility divisor bar (CategoryPolicy.listing_min_confidence),
+# so a conflicting count is never used to divide a price.
+_CONFLICT_PRICING_CONFIDENCE: Final = 0.5
+
+
+def offer_quantity(title: str) -> Attribute[int] | None:
+    """The listing's stated unit count for PRICING (eligibility's unit-price
+    divisor). Equal to extract_quantity except under conflicting counts, where
+    the count is unproven and is returned at a confidence no divisor bar
+    accepts: the undivided price is then only an upper bound on the unit
+    price, never a price divided by a count the title contradicts."""
+    first, counts = _quantity_statements(title)
+    if len(counts) > 1:
+        return _conflict(counts, _CONFLICT_PRICING_CONFIDENCE)
+    return first
 
 
 def _link_speed(title: str) -> Attribute[float] | None:
@@ -379,6 +508,25 @@ SOURCE_OFFER_PROVENANCE: Final[dict[str, SourceOfferProvenance]] = {
 }
 
 
+def source_offer_conflict(
+    extracted: ExtractedAttributes, source_key: str
+) -> tuple[str, ...] | None:
+    """The conditions a listing from a declared source asserts when it asserts
+    the declared condition AND another ("... Recertified" with a "Used"
+    condition label; "... Recertified New Pull"); None otherwise, and always
+    None for an undeclared source.
+
+    The resolver reviews an accept on such a listing at every rung, rung 0
+    included: the listing contradicts itself, so neither the store's variant
+    nor any first-match pick is a sellable identity it proves, and inheriting
+    a prior factory variant would keep the contradiction forever."""
+    declared = SOURCE_OFFER_PROVENANCE.get(source_key)
+    conflict = extracted.condition_conflict
+    if declared is None or conflict is None or declared.condition not in conflict.value:
+        return None
+    return conflict.value
+
+
 def with_source_offer_terms(extracted: ExtractedAttributes, source_key: str) -> ExtractedAttributes:
     """`extracted` with the source's declared offer terms folded in; unchanged
     for a source with no declaration.
@@ -391,13 +539,23 @@ def with_source_offer_terms(extracted: ExtractedAttributes, source_key: str) -> 
     for a title channel other than the declared one. A title that states no
     condition gets the declared one.
 
-    The ONE fold both offer-term readers apply: the resolver before the ladder
-    (so _materialize and _variant_reconsideration see the factory variant) and
-    eligibility's offer facts (so the condition clause reads the same
-    condition). A reader that skipped it would disagree with the variant."""
+    A title asserting the declared condition AND another (source_offer_conflict)
+    gets neither a condition nor a channel: the first-match table would pick
+    "recertified" and the fold would add "factory", proving a factory recert
+    the listing's own "Used" contradicts. Condition unknown keeps a
+    condition-restricted watch at `unknown`, and the resolver reviews.
+
+    The ONE fold both offer-term readers apply, each over the same category
+    extraction: the resolver before the ladder (so _materialize and
+    _offer_reconsideration see the factory variant) and eligibility's
+    _listing_attributes (so the condition clause reads the same condition). A
+    reader that skipped it, or folded over a different extraction, would
+    disagree with the variant."""
     declared = SOURCE_OFFER_PROVENANCE.get(source_key)
     if declared is None:
         return extracted
+    if source_offer_conflict(extracted, source_key) is not None:
+        return replace(extracted, condition=None, recert_channel=None)
     condition, channel = extracted.condition, extracted.recert_channel
     if condition is not None and condition.value != declared.condition:
         return extracted
@@ -429,6 +587,7 @@ def _offer_fields(masked: str) -> ExtractedAttributes:
     condition, recert_channel = _condition(masked)
     return ExtractedAttributes(
         condition=condition,
+        condition_conflict=_condition_conflict(masked),
         recert_channel=recert_channel,
         packaging=_first_pattern(masked, _PACKAGING, 0.85),
         warranty_months=_int_pattern(masked, _WARRANTY_YEARS, scale=12),

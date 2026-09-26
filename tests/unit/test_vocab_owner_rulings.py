@@ -137,9 +137,13 @@ def _corpus_lots(path: Path) -> dict[str, int]:
 def test_lot_forms_fire_only_on_the_corpus_multi_unit_titles() -> None:
     # The veto-safety audit, pinned: across all 718 drive and 284 CPU corpus
     # titles, every lot-grade quantity above 1 is a real multi-unit offer.
-    # Growing this set needs the same check of each new title.
+    # Growing this set needs the same check of each new title. The contextual
+    # "Nx" form (s8 Codex r1 finding 3) added ebay-0029 ("4x Hard Disk ...",
+    # labelled a multipack) and the four "Motherboard With 2x AMD EPYC"
+    # board bundles, which the CPU bundle veto already reviews.
     assert _corpus_lots(_DRIVE_CORPUS) == {
         "ebay-0011": 4,
+        "ebay-0029": 4,
         "ebay-0053": 4,
         "ebay-0199": 2,
         "ebay-0282": 10,
@@ -150,9 +154,13 @@ def test_lot_forms_fire_only_on_the_corpus_multi_unit_titles() -> None:
     assert _corpus_lots(_CPU_CORPUS) == {
         "cpu-0043": 4,
         "cpu-0140": 4,
+        "cpu-0207": 2,
+        "cpu-0248": 2,
         "cpu-0260": 2,
+        "cpu-0269": 2,
         "cpu-0270": 2,
         "cpu-0277": 2,
+        "cpu-0279": 2,
     }
 
 

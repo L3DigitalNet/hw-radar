@@ -69,6 +69,10 @@ class ExtractedAttributes:
     recording_tech: Attribute[str] | None = None  # cmr | smr
     security: Attribute[str] | None = None  # sed | fips | ise
     condition: Attribute[str] | None = None
+    # Every distinct condition the offer text asserts, set only when there are
+    # two or more (vocab._condition_conflict). `condition` keeps the
+    # first-match pick; only source-provenance folding acts on the conflict.
+    condition_conflict: Attribute[tuple[str, ...]] | None = None
     recert_channel: Attribute[str] | None = None  # factory | seller
     packaging: Attribute[str] | None = None  # retail | bulk
     warranty_months: Attribute[int] | None = None

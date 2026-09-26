@@ -586,9 +586,9 @@ def _prior_reconsideration(
     return None
 
 
-# Evidence key of an automated variant-grain accept's asserted variant
-# attributes (_asserted_variant_attributes), written by _apply and read by
-# _variant_reconsideration.
+# Evidence key of an automated model- or variant-grain accept's asserted
+# variant attributes (_asserted_variant_attributes), written by _apply and read
+# by _offer_reconsideration.
 _VARIANT_ATTRS_KEY: Final = "variant_attributes"
 
 
@@ -607,41 +607,78 @@ def _asserted_variant_attributes(extracted: ExtractedAttributes) -> dict[str, st
     return {name: attr.value for name, attr in claimed.items() if attr is not None}
 
 
-def _variant_reconsideration(
-    origin: ListingResolution, variant_id: int, asserted: dict[str, str]
-) -> dict[str, object] | None:
-    """Why a variant-grain automated prior must be re-decided because the
-    listing now asserts a different sellable identity; None to inherit.
-
-    Rung 0 checks only the model's hard attributes, and an unchanged accept
-    returns before _materialize, so without this a drive listed "New" and
-    edited to "For spares or repair" stayed on the new-condition variant on
-    every poll (round-5 R5-A): identifiers alone cannot see a condition change.
-    Re-deciding lets the ladder rematerialize the variant the listing now
-    asserts, or review.
-
-    No flapping: a difference from the variant's tuple is ignored when the
-    origin decision recorded exactly these asserted attributes, i.e. the ladder
-    already chose this variant knowing them (a variant-grain alias can name a
-    variant whose tuple differs from the title). Without that check such a
-    listing would re-decide and append an edge on every poll. Legacy variant
-    edges without the record re-decide once, only when they contradict."""
+def _variant_contradictions(variant_id: int, asserted: dict[str, str]) -> dict[str, str]:
+    """The asserted fields the variant's tuple does not equal, with the
+    variant's value. A variant field left "unknown" counts: a listing that
+    asserts a factory channel is not an unknown-channel offer."""
     variant = ProductVariant.objects.get(pk=variant_id)
-    prior_tuple: dict[str, str] = {
+    tuple_: dict[str, str] = {
         "condition": variant.condition,
         "packaging": variant.packaging,
         "recert_channel": variant.recert_channel,
         "warranty_channel": variant.warranty_channel,
     }
-    changed = sorted(name for name, value in asserted.items() if prior_tuple[name] != value)
-    if not changed or origin.evidence.get(_VARIANT_ATTRS_KEY) == asserted:
-        return None
-    return {
-        "reconsidered_prior": {
-            "reason": "variant_attributes_changed",
-            "prior_variant_attributes": {name: prior_tuple[name] for name in changed},
+    return {name: tuple_[name] for name, value in sorted(asserted.items()) if tuple_[name] != value}
+
+
+def _offer_reconsideration(
+    origin: ListingResolution,
+    prior: ladder.PriorResolution,
+    extracted: ExtractedAttributes,
+    variant_on_demand: bool,
+) -> dict[str, object] | None:
+    """Why a model- or variant-grain automated prior must be re-decided because
+    of what the listing now asserts about the offer; None to inherit.
+
+    Rung 0 checks only the model's hard attributes, and an unchanged accept
+    returns before _materialize, so without this:
+    - a drive listed "New" and edited to "For spares or repair" stayed on the
+      new-condition variant on every poll (round-5 R5-A): identifiers alone
+      cannot see a condition change;
+    - a model-grain accept ("90%NEW ...", "AMD EPYC 7763") never became the
+      variant a later explicit condition ("New Pull", "Used") materializes, so
+      the stored grain depended on observation order (s8 Codex r1 finding 1).
+    Re-deciding lets the ladder materialize the variant the listing now
+    asserts, or review.
+
+    Variant prior: re-decided whenever an asserted field differs from its
+    tuple. There is deliberately no "same recorded assertions" exception: it
+    froze a variant-alias accept whose tuple contradicted the listing (s8
+    finding 2). No flapping follows, because no accept can now record such a
+    contradiction: _run_ladder reviews a variant accept its listing
+    contradicts, and on-demand variants are built from the assertions.
+
+    Model prior: re-decided only when the category materializes variants and
+    the listing asserts a condition (the one field _materialize requires), and
+    the origin did not already decide on exactly these assertions. A title
+    that asserts no condition never re-decides, so an unstated condition keeps
+    inheriting like any cosmetic edit."""
+    asserted = _asserted_variant_attributes(extracted)
+    target = prior.target
+    if target.grain is Grain.VARIANT and target.variant_id is not None:
+        contradicted = _variant_contradictions(target.variant_id, asserted)
+        if not contradicted:
+            return None
+        return {
+            "reconsidered_prior": {
+                "reason": "variant_attributes_changed",
+                "prior_variant_attributes": contradicted,
+            }
         }
-    }
+    if (
+        target.grain is Grain.MODEL
+        and variant_on_demand
+        and extracted.condition is not None
+        and origin.evidence.get(_VARIANT_ATTRS_KEY) != asserted
+    ):
+        recorded = origin.evidence.get(_VARIANT_ATTRS_KEY)
+        return {
+            "reconsidered_prior": {
+                "reason": "variant_attributes_asserted",
+                "prior_variant_attributes": recorded if isinstance(recorded, dict) else None,
+            }
+        }
+    return None
 
 
 def _apply_category_gates(
@@ -743,7 +780,7 @@ def _run_ladder(
     if rules.fold_structured is not None and structured_mpn is not None:
         extracted = rules.fold_structured(extracted, structured_mpn)
     # Source-proven offer terms (the WD store's factory recert) are folded in
-    # before anything reads the offer fields: _variant_reconsideration and
+    # before anything reads the offer fields: _offer_reconsideration and
     # _materialize must see the same variant the eligibility evaluator does.
     extracted = vocab.with_source_offer_terms(extracted, listing.source_site.normalized_name)
     candidates = rules.extract_candidates(
@@ -764,18 +801,10 @@ def _run_ladder(
     identifiers = ladder.identity_identifiers(candidates, alias_hits, rules.decode)
     origin = _automated_origin(listing) if prior is not None else None
     reconsidered = _prior_reconsideration(origin, identifiers) if origin is not None else None
-    if (
-        reconsidered is None
-        and origin is not None
-        and prior is not None
-        and prior.target.grain is Grain.VARIANT
-        and prior.target.variant_id is not None
-    ):
+    if reconsidered is None and origin is not None and prior is not None:
         # After the identifier check: an identifier change already re-decides,
         # and its provenance is the more fundamental reason to record.
-        reconsidered = _variant_reconsideration(
-            origin, prior.target.variant_id, _asserted_variant_attributes(extracted)
-        )
+        reconsidered = _offer_reconsideration(origin, prior, extracted, rules.variant_on_demand)
     if reconsidered is not None:
         prior = None
         provenance.update(reconsidered)
@@ -788,6 +817,7 @@ def _run_ladder(
         veto=rules.veto,
         distinct_mpn_guard=rules.distinct_mpn_guard,
     )
+    verdict = _offer_contradiction_review(listing, extracted, verdict)
     if verdict.outcome is ladder.Outcome.ACCEPT and verdict.rung != 0:
         # The other half of _prior_reconsideration's contract: the set this
         # decision rests on, compared before any later rung-0 inheritance.
@@ -804,6 +834,41 @@ def _run_ladder(
     if reconsider:
         verdict = replace(verdict, evidence={**verdict.evidence, "reconsider": True})
     return canonical, extracted, candidates, verdict
+
+
+def _offer_contradiction_review(
+    listing: Listing, extracted: ExtractedAttributes, verdict: ladder.Verdict
+) -> ladder.Verdict:
+    """Demote an ACCEPT the listing's own offer assertions contradict.
+
+    - At every rung, rung 0 included: a declared source's listing asserting
+      its proven condition AND another (vocab.source_offer_conflict). Neither
+      reading is proven, and inheriting a prior factory variant would keep
+      the contradiction on every poll.
+    - At rungs 1-2: a variant-grain alias whose tuple contradicts an asserted
+      field (s8 Codex r1 finding 2). _materialize keeps an explicit variant
+      target as is, so accepting would file the listing under a sellable
+      identity it denies and _apply would record it as decided. A rung-0
+      variant prior needs no check here: _offer_reconsideration already
+      re-decides an automated one, and a manual one is the owner's call."""
+    if verdict.outcome is not ladder.Outcome.ACCEPT:
+        return verdict
+    conflict = vocab.source_offer_conflict(extracted, listing.source_site.normalized_name)
+    if conflict is not None:
+        return _review(verdict, offer_condition_conflict=list(conflict))
+    target = verdict.target
+    if (
+        verdict.rung != 0
+        and target is not None
+        and target.grain is Grain.VARIANT
+        and target.variant_id is not None
+    ):
+        contradicted = _variant_contradictions(
+            target.variant_id, _asserted_variant_attributes(extracted)
+        )
+        if contradicted:
+            return _review(verdict, variant_contradicted=contradicted)
+    return verdict
 
 
 def _category_source(hint: str | None) -> Literal["hint", "legacy_default"]:
@@ -1020,7 +1085,7 @@ def _apply(
         # also keeps the CR-001 fallback error-write free of _materialize.
         grain, family, model, variant, on_demand = ResolutionGrain.NONE, None, None, None, False
     # A re-decision (version or identifiers, see _prior_reconsideration;
-    # variant attributes, see _variant_reconsideration) that lands on the same
+    # offer attributes, see _offer_reconsideration) that lands on the same
     # target still writes an edge: it records the decision under the current
     # rules, identifiers and asserted attributes, which is what lets the NEXT
     # re-observation inherit at rung 0 — skipping it would re-run the full
@@ -1054,11 +1119,12 @@ def _apply(
         evidence["rung"] = verdict.rung
     if on_demand:
         evidence["variant_on_demand"] = True
-    if accepted and verdict.rung != 0 and grain == ResolutionGrain.VARIANT:
-        # _variant_reconsideration's record: the attributes this variant was
-        # decided on, so the next poll with the same assertions inherits it.
-        # Recorded here, not with the identifiers in _run_ladder, because only
-        # _materialize knows whether a model-grain verdict became a variant.
+    if accepted and verdict.rung != 0 and grain in (ResolutionGrain.VARIANT, ResolutionGrain.MODEL):
+        # _offer_reconsideration's record: the attributes this model or variant
+        # was decided on, so the next poll with the same assertions inherits
+        # it. Recorded here, not with the identifiers in _run_ladder, because
+        # only _materialize knows whether a model-grain verdict became a
+        # variant.
         evidence[_VARIANT_ATTRS_KEY] = _asserted_variant_attributes(extracted)
     if is_error and locked.resolution_grain != ResolutionGrain.NONE:  # pyright: ignore[reportUnnecessaryComparison] - basedpyright misreads a TextChoices member's runtime (value, label) tuple as its static type in `if` (not `assert`) context
         evidence["denorm_preserved"] = True
