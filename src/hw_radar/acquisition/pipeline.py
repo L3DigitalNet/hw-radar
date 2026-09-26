@@ -52,6 +52,7 @@ from django.utils import timezone
 from pydantic import ValidationError
 
 from hw_radar.acquisition import fx
+from hw_radar.acquisition.admission import ensure_not_retired
 from hw_radar.acquisition.classify import classify_exception, classify_response
 from hw_radar.acquisition.contracts import (
     SCOPE_OUTCOMES_KEY,
@@ -303,7 +304,9 @@ async def run_collection(
     """Fetch, classify, parse, persist, delist, resolve and evaluate one provider run.
 
     Always returns a recorded ScraperRun: every failure is classified and
-    finalized rather than raised (NFR-001). A successful run stores the
+    finalized rather than raised (NFR-001). The one exception is a retired
+    source (admission.RETIRED_SOURCES): RetiredSourceError is raised before any
+    ScraperRun row exists or the provider is touched. A successful run stores the
     provider's ProviderRunEvidence in detail_json["provider"] and the count of
     listings whose eligibility evaluation raised in
     detail_json["evaluator_errors"]; an evaluator failure never fails the run.
@@ -311,6 +314,15 @@ async def run_collection(
     `evaluator=None` means the production WatchEvaluator, not "no evaluation"
     (MS2-D-20); tests inject a fake through this parameter.
     """
+    # Retirement (OQ31) is refused here, the stage runner behind run_source and
+    # every CollectionProvider, not left to the scheduler alone: a direct
+    # run_source call or any future caller that skips the admission gates would
+    # otherwise send live requests to a site whose Terms bar collection. (The
+    # durable Apify importer does not pass through here; apify.jobs refuses a
+    # retired source at run start instead.) It precedes the ScraperRun insert
+    # so a refusal leaves no failed-run row that lifecycle or pilot reporting
+    # would read as a transport outage.
+    ensure_not_retired(provider.site_key)
     # Rejected: a null-object default that each caller must override. That is
     # exactly the omission plan review F-03 found on the heartbeat path — any
     # caller that forgot the argument would silently leave stale verdicts

@@ -14,6 +14,10 @@ Contract for callers:
   collect, so the poller builds no job for it however its SourceConfig reads.
 - `is_retired(source)` is independent of the matrix contents: a retired source
   stays unrunnable even if someone later edits its cells.
+- `ensure_not_retired(source)` raises RetiredSourceError for a retired source.
+  It is the collection-boundary check (run_collection, run_heartbeat and the
+  retired adapters' fetch/probe), below the orchestration gates that merely
+  decline to schedule a retired source.
 - `SourceConfig.enabled` remains the operator's go-live switch; the matrix is the
   ceiling above it. An admitted cell does not enable anything by itself, and an
   enabled row does not admit anything the matrix does not.
@@ -102,8 +106,28 @@ ADMISSION_MATRIX: Final[Mapping[tuple[str, str], CellStatus]] = MappingProxyType
 )
 
 
+class RetiredSourceError(RuntimeError):
+    """A collection was attempted for a retired source; nothing was fetched."""
+
+    def __init__(self, source: str) -> None:
+        super().__init__(f"{source} is {RETIRED_REASON}")
+        self.source = source
+
+
 def is_retired(source: str) -> bool:
     return source in RETIRED_SOURCES
+
+
+def ensure_not_retired(source: str) -> None:
+    """Raise RetiredSourceError when `source` is retired; otherwise do nothing.
+
+    The collection-boundary counterpart of the orchestration gates: the
+    pipeline's run_collection and run_heartbeat, and the retained retired
+    adapters' own network entry points, call it before any request or run row,
+    so a caller that bypasses the scheduler still cannot collect.
+    """
+    if is_retired(source):
+        raise RetiredSourceError(source)
 
 
 def is_admitted(source: str, category: str) -> bool:

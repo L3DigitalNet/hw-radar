@@ -220,7 +220,7 @@ class FakeHeartbeatAdapter:
     tests/db/test_poller_heartbeat.py's fake."""
 
     name = "fake-hb"
-    site_key = "serverpartdeals"
+    site_key = "wd-recertified"  # any non-retired site: retired keys are refused
     run_kind = RunKind.FULL
     expects_json = True
     last_parse_skipped = 0
@@ -268,7 +268,7 @@ class FakeHeartbeatAdapter:
 def test_heartbeat_fired_run_updates_watch_evaluation() -> None:
     watch = _drive_watch(DriveRequirementSpec(require_in_stock=True))
     config = SourceConfig.objects.select_related("source_site").get(
-        source_site__normalized_name="serverpartdeals"
+        source_site__normalized_name=FakeHeartbeatAdapter.site_key
     )
     adapter = FakeHeartbeatAdapter("out_of_stock")
     asyncio.run(run_heartbeat(adapter, config, NullResolver()))  # baseline sighting fires

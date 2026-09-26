@@ -13,6 +13,7 @@ from decimal import Decimal
 
 import pytest
 
+from hw_radar.acquisition.admission import RETIRED_SOURCES, RetiredSourceError
 from hw_radar.acquisition.contracts import NullResolver, ParsedListing, RawBatch, RawItem
 from hw_radar.acquisition.heartbeat import HeartbeatReading, run_heartbeat
 from hw_radar.acquisition.scheduling.buckets import BucketRegistry
@@ -106,15 +107,20 @@ class FakeHeartbeatAdapter:
         ]
 
 
-def _spd_config() -> SourceConfig:
+# Any heartbeat-enabled source the fake can stand in for, as long as it is not
+# retired: run_heartbeat and run_collection refuse a retired site_key outright.
+_HB_SITE = "wd-recertified"
+
+
+def _hb_config() -> SourceConfig:
     return SourceConfig.objects.select_related("source_site").get(
-        source_site__normalized_name="serverpartdeals"
+        source_site__normalized_name=_HB_SITE
     )
 
 
 def test_identical_probes_write_no_snapshot_or_event() -> None:
-    config = _spd_config()
-    adapter = FakeHeartbeatAdapter("serverpartdeals", [_reading("SKU-A", "in_stock")])
+    config = _hb_config()
+    adapter = FakeHeartbeatAdapter(_HB_SITE, [_reading("SKU-A", "in_stock")])
     asyncio.run(run_heartbeat(adapter, config, NullResolver()))  # baseline sighting fires once
     snaps = OfferSnapshot.objects.count()
     events = AvailabilityHeartbeatEvent.objects.count()
@@ -131,9 +137,32 @@ def test_identical_probes_write_no_snapshot_or_event() -> None:
     assert latest.decision == HeartbeatDecision.UNCHANGED
 
 
+@pytest.mark.parametrize("site_key", sorted(RETIRED_SOURCES))
+def test_retired_source_is_refused_before_the_probe(site_key: str) -> None:
+    # OQ31: the refusal must raise, not be classified as a probe failure and fed
+    # to backoff, and nothing may be probed or recorded for the retired site.
+    config = SourceConfig.objects.select_related("source_site").get(
+        source_site__normalized_name=site_key
+    )
+    probed: list[str] = []
+
+    class Recording(FakeHeartbeatAdapter):
+        async def probe(self) -> list[HeartbeatReading]:
+            probed.append(self.site_key)
+            return await super().probe()
+
+    adapter = Recording(site_key, [_reading("SKU-R", "in_stock")])
+    with pytest.raises(RetiredSourceError):
+        asyncio.run(run_heartbeat(adapter, config, NullResolver()))
+    assert probed == []
+    assert not AvailabilityHeartbeatObservation.objects.filter(
+        source_site__normalized_name=site_key
+    ).exists()
+
+
 def test_oos_to_instock_transition_writes_exactly_one_snapshot_and_event() -> None:
-    config = _spd_config()
-    adapter = FakeHeartbeatAdapter("serverpartdeals", [_reading("SKU-B", "out_of_stock")])
+    config = _hb_config()
+    adapter = FakeHeartbeatAdapter(_HB_SITE, [_reading("SKU-B", "out_of_stock")])
     asyncio.run(run_heartbeat(adapter, config, NullResolver()))  # baseline OOS
     snaps = OfferSnapshot.objects.filter(listing__source_listing_key="SKU-B").count()
     events = AvailabilityHeartbeatEvent.objects.filter(source_sku="SKU-B").count()

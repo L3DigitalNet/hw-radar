@@ -4,7 +4,8 @@ ADAPTERS is the schedulable registry: every run path the poller owns (scheduled
 polls, heartbeats, recovery probes) looks sources up here, so a key absent from
 it cannot be collected by the service. RETIRED_ADAPTERS keeps the OQ31-retired
 connectors importable for history, their tests and corpus provenance; nothing
-that collects reads it. The two are disjoint by construction, and
+that collects reads it, and their fetch()/probe() raise RetiredSourceError
+(parse() stays usable offline). The two are disjoint by construction, and
 admission.RETIRED_SOURCES is exactly RETIRED_ADAPTERS' keys (pinned by
 tests/unit/test_source_admission.py).
 

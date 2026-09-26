@@ -52,6 +52,7 @@ from hw_radar.acquisition import http
 from hw_radar.acquisition.contracts import ParsedListing, RawBatch, RawItem
 from hw_radar.acquisition.heartbeat import HeartbeatReading
 from hw_radar.catalog.models import RunKind
+from hw_radar.matching.normalize import canonicalize_title
 
 API_BASE = "https://api.westerndigital.com"
 SEARCH_URL = f"{API_BASE}/wdwebservices/v2/us/products/search"
@@ -90,7 +91,12 @@ _IN_STOCK_STATUSES = {"instock", "lowstock"}
 _RECERT_INTERNAL_SKU = re.compile(r"R(WD\d{2,4}[A-Z]{4})")
 # WD retail codes (WDBBGB0040HBK = My Book 4TB) identify consumer enclosures.
 _RETAIL_CODE = re.compile(r"R?WDB[A-Z]")
-_ENCLOSURE_TITLE = re.compile(r"\b(?:my\s+book|my\s+passport|elements)\b", re.IGNORECASE)
+# Matched against canonicalize_title(title), never the raw title: the matcher
+# reads that canonical form, so a raw-text guard misses what the matcher sees:
+# "My Book" in fullwidth forms NFKC-folds to "my book" yet slips a raw regex,
+# and would promote an MPN onto an enclosure. Canonical text is already
+# casefolded with single-space runs, hence no IGNORECASE and a literal space.
+_ENCLOSURE_TITLE = re.compile(r"\b(?:my book|my passport|elements)\b")
 
 
 def _product_url(code: str) -> str:
@@ -258,7 +264,7 @@ def _recert_mpn(code: str, title: str) -> str | None:
     # onto a bare-drive model and write enclosure prices into its history. The
     # title check stands alone so the refusal survives a future loosening of
     # _RECERT_INTERNAL_SKU or a store key that drifts off the WDB retail shape.
-    if _RETAIL_CODE.match(code) or _ENCLOSURE_TITLE.search(title):
+    if _RETAIL_CODE.match(code) or _ENCLOSURE_TITLE.search(canonicalize_title(title)):
         return None
     match = _RECERT_INTERNAL_SKU.fullmatch(code)
     return match.group(1) if match else None

@@ -87,6 +87,27 @@ def test_enclosure_title_refuses_even_an_internal_shaped_key() -> None:
     assert "mpn" not in attrs
 
 
+# Titles the raw regex missed but matching.normalize.canonicalize_title reads as
+# an enclosure: fullwidth forms (NFKC), an ideographic space and a no-break space
+# (both NFKC to U+0020), and a line break inside the name (whitespace collapse).
+UNICODE_ENCLOSURE_TITLES = [
+    "Ｍｙ Ｂｏｏｋ (Recertified)",  # noqa: RUF001
+    "Ｍｙ　Ｐａｓｓｐｏｒｔ (Recertified)",  # noqa: RUF001
+    "ＷＤ Ｅｌｅｍｅｎｔｓ Portable (Recertified)",  # noqa: RUF001
+    "My\u00a0Book Desktop (Recertified)",
+    "WD Elements\nDesktop Hard Drive (Recertified)",
+    "MY   PASSPORT Ultra (Recertified)",
+]
+
+
+@pytest.mark.parametrize("title", UNICODE_ENCLOSURE_TITLES)
+def test_enclosure_title_guard_reads_the_matchers_canonical_text(title: str) -> None:
+    # The guard must see what the matcher sees: fullwidth "My Book" canonicalizes
+    # to "my book", so an internal-shaped key under it must still promote nothing.
+    _, attrs = _parse_one("RWD40EFPX", title)
+    assert "mpn" not in attrs
+
+
 @pytest.mark.parametrize(("code", "title", "mpn"), INTERNAL)
 def test_promoted_mpn_is_a_wd_manufacturer_mpn_to_the_matcher(
     code: str, title: str, mpn: str
