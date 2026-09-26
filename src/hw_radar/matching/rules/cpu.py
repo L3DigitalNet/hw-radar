@@ -343,7 +343,9 @@ _WINDOW_QUALIFIERS: Final = frozenset(
     | {"a", "an", "the", "cpu"}
 )
 _NEGATION_WINDOW: Final = 3
-_WINDOW_TOKEN = re.compile(r"[a-z0-9]+")
+# One token per contraction, exactly as vocab's condition window reads it, so
+# "isn't X Y unlocked" spends the same window in both readers.
+_WINDOW_TOKEN = re.compile(r"\b(?:isn|aren|ain) ?'?t\b|[a-z0-9]+")
 _UNLOCK_PHRASES = re.compile(
     r"\bno[-\s]+(?:(?:vendor|psb)[-\s]+)?lock(?:ed)?\b"
     rf"|\b(?:not|isn\s?t)[-\s]+{_LOCK_QUALIFIER}?locked\b"
@@ -522,7 +524,7 @@ def _negated(text: str, start: int, stops: list[tuple[int, int]]) -> bool:
     for token in reversed(list(_WINDOW_TOKEN.finditer(text, 0, start))):
         if any(lo <= token.start() < hi for lo, hi in stops):
             return False
-        word = token.group(0)
+        word = re.sub(r"[ ']", "", token.group(0))
         if word in _NEGATORS:
             return True
         if word not in _WINDOW_QUALIFIERS:

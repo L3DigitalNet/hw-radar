@@ -398,6 +398,7 @@ _WINDOW_QUALIFIERS: Final = frozenset(
         "dell",
         "lenovo",
         "hp",
+        "hpe",
         "cisco",
         "factory",
         "manufacturer",
