@@ -196,6 +196,41 @@ def test_store_used_listing_with_no_tray_boilerplate_stays_used(
     assert _condition_outcome(seq.listing, (Condition.RECERTIFIED,)) == "no_match"
 
 
+@pytest.mark.parametrize(
+    ("title", "label"),
+    [
+        ("WD Red Plus WD20EFPX 2TB No Screws Used", ""),
+        ("WD Red Plus WD20EFPX 2TB No Screws", "Used"),
+    ],
+)
+def test_store_folded_factory_variant_withdraws_on_a_suppressed_condition(
+    seeded: None, wd_store: SourceSite, title: str, label: str
+) -> None:
+    """Codex s8 r5: the prior here comes from source provenance alone (the
+    title names no condition), so the denial of 'used' names nothing in its
+    tuple; it still withdraws the fold, and the stored variant must follow."""
+    seq = _Seq(wd_store, f"r5-8-{label}", "WD Red Plus WD20EFPX 2TB", attrs=_WD_ATTRS)
+    assert seq.resolve().evidence["outcome"] == "accept"
+    assert seq.variant_tuple() == ("recertified", "unknown", "factory", "unknown")
+
+    seq.edit(title, label=label)
+    edge = seq.resolve()
+    assert edge.evidence["reconsidered_prior"] == {
+        "reason": "variant_attributes_changed",
+        "prior_variant_attributes": {"condition": "recertified"},
+    }
+    assert seq.listing.resolution_grain == ResolutionGrain.MODEL
+    assert seq.variant_tuple() is None
+    assert _condition_outcome(seq.listing, (Condition.RECERTIFIED,)) == "unknown"
+    assert seq.resolve().pk == edge.pk
+    assert seq.resolve(reconsider=True).pk == edge.pk
+    assert seq.edges() == 2
+    fresh = _Seq(wd_store, f"r5-8-fresh-{label}", title, label=label, attrs=_WD_ATTRS)
+    fresh.resolve()
+    assert fresh.listing.resolution_grain == ResolutionGrain.MODEL
+    assert fresh.variant_tuple() is None
+
+
 # ── Finding 6: a denied channel withdraws the stored factory variant ────────
 
 _FACTORY = ("recertified", "unknown", "factory", "unknown")

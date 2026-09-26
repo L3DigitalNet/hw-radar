@@ -568,7 +568,13 @@ def _vendor_lock(title: str) -> Attribute[str] | None:
     both (a self-contradicting title is unknown, not whichever came first).
     A negated unlock never yields unlocked: it is unknown, or locked when
     explicit lock wording also stands; a negated lock likewise never yields
-    locked. See _LOCK_REFERENCE for the scope."""
+    locked. The asymmetry is deliberate: a window-denied lock also blocks an
+    unlocked reading, because the window may have borrowed an unrelated
+    negator ('Unlocked No Heatsink Dell Locked') and unlocked satisfies a hard
+    requirement; a denied unlock beside explicit lock wording may still read
+    locked, the safe error. Deliberately negated lock phrases ('no vendor
+    lock', 'not locked') are unlock evidence, not a denied lock. See
+    _LOCK_REFERENCE for the scope."""
     masked = _lock_wording(mask_reference_spans(title, _LOCK_REFERENCE))
     # The reading comes from the masked text; the veto from the whole title.
     # A reference mask may only ever turn a reading into unknown: wording it
@@ -580,8 +586,13 @@ def _vendor_lock(title: str) -> Attribute[str] | None:
     # locked servers') makes the unit's own reading unknown: a review, where
     # the other error makes a locked CPU eligible.
     whole = _lock_wording(title)
-    if masked.unlocked is not None and masked.locked is None and masked.unlock_denied is None:
-        if whole.unlock_denied is not None or whole.locked is not None:
+    if (
+        masked.unlocked is not None
+        and masked.locked is None
+        and masked.unlock_denied is None
+        and masked.lock_denied is None
+    ):
+        if any(x is not None for x in (whole.unlock_denied, whole.locked, whole.lock_denied)):
             return None
         m, value = masked.unlocked, VENDOR_UNLOCKED
     elif masked.locked is not None and masked.unlocked is None and masked.lock_denied is None:

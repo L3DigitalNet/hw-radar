@@ -109,7 +109,25 @@ def test_a_bare_unlock_is_never_a_reading() -> None:
 
 
 @pytest.mark.parametrize(
-    "suffix", ["never locked", "no longer vendor locked", "without vendor lock"]
+    "suffix",
+    [
+        "never locked",
+        "no longer vendor locked",
+        "without vendor lock",
+        # Codex s8 r5: an unregistered boilerplate negator borrowed by the
+        # window must not turn explicit lock wording into support for unlocked.
+        "No Heatsink Dell Locked",
+        "No Fan PSB Locked",
+    ],
 )
-def test_a_denied_lock_is_consistent_with_an_affirmative_unlock(suffix: str) -> None:
-    assert _lock(f"{_BASE} Unlocked | {suffix}") == U
+def test_a_window_denied_lock_blocks_an_unlocked_reading(suffix: str) -> None:
+    """Superseded s8 r3 rule: a window-denied lock used to be consistent with
+    'Unlocked'. The window cannot tell a real denial from a borrowed negator,
+    and unlocked satisfies a hard requirement, so it is unknown now."""
+    assert _lock(f"{_BASE} Unlocked | {suffix}") is None
+    assert _lock(f"{_BASE} {suffix} Unlocked") is None
+
+
+@pytest.mark.parametrize("phrase", ["no vendor lock", "not vendor locked", "non-locked"])
+def test_negated_lock_phrases_stay_unlock_evidence(phrase: str) -> None:
+    assert _lock(f"{_BASE} Unlocked {phrase}") == U

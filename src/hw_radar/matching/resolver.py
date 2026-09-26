@@ -59,6 +59,7 @@ from hw_radar.catalog.models import (
     AliasSourceKind,
     AliasType,
     Category,
+    Condition,
     CpuSpec,
     DriveSpec,
     GpuSpec,
@@ -745,7 +746,14 @@ def _variant_contradictions(
     8). Likewise "Recertified NOT Factory Recertified" asserts the stored
     factory variant's condition and no channel, so only the denied channel
     can withdraw it (Codex s8 r4 finding 6). A value merely no longer named is
-    still no contradiction."""
+    still no contradiction.
+
+    A listing that denies some condition and asserts none contradicts any
+    known stored condition, even one it does not name: its condition is now
+    unknown, not omitted. A source-folded WD-store variant (recertified/
+    factory, from provenance alone) edited to "... No Screws Used" denies
+    'used', which blocks the fold, so fresh resolution settles at model grain;
+    without this rule rung 0 kept the factory variant forever (Codex s8 r5)."""
     variant = ProductVariant.objects.get(pk=variant_id)
     tuple_: dict[str, str] = {
         "condition": variant.condition,
@@ -759,6 +767,12 @@ def _variant_contradictions(
     for name, values in denied.items():
         if tuple_[name] in values:
             contradicted[name] = tuple_[name]
+    if (
+        "condition" not in asserted
+        and denied.get("condition")
+        and tuple_["condition"] != Condition.UNKNOWN.value
+    ):
+        contradicted["condition"] = tuple_["condition"]
     return dict(sorted(contradicted.items()))
 
 

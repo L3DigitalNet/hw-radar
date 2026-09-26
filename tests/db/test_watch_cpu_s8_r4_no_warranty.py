@@ -114,6 +114,10 @@ _CONTRADICTORY = [
     " Unlocked No Reserve Dell Locked",
     " Unlocked Not Tested Dell Locked",
     " Unlocked No Returns Lenovo Locked",
+    # Codex s8 r5: phrases outside the registry still borrow the window's
+    # negator; the denied lock that results blocks the unlocked reading.
+    " Unlocked No Heatsink Dell Locked",
+    " Unlocked No Fan PSB Locked",
 ]
 
 
