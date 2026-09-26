@@ -120,18 +120,36 @@ def _hard_attrs_from_spec(spec: DriveSpec | None) -> ladder.HardAttrs:
     )
 
 
+def _family_key(family: ProductFamily | None) -> tuple[str, str] | None:
+    if family is None:
+        return None
+    return (family.manufacturer.normalized_name, family.normalized_name)
+
+
+def _drive_model_attrs(model: ProductModel | None) -> ladder.HardAttrs:
+    # The family rides along even when the model has no DriveSpec: the title
+    # family veto needs only the family, never the spec row.
+    attrs = _hard_attrs_from_spec(_spec_of(model))
+    return replace(attrs, family=_family_key(model.product_family if model else None))
+
+
 def _family_agreement_attrs(family_id: int | None) -> ladder.HardAttrs:
     """C.3.2 agreement set: a family-grain target vetoes only on fields where
-    ALL known specs under the family agree; disagreeing fields stay unknown."""
+    ALL known specs under the family agree; disagreeing fields stay unknown.
+    The family's own identity is always known, specs or not (a rung-2
+    provisional family has none)."""
 
     if family_id is None:
         return ladder.HardAttrs()
+    family = _family_key(
+        ProductFamily.objects.select_related("manufacturer").filter(pk=family_id).first()
+    )
     specs = [
         _hard_attrs_from_spec(spec)
         for spec in DriveSpec.objects.filter(product_model__product_family_id=family_id)
     ]
     if not specs:
-        return ladder.HardAttrs()
+        return ladder.HardAttrs(family=family)
 
     def agreed[T](values: set[T | None]) -> T | None:
         return next(iter(values)) if len(values) == 1 else None
@@ -142,6 +160,7 @@ def _family_agreement_attrs(family_id: int | None) -> ladder.HardAttrs:
         form_factor=agreed({a.form_factor for a in specs}),
         sector_format=agreed({a.sector_format for a in specs}),
         security=agreed({a.security for a in specs}),
+        family=family,
     )
 
 
@@ -238,7 +257,7 @@ _NO_SPEC = _SpecReader(
 # every resolution in it, and a reader without rules is dead code.
 _SPEC_READERS: Final[dict[str, _SpecReader]] = {
     categories.DRIVE: _SpecReader(
-        model_attrs=lambda model: _hard_attrs_from_spec(_spec_of(model)),
+        model_attrs=_drive_model_attrs,
         family_attrs=_family_agreement_attrs,
     ),
     gpu.SLUG: _satellite_reader(GpuSpec, "gpu_spec", _gpu_hard),
@@ -353,9 +372,9 @@ def _alias_hits(
         .filter(Q(source_site__isnull=True) | Q(source_site_id=source_site_id))
         .select_related(
             "product_variant__product_model__manufacturer",
-            "product_variant__product_model__product_family",
+            "product_variant__product_model__product_family__manufacturer",
             "product_model__manufacturer",
-            "product_model__product_family",
+            "product_model__product_family__manufacturer",
             "product_family__manufacturer",
         )
     )
@@ -405,6 +424,7 @@ def _alias_hits(
                 candidate_kind=candidate.kind,
                 candidate_vendor=candidate.vendor_hint,
                 candidate_structured=candidate.from_structured_field,
+                candidate_normalized=candidate.normalized,
             )
         )
     return hits
@@ -632,6 +652,7 @@ def _run_ladder(
         ),
         _first_decode(candidates, rules.decode),
         veto=rules.veto,
+        distinct_mpn_guard=rules.distinct_mpn_guard,
     )
     verdict = _apply_category_gates(listing, slug, rules, verdict)
     target = verdict.target

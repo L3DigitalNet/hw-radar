@@ -360,10 +360,12 @@ def _unreconciled_families(manufacturer_keys: list[str]) -> list[str]:
     """Families under seeded manufacturers with no models and no aliases: rung-2
     provisional rows the seed did not adopt. Reported for review, never touched.
 
-    Known artifact, not a bug: the WD grammar decodes to the broad family
-    'ultrastar', which seeds never adopt (seeds are per-HC-generation, e.g.
-    'Ultrastar DC HC550'). Once any WD listing family-resolves to 'ultrastar',
-    this list will PERMANENTLY include it on every future import."""
+    Seed family names equal the grammar-decoded family names (pinned by
+    tests/unit/test_grammar_seed_family_consistency.py), so a rung-2
+    'ultrastar' provisional family is adopted by the Ultrastar seeds rather
+    than listed here. A family a prior seed revision named differently (the
+    per-series 'ultrastar dc hc550' before the seeds moved the series name
+    into spec model_family) loses its models on re-import and is listed."""
 
     return sorted(
         ProductFamily.objects.filter(manufacturer__normalized_name__in=manufacturer_keys)

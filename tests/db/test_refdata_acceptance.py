@@ -97,10 +97,13 @@ def test_exos_recertified_lands_as_one_family_with_full_datasheet_fanout() -> No
 def test_hc550_starter_subset_spans_sata_and_sas_with_retail_pn_aliases() -> None:
     # D2a: HC550 is a BOUNDED STARTER SUBSET of WD's much larger first-party
     # matrix (14/16/18TB, 6 SATA + 9 SAS rows) — never call it full fan-out.
-    family = ProductFamily.objects.get(normalized_name="ultrastar dc hc550")
-    models = list(family.models.all())
+    # The HC550/HC560/HC580 documents share the 'Ultrastar' family (the line
+    # the grammar decodes), so the HC550 series is picked out by its spec.
+    family = ProductFamily.objects.get(normalized_name="ultrastar")
+    hc550 = family.models.filter(drive_spec__model_family="Ultrastar DC HC550")
+    models = list(hc550)
     assert len(models) == 4  # research-evidenced recert-market rows only
-    interfaces = set(family.models.values_list("drive_spec__interface", flat=True))
+    interfaces = set(hc550.values_list("drive_spec__interface", flat=True))
     assert interfaces == {"SATA 6Gb/s", "SAS 12Gb/s"}  # per-MPN interface fan-out
     retail_pns = sum(m.aliases.filter(alias_type="retail_pn").count() for m in models)
     assert retail_pns == 2  # both WD 0F… orderable part numbers

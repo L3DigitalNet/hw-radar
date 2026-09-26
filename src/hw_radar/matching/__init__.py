@@ -28,4 +28,7 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               category-local phrases keep clause punctuation.
 #               2026.09.2 also: CPU bundle/board, multi-model and structured-MPN
 #               sample vetoes; EPYC codenames skipped in the name candidate.
+#               2026.09.2 also: drive title-family contradiction and multi-MPN
+#               reviews; WD `ef` decodes only Red Plus datasheet suffixes;
+#               drive-local "fit for"/"suitable for"/leading-"for" masking.
 MATCHER_VERSION = "2026.09.2"

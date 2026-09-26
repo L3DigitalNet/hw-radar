@@ -20,7 +20,7 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from hw_radar.matching.normalize import mask_reference_spans
+from hw_radar.matching.normalize import DRIVE_REFERENCE_PHRASE, mask_reference_spans
 from hw_radar.matching.types import Attribute, ExtractedAttributes
 
 _LAYER = "vocab"
@@ -103,6 +103,66 @@ _BRANDS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\bkingston\b"), "kingston"),
     (re.compile(r"\bkioxia\b"), "kioxia"),
 )
+
+
+# Drive product-line names a title can assert, per canonical brand key. Values
+# are canonicalize_title() forms, the same strings seeds and grammars produce
+# for ProductFamily.normalized_name (ladder.family_conflicts compares them).
+# Family-level lines only: series names ("Exos X16", "DC HC550") fold into
+# their line via the longest-match scan, and rebrand predecessors
+# ("Constellation", "Enterprise Capacity") are deliberately absent, because the
+# same MPN was sold under both names (grammars/seagate.py) and naming the
+# older brand does not contradict the newer one. Anything unlisted stays
+# unknown and can never contradict.
+_DISTINCT_FAMILIES: dict[str, tuple[str, ...]] = {
+    "seagate": (
+        "ironwolf pro",
+        "ironwolf",
+        "exos",
+        "skyhawk ai",
+        "skyhawk",
+        "barracuda pro",
+        "barracuda",
+        "firecuda",
+        "nytro",
+    ),
+    "western_digital": ("ultrastar", "deskstar", "red plus", "red pro", "purple pro"),
+}
+# WD's colour-named lines are ordinary words ("gold", "black", "blue") that a
+# title uses for other things, so they count only right after the WD brand
+# word ("WD Red", "Western Digital Gold"). Multi-word lines ("red plus") are
+# distinctive enough to count anywhere and live in _DISTINCT_FAMILIES.
+_WD_BRAND_ADJACENT = re.compile(
+    r"\b(?:wd|western digital)\s+"
+    r"(red plus|red pro|red|gold|purple pro|purple|blue|black|green)\b"
+)
+
+
+def _alternation(names: tuple[str, ...]) -> re.Pattern[str]:
+    # Longest first, so "ironwolf pro" wins over its prefix "ironwolf" at one
+    # position and a title naming the Pro line never also mentions the base.
+    ordered = sorted(names, key=len, reverse=True)
+    return re.compile(r"\b(" + "|".join(re.escape(n) for n in ordered) + r")\b")
+
+
+_FAMILY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (brand, _alternation(names)) for brand, names in _DISTINCT_FAMILIES.items()
+)
+
+
+def _family_mentions(masked: str) -> Attribute[tuple[tuple[str, str], ...]] | None:
+    found: set[tuple[str, str]] = set()
+    for brand, pattern in _FAMILY_PATTERNS:
+        found.update((brand, m.group(1)) for m in pattern.finditer(masked))
+    found.update(("western_digital", m.group(1)) for m in _WD_BRAND_ADJACENT.finditer(masked))
+    if not found:
+        return None
+    return Attribute(
+        value=tuple(sorted(found)),
+        confidence=0.85,
+        layer=_LAYER,
+        source_text=", ".join(name for _, name in sorted(found)),
+    )
 
 
 def _capacity(title: str) -> Attribute[int] | None:
@@ -240,7 +300,10 @@ def offer_terms(title: str) -> ExtractedAttributes:
     and warranty from the one set of tables above, and the resolver's
     variant-on-demand path gets the same TextChoices literals for all of them.
     Every other field stays None. Both functions read these fields through
-    _offer_fields, so the two can never disagree on a title.
+    _offer_fields; they differ only in the mask: this reads the shared phrase
+    set, vocab.extract the wider drive set (normalize.DRIVE_REFERENCE_PHRASE),
+    so on a drive title with a drive-local phrase ("FOR Seagate ... NEW")
+    extract may blank a term this still reports.
 
     Offer terms are read with reference spans masked: "comparable to factory
     recertified drives" says nothing about this item's condition."""
@@ -264,7 +327,9 @@ def _offer_fields(masked: str) -> ExtractedAttributes:
 
 
 def extract(title: str) -> ExtractedAttributes:
-    masked = mask_reference_spans(title)
+    # The drive phrase set, same as mpn.extract_candidates: brand and MPN must
+    # read one masked text.
+    masked = mask_reference_spans(title, DRIVE_REFERENCE_PHRASE)
     offer = _offer_fields(masked)
     return replace(
         offer,
@@ -289,4 +354,8 @@ def extract(title: str) -> ExtractedAttributes:
         # Brand satisfies the rung-1 brand gate, so it is identity evidence
         # and reads the masked text like the offer terms.
         brand=_first_pattern(masked, _BRANDS, 0.9),
+        # Masked although it only ever vetoes: a line named in a comparison
+        # ("comparable to IronWolf Pro") says nothing about this item, and
+        # reading it would send every such Exos listing to review.
+        family_mentions=_family_mentions(masked),
     )

@@ -100,6 +100,10 @@ class CategoryRules:
     # `extract` keeps its title-only signature because drive binds
     # `vocab.extract` by identity and the eligibility evaluator calls it too.
     fold_structured: Callable[[ExtractedAttributes, str], ExtractedAttributes] | None = None
+    # ladder.decide's distinct-MPN guard: review an accept whose title names
+    # MPNs of more than one model. Drive only; the other extractors emit
+    # several MPN-kind candidates for one product (see ladder.decide).
+    distinct_mpn_guard: bool = False
 
 
 def _drive_rules() -> CategoryRules:
@@ -109,6 +113,7 @@ def _drive_rules() -> CategoryRules:
         extract_candidates=mpn.extract_candidates,
         decode=grammars.decode,
         veto=ladder.contradictions,
+        distinct_mpn_guard=True,
     )
 
 

@@ -13,14 +13,20 @@ outrank every title-mined token.
 Every title-mined pass reads the title with reference spans masked
 (normalize.mask_reference_spans): an MPN or OEM vendor word cited as "comparable
 to X" names another product, and mining it would hand the ladder a rung-1 alias
-hit or a rung-2 decode for the wrong item (MS-1e ebay-0021). The structured
+hit or a rung-2 decode for the wrong item (MS-1e ebay-0021). The drive phrase
+set (normalize.DRIVE_REFERENCE_PHRASE) must match vocab.extract's, so brand
+and MPN never disagree about which text is the listed product. The structured
 field is exempt — the merchant asserted it as this item's MPN."""
 
 from __future__ import annotations
 
 import re
 
-from hw_radar.matching.normalize import mask_reference_spans, normalize_alias_text
+from hw_radar.matching.normalize import (
+    DRIVE_REFERENCE_PHRASE,
+    mask_reference_spans,
+    normalize_alias_text,
+)
 from hw_radar.matching.types import MpnCandidate, TokenKind
 
 _MFR_SHAPES: tuple[tuple[str, re.Pattern[str]], ...] = (
@@ -87,7 +93,7 @@ def extract_candidates(
     # Masked AFTER the structured field and BEFORE every title pass, including
     # the OEM vendor gates: "compatible with Dell PowerEdge" must not open the
     # Dell/EMC gate for a bare number elsewhere in the title.
-    title = mask_reference_spans(title)
+    title = mask_reference_spans(title, DRIVE_REFERENCE_PHRASE)
     for vendor, pattern in _MFR_SHAPES:
         for m in pattern.finditer(title):
             add(

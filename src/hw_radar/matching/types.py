@@ -78,6 +78,12 @@ class ExtractedAttributes:
     # Non-drive categories only; the drive fields above stay the drive contract
     # and vocab.extract never sets this.
     category_attrs: CategoryAttributes | None = None
+    # Drive product-line names the title asserts, as (canonical brand key,
+    # canonical family name) pairs, e.g. (("western_digital", "red plus"),).
+    # Compared against the target family by ladder.family_conflicts; the
+    # family strings share canonicalize_title() form with ProductFamily
+    # .normalized_name and grammar family names.
+    family_mentions: Attribute[tuple[tuple[str, str], ...]] | None = None
 
 
 class TokenKind(StrEnum):

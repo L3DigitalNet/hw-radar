@@ -7,7 +7,9 @@ hit that contradicts extracted capacity goes to review, never into the price
 history (ADR-0019: false merges poison the moat asymmetrically; missed matches
 just queue). Likewise a brand contradiction never falls through to a weaker
 rung: exact hits that all contradict the listing's brand go to review, and a
-grammar decode whose vendor contradicts it never attaches at rung 2.
+grammar decode whose vendor contradicts it never attaches at rung 2. A title
+that names a sibling product line of the target's family (IronWolf Pro vs an
+IronWolf decode) is the same kind of conflict and reviews at every rung.
 
 Confidence constants are OQ-provisional tunables; ADR-0016 settings-row
 versions arrive with the rung-3/occurrence thresholds at MS-1c."""
@@ -70,6 +72,9 @@ class HardAttrs:
     sector_format: str | None = None
     security: str | None = None
     category: CategoryHardAttrs | None = None
+    # (brand key, ProductFamily.normalized_name) of the target's family; read
+    # only by `contradictions` against ExtractedAttributes.family_mentions.
+    family: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)
@@ -103,6 +108,9 @@ class AliasHit:
     candidate_kind: TokenKind = TokenKind.MANUFACTURER_MPN
     candidate_vendor: str = ""
     candidate_structured: bool = False
+    # The colliding candidate's normalized text: the distinct-MPN guard uses
+    # it to tell two spellings of one model from two different models.
+    candidate_normalized: str = ""
 
 
 @dataclass(frozen=True)
@@ -134,8 +142,43 @@ class Verdict:
     winning_hit: AliasHit | None = None
 
 
+def family_compatible(title_family: str, target_family: str) -> bool:
+    """Whether a family the title names can describe a target in `target_family`.
+
+    Compatible when equal, or when the title name is a whole-word prefix of the
+    target's, i.e. the title is LESS specific: "ironwolf" for an "ironwolf pro"
+    target, "red" for "red plus", "ultrastar" for a per-series family. The
+    reverse is a different sibling line, not a refinement: "ironwolf pro" in
+    the title of an IronWolf (non-Pro) decode names another product
+    (MS-1e ebay-0337, ST16000VN001 titled IronWolf Pro)."""
+
+    return title_family == target_family or target_family.startswith(f"{title_family} ")
+
+
+def family_conflicts(
+    extracted: ExtractedAttributes, brand: str | None, family: str | None
+) -> list[str]:
+    """Title family mentions of `brand` (or its lineage) incompatible with `family`.
+
+    Empty when either side is unknown: a title naming no family, a target with
+    no family, or mentions only of another manufacturer (brand contradictions
+    are the brand gate's job) can never conflict."""
+
+    if extracted.family_mentions is None or not brand or not family:
+        return []
+    return sorted(
+        mentioned
+        for mentioned_brand, mentioned in extracted.family_mentions.value
+        if brands_consistent(mentioned_brand, brand) and not family_compatible(mentioned, family)
+    )
+
+
 def contradictions(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[str]:
-    """Hard-attribute veto (C.3.2): fields where BOTH sides are known and disagree."""
+    """Hard-attribute veto (C.3.2): fields where BOTH sides are known and disagree.
+
+    `family` joins the drive fields: a title naming a sibling line of the
+    target's family is a contradiction like a wrong capacity, so it vetoes an
+    exact alias hit (rung 1) and an inherited prior (rung 0) alike."""
 
     vetoed: list[str] = []
     if extracted.capacity_bytes is not None and catalog.capacity_bytes is not None:
@@ -151,6 +194,8 @@ def contradictions(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[s
             and extracted_attr.value != catalog_value
         ):
             vetoed.append(name)
+    if catalog.family is not None and family_conflicts(extracted, *catalog.family):
+        vetoed.append("family")
     return vetoed
 
 
@@ -174,6 +219,32 @@ def _hypothesis(candidates: Sequence[MpnCandidate]) -> str:
     return candidates[0].normalized if candidates else ""
 
 
+def distinct_mpns(candidates: Sequence[MpnCandidate], alias_hits: Sequence[AliasHit]) -> list[str]:
+    """The title's manufacturer MPNs when they name more than one model, else [].
+
+    Two distinct normalized MPN-shaped tokens are two models unless every one
+    of them hits aliases of the same single catalog model. Only title-mined
+    MANUFACTURER_MPN candidates count: an OEM/customer part number ("0F38353"),
+    a repeated MPN, and an MPN's own dash-suffixed form ("WD60EFRX-68MYMN1",
+    whose suffix is not MPN-shaped) all leave one MPN. The structured field is
+    exempt; it is the merchant's single assertion."""
+
+    mpns = sorted(
+        {
+            c.normalized
+            for c in candidates
+            if c.kind is TokenKind.MANUFACTURER_MPN and not c.from_structured_field
+        }
+    )
+    if len(mpns) < 2:
+        return []
+    models = {h.target.model_id for h in alias_hits if h.candidate_normalized in mpns}
+    every_mpn_hit = all(any(h.candidate_normalized == m for h in alias_hits) for m in mpns)
+    if every_mpn_hit and len(models) == 1 and None not in models:
+        return []
+    return mpns
+
+
 def decide(
     extracted: ExtractedAttributes,
     candidates: Sequence[MpnCandidate],
@@ -182,6 +253,38 @@ def decide(
     decoded: DecodeResult | None,
     *,
     veto: Veto = contradictions,
+    distinct_mpn_guard: bool = False,
+) -> Verdict:
+    """Run rungs 0-2 and return the verdict.
+
+    `distinct_mpn_guard` (drive: categories.CategoryRules.distinct_mpn_guard)
+    demotes any ACCEPT to REVIEW when the title carries MPNs of more than one
+    model ("WD40EFPX/WD40EFZX"): the ladder would otherwise attach whichever
+    token hit or decoded first, an arbitrary pick between two products. Off by
+    default because non-drive extractors emit several MANUFACTURER_MPN
+    candidates for ONE product (a CPU's OPN plus its bare model number)."""
+
+    verdict = _decide(extracted, candidates, prior, alias_hits, decoded, veto=veto)
+    if distinct_mpn_guard and verdict.outcome is Outcome.ACCEPT:
+        mpns = distinct_mpns(candidates, alias_hits)
+        if mpns:
+            return Verdict(
+                Outcome.REVIEW,
+                Grain.NONE,
+                rung=verdict.rung,
+                evidence={**verdict.evidence, "multiple_mpns": mpns},
+            )
+    return verdict
+
+
+def _decide(
+    extracted: ExtractedAttributes,
+    candidates: Sequence[MpnCandidate],
+    prior: PriorResolution | None,
+    alias_hits: Sequence[AliasHit],
+    decoded: DecodeResult | None,
+    *,
+    veto: Veto,
 ) -> Verdict:
     evidence: dict[str, object] = {"mpn_hypothesis": _hypothesis(candidates)}
     if decoded is not None:
@@ -311,6 +414,24 @@ def decide(
                 evidence={
                     **evidence,
                     "brand_contradicts_decode": {"brand": brand, "vendor": decoded.vendor},
+                },
+            )
+        conflicting = family_conflicts(extracted, decoded.vendor, decoded.family_name)
+        if conflicting:
+            # The decode and the title name different lines of one maker
+            # ("IronWolf Pro 16TB ST16000VN001", VN decoding IronWolf): one of
+            # them is wrong, and attaching the decoded family would file the
+            # listing under a line its own title disowns.
+            return Verdict(
+                Outcome.REVIEW,
+                Grain.NONE,
+                rung=2,
+                evidence={
+                    **evidence,
+                    "family_contradicts_decode": {
+                        "title_families": conflicting,
+                        "decoded_family": decoded.family_name,
+                    },
                 },
             )
         if (

@@ -224,9 +224,14 @@ _HIST_BOILERPLATE = re.compile(
     r"ships?\s+(?:fast|free|today|same\s+day)|best\s+offer|top\s+seller|"
     r"us\s+seller|hot\s+deal)\b"
 )
+# Every registered phrase, so the partition below routes a phrase-bearing title
+# out of the byte-identical set: the shared ones, CPU's "oem version of", and
+# the drive-local "fit for" / "suitable for" (适用于 folds to it) plus a
+# first-token "for" (except "for parts").
 _HIST_PHRASE = re.compile(
     r"\b(?:comparable to|compatible with|replacement for|equivalent to|equiv to|"
-    r"alternative to|substitute for|replaces|oem version of)\b"
+    r"alternative to|substitute for|replaces|oem version of|fit for|suitable for)\b"
+    r"|^for\b(?!\s+parts\b)|适用于"
 )
 
 
@@ -246,7 +251,7 @@ def _corpus_rows() -> list[tuple[Path, str, str]]:
     return rows
 
 
-def _no_mask(text: str) -> str:
+def _no_mask(text: str, _phrases: object = None) -> str:
     return text
 
 
@@ -271,7 +276,10 @@ def test_phrase_free_corpus_titles_are_byte_identical(monkeypatch: pytest.Monkey
     contributing: set[Path] = set()
     phrase_titles: set[str] = set()
     for path, title, label in _corpus_rows():
-        if _HIST_PHRASE.search(_historical_canonical(title)) is not None:
+        if (
+            _HIST_PHRASE.search(_historical_canonical(title)) is not None
+            or _HIST_PHRASE.search(title.casefold()) is not None
+        ):
             phrase_titles.add(title)
             continue
         contributing.add(path)

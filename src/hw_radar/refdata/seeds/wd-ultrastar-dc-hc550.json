@@ -2,7 +2,7 @@
   "schema": "hw-radar.refdata.seed/v1",
   "manufacturer_name": "Western Digital",
   "manufacturer_key": "western_digital",
-  "family_name": "Ultrastar DC HC550",
+  "family_name": "Ultrastar",
   "provenance": {
     "source_kind": "first_party_datasheet",
     "sources": [

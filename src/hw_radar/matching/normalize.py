@@ -46,7 +46,8 @@ _BOILERPLATE = re.compile(
 # tests/unit/test_reference_context.py. Rejected as too ambiguous: bare
 # 'replacement' ("EMC 005049070 replacement drive" is the drive itself), bare
 # 'compatible' / 'for' / 'fits' / 'works with' (routinely describe the listed
-# drive's own use: "NAS drive for Synology").
+# drive's own use: "NAS drive for Synology"). The drive layers mask bare 'for'
+# only as the title's first token (_CATEGORY_LEADING_REFERENCE_WORDS).
 _REFERENCE_PHRASES: tuple[str, ...] = (
     "comparable to",
     "compatible with",
@@ -68,35 +69,70 @@ _REFERENCE_PHRASES: tuple[str, ...] = (
 # marker — review finding N2). A static tuple, not registration at call time:
 # canonical text must not depend on which rule modules happen to be imported.
 #   "oem version of" — rules/cpu.py (a different CPU SKU, e.g. 7J13 vs 7763).
-_CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of",)
+#   "fit for", "suitable for" — drive (DRIVE_REFERENCE_PHRASE): eBay resellers
+#       title compatible or look-alike stock "FIT FOR Seagate Exos ..." (MS-1e
+#       ebay-0263, ebay-0463). Drive-local, not shared: the CPU and other
+#       categories' masking (and so their pinned decisions) stay unchanged.
+_CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of", "fit for", "suitable for")
+
+# Words that open a reference span only as the FIRST token of the canonical
+# title, registered like _CATEGORY_REFERENCE_PHRASES and for the same reason.
+#   "for" — drive: "FOR Seagate Exos X14 ... ST12000NM0008 NEW" sells a
+#       compatible part, not the cited drive (MS-1e ebay-0190/0240/0387).
+#       Mid-title "for" stays unmasked: "ST4000NM000A 4TB for Dell server" is
+#       the drive itself. "for parts" is condition vocabulary (vocab
+#       _CONDITIONS), never a reference, so it is excluded.
+_CATEGORY_LEADING_REFERENCE_WORDS: tuple[str, ...] = ("for",)
+_LEADING_EXCLUSIONS = r"(?!\s+parts\b)"
+
+# Non-ASCII reference phrases, folded to their registered ASCII form BEFORE
+# noise stripping, which would otherwise erase them and hand the cited
+# product's MPN to identity extraction ("全新 适用于 Seagate ST2000NX0253",
+# MS-1e ebay-0294). 适用于 = "suitable for".
+_PHRASE_FOLDS: tuple[tuple[str, str], ...] = (("适用于", " suitable for "),)
 
 
-def _phrase_pattern(phrases: tuple[str, ...]) -> re.Pattern[str]:
+def _phrase_pattern(phrases: tuple[str, ...], leading: tuple[str, ...] = ()) -> re.Pattern[str]:
     alternation = "|".join(re.escape(p) for p in phrases)
-    return re.compile(rf"\b(?:{alternation})\b")
+    pattern = rf"\b(?:{alternation})\b"
+    if leading:
+        # `^` without MULTILINE matches only at index 0 even when
+        # mask_reference_spans resumes the search at a later `pos`, so a
+        # leading word can open at most the first span.
+        words = "|".join(re.escape(w) for w in leading)
+        pattern = rf"^(?:{words})\b{_LEADING_EXCLUSIONS}|{pattern}"
+    return re.compile(pattern)
 
 
-def reference_phrase_pattern(*extra: str) -> re.Pattern[str]:
+def reference_phrase_pattern(*extra: str, leading: tuple[str, ...] = ()) -> re.Pattern[str]:
     """The shared reference-phrase pattern, widened by category-local phrases.
 
     For a category whose titles cite other products in a phrase the shared
-    (drive) list must not carry. Build it once at import and pass it to
+    list must not carry. Build it once at import and pass it to
     mask_reference_spans(phrases=...); with no extras it is the shared pattern.
-    Raises ValueError for an extra not in _CATEGORY_REFERENCE_PHRASES, since
-    canonicalize_title would not preserve that phrase's clause boundaries.
+    `leading` words open a span only as the title's first token. Raises
+    ValueError for an extra or leading word not registered in
+    _CATEGORY_REFERENCE_PHRASES / _CATEGORY_LEADING_REFERENCE_WORDS, since
+    canonicalize_title would not preserve its clause boundaries.
     """
     unregistered = [p for p in extra if p not in _CATEGORY_REFERENCE_PHRASES]
+    unregistered += [w for w in leading if w not in _CATEGORY_LEADING_REFERENCE_WORDS]
     if unregistered:
         raise ValueError(
             f"reference phrases {unregistered!r} must be added to "
-            "normalize._CATEGORY_REFERENCE_PHRASES"
+            "normalize._CATEGORY_REFERENCE_PHRASES or _CATEGORY_LEADING_REFERENCE_WORDS"
         )
-    return _phrase_pattern((*_REFERENCE_PHRASES, *extra))
+    return _phrase_pattern((*_REFERENCE_PHRASES, *extra), leading)
 
 
 _REFERENCE_PHRASE = reference_phrase_pattern()
+# The drive identity layers' set (mpn.extract_candidates, vocab.extract): the
+# shared phrases plus the drive-local ones registered above.
+DRIVE_REFERENCE_PHRASE = reference_phrase_pattern("fit for", "suitable for", leading=("for",))
 # The canonicalization trigger: every phrase ANY category masks.
-_ANY_REFERENCE_PHRASE = _phrase_pattern((*_REFERENCE_PHRASES, *_CATEGORY_REFERENCE_PHRASES))
+_ANY_REFERENCE_PHRASE = _phrase_pattern(
+    (*_REFERENCE_PHRASES, *_CATEGORY_REFERENCE_PHRASES), _CATEGORY_LEADING_REFERENCE_WORDS
+)
 # Raw clause punctuation that _NOISE would erase. A comma between two digits is
 # a thousands separator ("1,000GB"), not a clause break.
 _CLAUSE_PUNCT = re.compile(r"[;|]|(?<!\d),|,(?!\d)")
@@ -111,15 +147,19 @@ def _strip_noise(text: str) -> str:
 def canonicalize_title(text: str) -> str:
     """Return the N1 canonical form every extraction layer reads.
 
-    NFKC, dash folding, casefold, boilerplate removal, then every character
+    NFKC, dash folding, casefold, non-ASCII reference-phrase folding
+    (_PHRASE_FOLDS), boilerplate removal, then every character
     outside the MPN/capacity alphabet becomes a space. One exception keeps
     reference masking honest: when the result contains a reference phrase
-    (shared or category-local), raw clause punctuation (",", ";", "|") is
+    (shared or category-local, or a registered leading word as the first
+    token), raw clause punctuation (",", ";", "|") is
     rewritten to " - " instead of being erased, so mask_reference_spans can
     still see where the cited clause ends. A title with no reference phrase is canonicalized exactly as
     if the exception did not exist."""
 
     folded = unicodedata.normalize("NFKC", text).translate(_DASHES).casefold()
+    for phrase, ascii_form in _PHRASE_FOLDS:
+        folded = folded.replace(phrase, ascii_form)
     # Boilerplate BEFORE noise-stripping: patterns like 'l@@k' contain characters
     # the noise pass removes — the other order makes them unreachable.
     cleaned = _BOILERPLATE.sub(" ", folded)

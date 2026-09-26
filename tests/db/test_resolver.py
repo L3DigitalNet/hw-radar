@@ -459,13 +459,13 @@ def test_reconsider_accept_rehit_same_target_stamps_without_new_edge(
 
 
 def test_rung2_decode_capacity_contradiction_vetoes_to_review(site: SourceSite) -> None:
-    """Rung-2 family branch: WD20EFRX decodes to family 'red' at 2 TB
+    """Rung-2 family branch: WD20EFZX decodes to family 'red plus' at 2 TB
     (community-corroborated). A title asserting a different capacity is a
     decoder-vs-extracted contradiction, so the decode must NOT be adopted as a
     provisional family — it vetoes to REVIEW (ADR-0019 rule 3: never guess
     against contradicting evidence). This is the only rung where the veto
     compares the DECODER's capacity, not a catalog spec's."""
-    listing = _listing(site, "cap-veto-1", "WD Red 8TB WD20EFRX SATA NAS Hard Drive")
+    listing = _listing(site, "cap-veto-1", "WD Red Plus 8TB WD20EFZX SATA NAS Hard Drive")
     CatalogResolver().resolve_listing(listing.pk)
     edge = _edge(listing, is_current=True)
     assert edge.grain == ResolutionGrain.NONE  # not accepted as a provisional family
