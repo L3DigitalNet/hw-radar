@@ -24,9 +24,10 @@ from hw_radar.matching.types import (
     TokenKind,
 )
 
-_EVIDENCE = Path(__file__).resolve().parents[2] / "docs" / "evidence"
-_DRIVE_CORPUS = _EVIDENCE / "2026-09-26-ms1e-expanded-corpus.jsonl"
-_CPU_CORPUS = _EVIDENCE / "2026-09-26-cpu-epyc-draft-corpus.jsonl"
+_REPO = Path(__file__).resolve().parents[2]
+# The ratified MS-1e corpus is the ADR-0019 gate fixture; the CPU corpus stays evidence.
+_DRIVE_CORPUS = _REPO / "tests" / "fixtures" / "matching_corpus" / "corpus.jsonl"
+_CPU_CORPUS = _REPO / "docs" / "evidence" / "2026-09-26-cpu-epyc-draft-corpus.jsonl"
 
 
 def _x(title: str) -> ExtractedAttributes:

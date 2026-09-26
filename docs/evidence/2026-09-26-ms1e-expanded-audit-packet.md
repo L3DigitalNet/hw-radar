@@ -9,9 +9,10 @@ ADR 0019 stays `proposed`. Sections 1–6 below are the pre-ruling packet, kept 
 
 Files:
 
-- Corpus: [`2026-09-26-ms1e-expanded-corpus.jsonl`](2026-09-26-ms1e-expanded-corpus.jsonl)
-  (`corpus_version` `ms1e-2026-09-26`).
-- Manifest: [`2026-09-26-ms1e-expanded-corpus.meta.json`](2026-09-26-ms1e-expanded-corpus.meta.json).
+- Corpus: [`corpus.jsonl`](../../tests/fixtures/matching_corpus/corpus.jsonl)
+  (`corpus_version` `ms1e-2026-09-26`). Moved from `docs/evidence/` on 2026-09-26 (session 9) to the
+  path `test_ms1_ratification_gate` reads, so the gate runs on every suite run.
+- Manifest: [`corpus.meta.json`](../../tests/fixtures/matching_corpus/corpus.meta.json).
 - Earlier packet (125 rows, owner audit applied):
   [`2026-09-25-ms1e-audit-packet.md`](2026-09-25-ms1e-audit-packet.md).
 

@@ -10,16 +10,16 @@
     "seagate-recertified": 0,
     "ebay": 543
   },
-  "matcher_version": "unevaluated",
+  "matcher_version": "2026.09.3",
   "ratification_sources": [
     "ebay",
     "goharddrive",
     "wd-recertified"
   ],
   "audit_rollup": {
-    "claude_draft": 291,
+    "claude_draft": 283,
     "owner_confirmed": 303,
-    "owner_corrected": 124
+    "owner_corrected": 132
   },
   "refdata_drive_digest": "0f2db1a790c5eb0ba6d4f2e3673b8d10163518c98a917c7e338b02498ed4c6ce"
 }
