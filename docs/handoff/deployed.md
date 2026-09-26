@@ -130,7 +130,7 @@ missing code:
 - ServerPartDeals, goHardDrive, WD, and Seagate gate on the same ratification (all sources ship
   disabled until it passes; `AGENTS.md`, MS-2 plan risk R5) and on the SA-004 checklist above.
 - ServerPartDeals and Seagate are additionally blocked by
-  [OQ31](../open-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access):
+  [OQ31](../resolved-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access):
   their current Terms prohibit automated access (reviewed 2026-09-25).
 - eBay additionally requires this ratification step; per the enable order in this document, it is
   enabled last regardless.

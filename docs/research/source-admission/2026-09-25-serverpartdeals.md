@@ -197,4 +197,4 @@ collections.
 F2 outcome: no change to the connector. Technical breadth exists (RAM, some GPU), but the Terms prohibit
 the automated collection that any breadth sweep would perform, so the connector is not broadened. The
 existing drive connector's own conflict with these Terms is recorded as
-[OQ31](../../open-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access).
+[OQ31](../../resolved-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access).

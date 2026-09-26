@@ -3,7 +3,7 @@
 This directory holds one **source-admission record** per candidate source that Hardware Radar
 might collect through one of its own private Apify Actors in production. The requirement comes
 from the owner's 2026-09-24 decisions: [ADR 0021's 2026-09-24 amendment](../../adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-24-actor-ownership-billing-cycle-budget-and-actor-proof-owner-clarification),
-[OQ24](../../open-questions.md#oq24--production-actor-backed-merchant-source-admission), and
+[OQ24](../../resolved-questions.md#oq24--production-actor-backed-merchant-source-admission), and
 MS2-D-44 in the [MS-2 plan](../../superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md).
 
 A record informs the owner's decision; it does not make it. The owner answers OQ24 for a

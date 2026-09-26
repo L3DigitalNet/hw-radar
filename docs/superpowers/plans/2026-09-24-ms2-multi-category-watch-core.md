@@ -7017,7 +7017,7 @@ follow-up R12-01).**
     and "any automated use of the Service", so the connector is not broadened
     ([record](../../research/source-admission/2026-09-25-serverpartdeals.md)). The
     existing drive connector's own conflict is
-    [OQ31](../../open-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access).
+    [OQ31](../../resolved-questions.md#oq31--existing-local-connectors-whose-terms-prohibit-automated-access).
 - **F3 — Measurement.** `pilot_report` summarizes, per source and provider:
   runs, completeness distribution, identifier (MPN) coverage, condition and
   shipping presence, freshness lag, failures, and cost (Task 6).
