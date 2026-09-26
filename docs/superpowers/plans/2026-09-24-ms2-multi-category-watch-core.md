@@ -2001,6 +2001,15 @@ review N-02).**
   absent listing except by retention expiry. It also leaves the legacy
   scope's reverse hazard (remote scoped runs bridging a later local NULL
   sweep) unfixed.
+  - *Amended 2026-09-26 (session 7, owner invariant "never enable delist
+    semantics on an unprovably complete scope"):* eBay category scopes now
+    carry `DelistScope.stale_absence_allowed=False`. An incomplete category
+    sweep never delists; only a complete single-page sweep does. Continuity
+    is still recorded. Other listings in these scopes drop out of view through
+    the 6h `expires_at` TTL and `purge_expired`, never as a recorded delist.
+    The legacy NULL drive scope and the local sources keep stale absence.
+    Per-scope continuity above is unchanged; the reverse-hazard reasoning
+    still applies to the NULL scope.
 - *Rejected (b):* moving the NULL scope into the new table too. It changes the
   mechanism that frozen tests pin, for no behavior gain.
 - *Consequence (assumption):* when Actor runs rotate scopes more slowly than
