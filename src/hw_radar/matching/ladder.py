@@ -425,6 +425,30 @@ def prior_model_not_named(
     }
 
 
+# Every evidence key a REVIEW verdict from decide()/_decide() uses to say WHY
+# it is a review. resolver._review_reason reads these (plus the resolver's own
+# gate keys) as the stable reason a review edge records, so a review whose
+# reason changes writes a new edge while an identical re-poll writes none.
+# A new review reason added in this module must be listed here: an unlisted
+# key still reviews, but a change to or from it keeps the obsolete reason on
+# the current edge.
+REVIEW_REASON_KEYS: frozenset[str] = frozenset(
+    {
+        "veto",
+        "brand_contradicts_exact_alias",
+        "no_brand_evidence",
+        "conflicting_targets",
+        "brand_contradicts_decode",
+        "family_contradicts_decode",
+        "conflicting_alias_models",
+        "prior_model_not_named",
+        "review_only_alias_conflict",
+        "lot",
+        "multiple_mpns",
+    }
+)
+
+
 def lot_quantity(quantity: Attribute[int] | None) -> dict[str, object] | None:
     """The lot evidence for a listing that states more than one unit at a form
     trusted as a lot (vocab.LOT_MIN_CONFIDENCE), else None. An explicit

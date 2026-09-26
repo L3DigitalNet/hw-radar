@@ -14,7 +14,8 @@ Invariants:
   serialized via select_for_update on the listing row; the apply order is
   demote-old → insert-new → link-old.
 - No per-poll edge spam: unchanged rung-0 accepts, unchanged misses, and
-  REPEATED IDENTICAL errors write no new edge; distinct new errors do.
+  REPEATED IDENTICAL errors write no new edge; distinct new errors do, and so
+  does a review whose reason (_review_reason) changed.
 - Rung 0 prior = the listing's denorm fields (last accepted state): MS-1a
   persist upserts on (source_site, source_listing_key), so a re-observation IS
   the same row. Exceptions, both re-decided by rungs 1-2 instead of
@@ -42,7 +43,7 @@ Invariants:
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, fields, replace
 from decimal import Decimal
 from typing import Final, Literal, cast
@@ -459,6 +460,46 @@ def _first_decode(
         if result is not None:
             return result
     return None
+
+
+# The resolver's own review-reason keys (every `_review` call site), joined
+# with ladder.REVIEW_REASON_KEYS by _review_reason. A new `_review(...)` key
+# belongs here; see the ladder constant for what an unlisted key costs.
+_GATE_REVIEW_REASON_KEYS: Final = frozenset(
+    {
+        "cross_category",
+        "acceptance_policy",
+        "auto_accept_disabled",
+        "offer_condition_conflict",
+        "variant_contradicted",
+    }
+)
+_REVIEW_REASON_KEYS: Final = ladder.REVIEW_REASON_KEYS | _GATE_REVIEW_REASON_KEYS
+
+
+def _review_reason(evidence: Mapping[str, object]) -> tuple[str, ...]:
+    """The stable fingerprint of why a verdict or stored edge is a review: the
+    reason keys it carries, with a veto expanded to its vetoed field names.
+
+    Deliberately NOT the reason values beyond the veto fields: those carry
+    counts, ids and matched source text ("2x" vs "2 x", a re-seeded alias id)
+    that change without the owner-facing reason changing, and would append an
+    edge on every such poll. Provenance keys (rung, category_source,
+    reconsider, mpn_hypothesis, ...) are excluded for the same reason. Computed
+    from the evidence rather than stored in it, so review edges written before
+    this fingerprint existed compare equal on an unchanged re-poll instead of
+    all appending once."""
+    reason: set[str] = set()
+    for key in _REVIEW_REASON_KEYS.intersection(evidence):
+        value = evidence[key]
+        # A verdict carries the veto as a list and the stored edge as its JSON
+        # round-trip; accepting a tuple too keeps a future veto returning one
+        # from reading as a changed reason (and a new edge) on every poll.
+        if key == "veto" and isinstance(value, list | tuple):
+            reason.update(f"veto:{field}" for field in cast("Sequence[object]", value))
+        else:
+            reason.add(key)
+    return tuple(sorted(reason))
 
 
 def _review(verdict: ladder.Verdict, **reason: object) -> ladder.Verdict:
@@ -1047,6 +1088,11 @@ def _apply(
         and current.grain == ResolutionGrain.NONE  # pyright: ignore[reportUnnecessaryComparison] - basedpyright misreads a TextChoices member's runtime (value, label) tuple as its static type in `if`/boolean-expr (not `assert`) context
         and "error" not in current.evidence
         and current.evidence.get("outcome") == verdict.outcome
+        # A review whose reason changed (offer_condition_conflict -> lot) is a
+        # new decision: skipping it would leave the owner reading the obsolete
+        # reason with no trail of the evidence that replaced it. Both sides are
+        # empty for a `none` miss, so those stay governed by outcome alone.
+        and _review_reason(current.evidence) == _review_reason(verdict.evidence)
     )
     unchanged_error = (
         is_error

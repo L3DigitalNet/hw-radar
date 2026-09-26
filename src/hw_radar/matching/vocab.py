@@ -175,8 +175,12 @@ _WD_BRAND_ADJACENT = re.compile(
 #
 # "Nx" is at the bar only when the count is tied to the item: followed by a
 # brand, a drive line, a drive/CPU noun or a TB capacity ("2x seagate",
-# "10x amd epyc", "2 x 16tb"; s8 Codex r1 finding 3). A bare "Nx" stays
-# below it: "32x 3.25ghz" is a CPU thread count (corpus cpu-0010). Capacity
+# "10x amd epyc", "2 x 16tb"; s8 Codex r1 finding 3). The space after the x
+# is optional: "2x12tb" is the same lot as "2x 12tb", and requiring the
+# space let a compact count keep a single-unit prior forever, because the
+# compact capacity token is no MPN candidate and the identifiers never
+# change (Codex r2 finding 3). A bare "Nx" stays below the bar: "32x
+# 3.25ghz" / "32x3.25ghz" is a CPU thread count (corpus cpu-0010). Capacity
 # is TB only: "2x16gb" / "2x 16gb" is a RAM kit shape, and eligibility reads
 # this table for every category, so a GB form would start dividing RAM kit
 # prices by their module count.
@@ -210,8 +214,18 @@ _LOT_ITEM_WORDS: Final = (
 # modules, and eligibility divides the price by this count for every category.
 # These brands tie the count only when the title carries no memory marker, so
 # "2x samsung 870 evo 1tb ssd" still reviews as a drive multipack.
+#
+# The marker is searched over the WHOLE title in _quantity_statements, not as
+# a lookahead after the brand: "ddr4 ram kit 2x kingston 16gb" names the kit
+# before the count, and a lookahead would trust the 2 and halve the kit price
+# (Codex r2 finding B). Rejected: category-aware pricing quantities. The
+# resolver's CPU/drive extractors and eligibility's category-blind
+# offer_quantity would then read one table two ways, while the title-wide
+# check keeps one reading for every caller.
 _LOT_MEMORY_BRANDS: Final = ("samsung", "micron", "crucial", "kingston")
-_MEMORY_MARKER: Final = r"(?!.*\b(?:ddr\d?|dimm|rdimm|udimm|lrdimm|sodimm|so-dimm|memory|ram)\b)"
+_MEMORY_MARKER: Final = re.compile(
+    r"\b(?:ddr\d?|dimm|rdimm|udimm|lrdimm|sodimm|so-dimm|memory|ram)\b"
+)
 # Offer words that may sit between the count and the item ("2x new seagate",
 # "3x brand new wd"): the count still describes the item, and requiring
 # adjacency would let "2x " prepended to a "New Seagate ..." title escape.
@@ -219,29 +233,33 @@ _LOT_OFFER_WORDS: Final = (
     r"(?:brand|new|used|sealed|genuine|original|oem|bulk|retail|pulled"
     r"|refurb(?:ished)?|recert(?:ified)?|factory|enterprise|internal)"
 )
-_QUANTITIES: tuple[tuple[re.Pattern[str], float], ...] = (
-    (re.compile(r"\blot of (\d{1,3})x?\b"), 0.95),
+# (pattern, confidence, memory_brand): a memory_brand form is skipped for a
+# title carrying a _MEMORY_MARKER anywhere.
+_QUANTITIES: tuple[tuple[re.Pattern[str], float, bool], ...] = (
+    (re.compile(r"\blot of (\d{1,3})x?\b"), 0.95, False),
     # "Lot 10 Supermicro Seagate ..." (MS-1e ebay-0282/0288).
-    (re.compile(r"\blot (\d{1,3})x?\b"), 0.9),
-    (re.compile(r"\b(\d{1,3})[- ]pack\b"), 0.9),
-    (re.compile(r"\bqty:? ?(\d{1,3})\b"), 0.9),
+    (re.compile(r"\blot (\d{1,3})x?\b"), 0.9, False),
+    (re.compile(r"\b(\d{1,3})[- ]pack\b"), 0.9, False),
+    (re.compile(r"\bqty:? ?(\d{1,3})\b"), 0.9, False),
     # "2pcs AMD EPYC ...", "1pcs new Seagate ..." (cpu-0260, ebay-0296).
-    (re.compile(r"\b(\d{1,3}) ?pcs?\b"), 0.9),
+    (re.compile(r"\b(\d{1,3}) ?pcs?\b"), 0.9, False),
     (
         re.compile(
-            r"\b(\d{1,3}) ?x (?:" + _LOT_OFFER_WORDS + r" )*"
+            r"\b(\d{1,3}) ?x ?(?:" + _LOT_OFFER_WORDS + r" )*"
             r"(?:(?:" + "|".join(_LOT_ITEM_WORDS) + r")\b|\d+(?:\.\d+)? ?tb\b)"
         ),
         0.9,
+        False,
     ),
     (
         re.compile(
-            r"\b(\d{1,3}) ?x (?:" + _LOT_OFFER_WORDS + r" )*"
-            r"(?:" + "|".join(_LOT_MEMORY_BRANDS) + r")\b" + _MEMORY_MARKER
+            r"\b(\d{1,3}) ?x ?(?:" + _LOT_OFFER_WORDS + r" )*"
+            r"(?:" + "|".join(_LOT_MEMORY_BRANDS) + r")\b"
         ),
         0.9,
+        True,
     ),
-    (re.compile(r"\b(\d{1,3})\s?x\b"), 0.7),
+    (re.compile(r"\b(\d{1,3})\s?x\b"), 0.7, False),
 )
 # Auction catalogue numbers ("Auction Lot 42:", "Lot #42", "Lot No. 42") name
 # the sale, not a unit count; they are blanked before the quantity scan. The
@@ -342,9 +360,31 @@ def _int_pattern(title: str, pattern: re.Pattern[str], scale: int = 1) -> Attrib
     )
 
 
+# A condition word directly after one of these asserts the opposite of the
+# condition ("recertified not new", "never used"), so it is no assertion at
+# all. Kept to unambiguous negators immediately before the word; "not working"
+# is unaffected because that whole phrase is the for-parts pattern and the
+# check looks only at what precedes a match.
+_CONDITION_NEGATOR = re.compile(r"\b(?:not|no longer|never)[ -]$")
+
+
+def _asserted(pattern: re.Pattern[str], title: str) -> re.Match[str] | None:
+    """The first match of `pattern` in `title` that no negator precedes."""
+    for m in pattern.finditer(title):
+        # endpos anchors `$` at the match start: only the words immediately
+        # before this match can negate it, never a negator elsewhere.
+        if _CONDITION_NEGATOR.search(title, 0, m.start()) is None:
+            return m
+    return None
+
+
 def _condition(title: str) -> tuple[Attribute[str] | None, Attribute[str] | None]:
+    # Polarity must agree with _condition_conflict: if this picked a negated
+    # "recertified" that the collector skips, "not recertified used" on the WD
+    # store would show no conflict and the source fold would add a factory
+    # channel to a used drive.
     for pattern, value, channel, confidence in _CONDITIONS:
-        m = pattern.search(title)
+        m = _asserted(pattern, title)
         if m:
             cond = Attribute(
                 value=value, confidence=confidence, layer=_LAYER, source_text=m.group(0)
@@ -366,11 +406,16 @@ def _condition_conflict(title: str) -> Attribute[tuple[str, ...]] | None:
     Informational for ordinary listings: the first-match precedence of
     _CONDITIONS still picks their condition. with_source_offer_terms and
     source_offer_conflict read it, because a source's proven condition must
-    not be folded over a listing that also asserts another."""
+    not be folded over a listing that also asserts another.
+
+    Only positive assertions count: "recertified not new" clarifies the
+    store's condition rather than contradicting it, and counting the negated
+    "new" sent an agreeing listing to review and dropped its factory variant
+    (Codex r2 finding D)."""
     found = [
         (value, m.group(0))
         for pattern, value, _channel, _confidence in _CONDITIONS
-        if (m := pattern.search(title)) is not None
+        if (m := _asserted(pattern, title)) is not None
     ]
     values = tuple(dict.fromkeys(value for value, _ in found))
     if len(values) < 2:
@@ -388,9 +433,12 @@ def _quantity_statements(title: str) -> tuple[Attribute[int] | None, tuple[int, 
     title states at LOT_MIN_CONFIDENCE or more; auction catalogue numbers are
     blanked first."""
     text = _AUCTION_LOT.sub(" ", title)
+    memory_title = _MEMORY_MARKER.search(text) is not None
     first: Attribute[int] | None = None
     counts: set[int] = set()
-    for pattern, confidence in _QUANTITIES:
+    for pattern, confidence, memory_brand in _QUANTITIES:
+        if memory_brand and memory_title:
+            continue
         for m in pattern.finditer(text):
             if first is None:
                 first = Attribute(
