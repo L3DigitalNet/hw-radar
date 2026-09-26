@@ -465,7 +465,9 @@ def _first_decode(
 # The resolver's own review-reason keys (every `_review` call site), joined
 # with ladder.REVIEW_REASON_KEYS by _review_reason. A new `_review(...)` key
 # belongs here; see the ladder constant for what an unlisted key costs.
-_GATE_REVIEW_REASON_KEYS: Final = frozenset(
+# tests/unit/test_review_reason_keys.py fails on an unregistered `_review` key,
+# and the eval harness derives its review-reason columns from REVIEW_REASON_KEYS.
+GATE_REVIEW_REASON_KEYS: Final = frozenset(
     {
         "cross_category",
         "acceptance_policy",
@@ -474,7 +476,7 @@ _GATE_REVIEW_REASON_KEYS: Final = frozenset(
         "variant_contradicted",
     }
 )
-_REVIEW_REASON_KEYS: Final = ladder.REVIEW_REASON_KEYS | _GATE_REVIEW_REASON_KEYS
+REVIEW_REASON_KEYS: Final = ladder.REVIEW_REASON_KEYS | GATE_REVIEW_REASON_KEYS
 
 
 def _review_reason(evidence: Mapping[str, object]) -> tuple[str, ...]:
@@ -490,7 +492,7 @@ def _review_reason(evidence: Mapping[str, object]) -> tuple[str, ...]:
     this fingerprint existed compare equal on an unchanged re-poll instead of
     all appending once."""
     reason: set[str] = set()
-    for key in _REVIEW_REASON_KEYS.intersection(evidence):
+    for key in REVIEW_REASON_KEYS.intersection(evidence):
         value = evidence[key]
         # A verdict carries the veto as a list and the stored edge as its JSON
         # round-trip; accepting a tuple too keeps a future veto returning one

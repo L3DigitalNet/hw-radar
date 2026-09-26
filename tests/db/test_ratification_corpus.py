@@ -61,7 +61,7 @@ from hw_radar.catalog.models import (
     ProductModel,
     RetentionClass,
 )
-from hw_radar.matching import categories
+from hw_radar.matching import categories, resolver
 from hw_radar.matching.eval.corpus import (
     CorpusEntry,
     CorpusMeta,
@@ -114,27 +114,10 @@ MEASUREMENT_REPORT_ENV = "HW_RADAR_MS1E_REPORT"
 # reads the corpus and report paths from the two variables above.
 CATEGORY_WOULD_ACCEPT_ENV = "HW_RADAR_CATEGORY_WOULD_ACCEPT"
 
-# Evidence keys that say why an edge is REVIEW rather than ACCEPT. Cross-file
-# contract: these are the keys `ladder.decide` and `resolver._apply_category_gates`
-# (plus the resolver's error fallback) write. A new gate key missing here shows up
-# as an empty `review_reason` on a REVIEW row, never as a wrong reason.
-REVIEW_REASON_KEYS = (
-    "veto",
-    "no_brand_evidence",
-    "brand_contradicts_exact_alias",
-    "conflicting_targets",
-    "brand_contradicts_decode",
-    "family_contradicts_decode",
-    "multiple_mpns",
-    "conflicting_alias_models",
-    "prior_model_not_named",
-    "review_only_alias_conflict",
-    "lot",
-    "cross_category",
-    "acceptance_policy",
-    "auto_accept_disabled",
-    "error",
-)
+# Evidence keys that say why an edge is REVIEW rather than ACCEPT: derived from
+# the matcher's own registry (ladder + resolver gates) plus the resolver's error
+# fallback, so a new review reason cannot silently report an empty reason here.
+REVIEW_REASON_KEYS = (*sorted(resolver.REVIEW_REASON_KEYS), "error")
 
 # One resolvable listing shape reused for the generated gate cases: it hits the
 # seeded ST16000NM001G alias at rung 1 and carries a factory-recert condition, so
