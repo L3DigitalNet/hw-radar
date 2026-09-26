@@ -4,10 +4,9 @@
 
 - MS-0 and MS-1a through MS-1d are implemented and merged: Django/TimescaleDB foundation, ingestion
   substrate, matching, catalog seed, five connectors, and availability heartbeat.
-- **Production deployed `478baf0`** (PR #38, Deploy run 36248125289, 2026-09-26 ~14:33Z):
-  **matcher `2026.09.2`** is live (5 Codex review rounds + in-house verifier); the retirement
-  migration and CPU refdata seed are in production. Gate @`d5bc7c3` (dev): 2591 passed / 3 opt-in
-  skips, 95% cov; synthetic Actor 75 passed, 99% cov.
+- **Production deployed `ded1000`** (PR #39, Deploy run 36273962897, 2026-09-26): **matcher
+  `2026.09.3`** live (owner audit rulings; 5 Codex rounds + verifier), migration `0024`, evaluator
+  `ms2c.3`. Gate @`0788356`: 3205 passed / 3 opt-in skips, 95% cov; synthetic Actor 75, 99% cov.
 - **OQ31 (owner, 2026-09-26):** ServerPartDeals and Seagate-recertified are retired — permission-
   required, any venue. SA-004's global enable order is replaced by a per-`(source, category)`
   admission matrix (`admission.py`; every live cell `NOT_ADMITTED`; `docs/handoff/deployed.md`).

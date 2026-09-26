@@ -1,18 +1,16 @@
 # Deployed State
 
-Last updated: 2026-09-26 (release `478baf0`)
+Last updated: 2026-09-26 (release `ded1000`)
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `478baf0` (PR #38 merge, matcher
-  `2026.09.2`, retirement migration `0023_retire_oq31_sources`), Deploy run 36248125289, approved
-  via `pending_deployments`, deployed 2026-09-26 ~14:33Z. Earlier: `c2adae0` (Slice F), `508b1f0`
-  (Slices D/E), `ac8d608` (migrations 0018-0020).
-- Host-verified after `478baf0`: `RELEASE` and `/healthz` report `478baf0`, `database: true`; web
-  and poller units active, 0 restarts. Poller logged `poller started (0 source job(s))`; migration
-  `0023_retire_oq31_sources` applied, `migrate --plan` empty; all 6 `SourceConfig` rows
-  `enabled=False`; 0 `listings`, 0 `scraper_runs`; no `APIFY` env var rendered;
-  `MATCHER_VERSION` `2026.09.2` live.
+- Deploys run from `main` via the Deploy workflow. Latest: `ded1000` (PR #39 merge, matcher
+  `2026.09.3`, migration `0024_cpu_requirement_vendor_unlocked`, evaluator `ms2c.3`), Deploy run
+  36273962897, approved via `pending_deployments`, deployed 2026-09-26. Earlier: `478baf0`
+  (matcher `2026.09.2`), `c2adae0` (Slice F), `508b1f0` (Slices D/E).
+- Host-verified after `ded1000`: `/healthz` reports `ded1000`, `database: true`; migration 0024
+  applied; all 6 `SourceConfig` rows `enabled=False`; no `APIFY` env var rendered;
+  `MATCHER_VERSION` `2026.09.3` and `EVALUATOR_VERSION` `ms2c.3` live.
 - Post-deploy `import_refdata --category cpu` (rehearsed first on a production-shaped DB): 2
   manufacturers, 2 families, 9 models, 9 specs, 19 aliases; `product_model` 15 -> 24 (cpu 9,
   drive 15 unchanged). GPU and RAM refdata are still 0 rows in production.
