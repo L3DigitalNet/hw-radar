@@ -413,3 +413,95 @@ def test_family_less_model_is_not_ratified(db: None) -> None:
 def test_seeded_epyc_and_xeon_keys(db: None) -> None:
     assert _unratified(_model("EPYC 9654")) is None
     assert _unratified(_model("Xeon Platinum 8480+")) == {"family": _XEON_FAMILY}
+
+
+# --- Codex s9 round-1 findings -----------------------------------------------------
+
+
+def _refile(model: ProductModel, family: ProductFamily) -> None:
+    ProductModel.objects.filter(pk=model.pk).update(product_family=family)
+
+
+@pytest.mark.usefixtures("seeded")
+def test_family_that_is_not_a_valid_key_reviews_instead_of_erroring(site: SourceSite) -> None:
+    """#1: a stored family whose normalized name is empty (a row the importer
+    now rejects) names no ratifiable family. Fresh and previously accepted
+    listings both review; neither becomes an error edge that would keep the
+    old accepted state."""
+    model = _model("EPYC 7763")
+    accepted = _listing(site, "was-accepted", _EPYC_7763)
+    assert _resolve(accepted).evidence["outcome"] == "accept"
+    amd = Manufacturer.objects.get(normalized_name="amd")
+    blank = ProductFamily.objects.create(
+        category=Category.objects.get(slug="cpu"), manufacturer=amd, name=" ", normalized_name=""
+    )
+    _refile(model, blank)
+
+    fresh = _listing(site, "fresh", _EPYC_7763)
+    edge = _resolve(fresh)
+    assert "error" not in edge.evidence
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["family_not_ratified"] == {"family": None}
+
+    edge = _resolve(accepted)
+    assert "error" not in edge.evidence
+    assert edge.evidence["rung"] == 0
+    assert edge.evidence["family_not_ratified"] == {"family": None}
+    assert accepted.product_model is None
+
+
+@pytest.mark.usefixtures("seeded")
+def test_refiled_unratified_family_writes_one_new_review(site: SourceSite) -> None:
+    """#2: the named family is part of the review fingerprint. A re-poll with
+    nothing changed writes no edge; re-filing the model under another
+    unratified family writes exactly one edge naming the new family."""
+    listing = _listing(site, "refile", _XEON_6338)
+    assert _resolve(listing).evidence["family_not_ratified"] == {"family": _XEON_FAMILY}
+    _resolve(listing)
+    assert ListingResolution.objects.filter(listing=listing).count() == 1
+
+    intel = Manufacturer.objects.get(normalized_name="intel")
+    _refile(_model("Xeon Gold 6338"), _family(intel, "Xeon W"))
+    edge = _resolve(listing)
+    assert edge.evidence["family_not_ratified"] == {
+        "family": {"manufacturer": "intel", "family": "xeon w"}
+    }
+    _resolve(listing)
+    assert ListingResolution.objects.filter(listing=listing).count() == 2
+
+
+@pytest.mark.usefixtures("seeded")
+def test_family_grain_automated_prior_is_a_policy_review(site: SourceSite) -> None:
+    """#3: rung 0 checks every policy condition, grain included. A family-grain
+    exact-alias prior (rung 1 can no longer write one) is not inherited, even
+    on the ratified EPYC family; the review is the policy's, not the scope's."""
+    listing = _listing(site, "fam-prior", _EPYC_7763)
+    family = _model("EPYC 7763").product_family
+    assert family is not None
+    ListingResolution.objects.create(
+        listing=listing,
+        grain=ResolutionGrain.FAMILY,
+        product_family=family,
+        method=ResolutionMethod.EXACT_ALIAS,
+        confidence=0.95,
+        matcher_version=MATCHER_VERSION,
+        evidence={
+            "outcome": "accept",
+            "rung": 1,
+            "category": "cpu",
+            "alias_source_kind": "catalog_authoritative",
+            "identity_identifiers": _identifiers(listing.title_raw),
+        },
+    )
+    Listing.objects.filter(pk=listing.pk).update(
+        resolution_grain=ResolutionGrain.FAMILY, product_family=family, resolution_confidence=0.95
+    )
+    edge = _resolve(listing)
+    assert edge.evidence["rung"] == 0
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["acceptance_policy"] == {
+        "source_kind": "catalog_authoritative",
+        "grain": "family",
+        "prior_method": "exact_alias",
+    }
+    assert "family_not_ratified" not in edge.evidence

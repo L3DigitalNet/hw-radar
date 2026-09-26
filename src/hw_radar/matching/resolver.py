@@ -523,6 +523,17 @@ def _review_reason(evidence: Mapping[str, object]) -> tuple[str, ...]:
         elif key == "variant_contradicted" and isinstance(value, Mapping):
             fields_ = cast("Mapping[object, object]", value)
             reason.update(f"variant_contradicted:{field}" for field in fields_)
+        elif key == "family_not_ratified" and isinstance(value, Mapping):
+            # The named family is the reason's subject: a model re-filed under
+            # another unratified family (or a mixed-maker row, None) must write
+            # a new edge rather than keep naming the old one (Codex s9 r1 #2).
+            family = cast("Mapping[str, object]", value).get("family")
+            named = (
+                "{manufacturer}/{family}".format_map(cast("Mapping[str, object]", family))
+                if isinstance(family, Mapping)
+                else "none"
+            )
+            reason.add(f"family_not_ratified:{named}")
         else:
             reason.add(key)
     for key in _MISS_IDENTITY_KEYS:
@@ -569,13 +580,20 @@ def _target_family_key(target: ladder.TargetRef) -> categories.FamilyKey | None:
         ).get(pk=target.model_id)
         if family is None or family_maker != maker:
             return None
-        return categories.FamilyKey(maker, family)
-    if target.family_id is None:
+    elif target.family_id is None:
         return None
-    family_maker, family = ProductFamily.objects.values_list(
-        "manufacturer__normalized_name", "normalized_name"
-    ).get(pk=target.family_id)
-    return categories.FamilyKey(family_maker, family)
+    else:
+        family_maker, family = ProductFamily.objects.values_list(
+            "manufacturer__normalized_name", "normalized_name"
+        ).get(pk=target.family_id)
+    try:
+        return categories.FamilyKey(family_maker, family)
+    except ValueError:
+        # A stored row that is not a valid key (e.g. a family name that
+        # normalized to nothing) names no ratifiable family: review it as
+        # unratified rather than raising into an error edge, which would keep
+        # the listing's previous accepted state (Codex s9 r1 #1).
+        return None
 
 
 def _unratified_family(
@@ -924,8 +942,12 @@ def _apply_category_gates(
         trusted = basis is not None and (
             basis.method == ResolutionMethod.MANUAL.value
             or (
+                # Everything the rung-1 policy checks, grain included: a
+                # family-grain automated prior is not one the policy could have
+                # accepted itself (Codex s9 r1 #3; rung 1 cannot write one).
                 basis.method == ResolutionMethod.EXACT_ALIAS.value
                 and basis.source_kind in policy.authoritative_source_kinds
+                and target.grain in policy.grains
             )
         )
         if basis is None or not trusted:

@@ -74,6 +74,14 @@ def test_manufacturer_key_must_be_normalized() -> None:
         SeedDocument.model_validate(_doc(manufacturer_key="Western Digital"))
 
 
+@pytest.mark.parametrize("family_name", [" ", "\t", " \u00a0 ", "*", "@@"])
+def test_family_name_must_normalize_to_a_key(family_name: str) -> None:
+    # persist keys the family by canonicalize_title(family_name); an empty key
+    # could never be named by a matching.categories.FamilyKey (Codex s9 r1 #1).
+    with pytest.raises(pydantic.ValidationError, match="empty family key"):
+        SeedDocument.model_validate(_doc(family_name=family_name))
+
+
 def test_model_requires_alias_covering_its_own_model_number() -> None:
     broken = _doc(
         models=[
