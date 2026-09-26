@@ -1,7 +1,9 @@
 """Manual entry point for ADR-0018 reference ingest. Default: import the seed
 documents only. --refresh runs the full monthly loop (import + backfill-queue
-reconsider + discovery scan) — the same code path as the poller job. Conflicts
-exit non-zero with the full descriptor list (fail into review, D4).
+reconsider + discovery scan) — the same code path as the poller job, so it
+re-imports only categories already present in the catalog and never admits a
+new one (refresh.py). Conflicts exit non-zero with the full descriptor list
+(fail into review, D4).
 
 --category <slug> (repeatable) narrows the plain import to seed documents of
 those categories, so one category can be seeded in production without also
