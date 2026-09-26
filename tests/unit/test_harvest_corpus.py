@@ -12,16 +12,27 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from scrapy import Request
+from scrapy.http import HtmlResponse
+from scrapy.utils.test import get_crawler
 
+from hw_radar.acquisition import sources
 from hw_radar.acquisition.contracts import DelistScope, ParsedListing, RawBatch, ScopeSweepReport
+from hw_radar.acquisition.scrapy_support import SpiderResult
+from hw_radar.acquisition.sources import ebay, goharddrive_harvest
+from hw_radar.acquisition.sources.goharddrive import CATEGORY_URL as GHD_CATEGORY_URL
+from hw_radar.acquisition.sources.goharddrive import GoHardDriveAdapter
+from hw_radar.acquisition.sources.goharddrive_harvest import PagingGoHardDriveSpider
 from hw_radar.catalog.management.commands import harvest_corpus
 from hw_radar.catalog.models import RunKind
 
@@ -531,3 +542,274 @@ def test_category_harvest_uses_the_category_adapter_and_records_scopes(
 def test_category_requires_the_ebay_source(source_args: list[str], tmp_path: Path) -> None:
     with pytest.raises(CommandError, match="--category requires --source ebay"):
         call_command("harvest_corpus", *source_args, "--category", "cpu", "--out", str(tmp_path))
+
+
+# ── Harvest-only corpus-expansion options ──
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--source", "goharddrive", "--ebay-query", "WD Gold"], "--ebay-query requires --source"),
+        (["--all", "--ebay-query", "WD Gold"], "--ebay-query requires --source"),
+        (
+            ["--source", "ebay", "--category", "cpu", "--ebay-query", "WD Gold"],
+            "mutually exclusive",
+        ),
+        (["--source", "ebay", "--ebay-query-limit", "40"], "requires --ebay-query"),
+        (
+            ["--source", "ebay", "--ebay-query", "WD Gold", "--ebay-query-limit", "0"],
+            "must be 1..200",
+        ),
+        (
+            ["--source", "ebay", "--ebay-query", "WD Gold", "--ebay-query-limit", "201"],
+            "must be 1..200",
+        ),
+        (
+            ["--source", "ebay", "--ebay-query", "WD Gold", "--ebay-query", "WD Gold"],
+            "duplicate --ebay-query",
+        ),
+        (["--source", "ebay", "--ghd-max-pages", "2"], "require --source goharddrive"),
+        (["--source", "goharddrive", "--ghd-max-pages", "9"], "must be 1..8"),
+        (["--source", "goharddrive", "--ghd-max-pages", "0"], "must be 1..8"),
+        (
+            [
+                "--source",
+                "goharddrive",
+                "--ghd-url",
+                "https://www.goharddrive.com/category-s/35.htm",
+                "--ghd-max-pages",
+                "1",
+            ],
+            "smaller than the number of category URLs",
+        ),
+    ],
+)
+def test_expansion_options_are_validated(args: list[str], message: str, tmp_path: Path) -> None:
+    with pytest.raises(CommandError, match=message):
+        call_command("harvest_corpus", *args, "--out", str(tmp_path))
+
+
+def test_ebay_query_count_is_capped(tmp_path: Path) -> None:
+    queries = [f"--ebay-query=q{i}" for i in range(harvest_corpus.MAX_EBAY_QUERIES + 1)]
+    with pytest.raises(CommandError, match="at most"):
+        call_command("harvest_corpus", "--source", "ebay", *queries, "--out", str(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "bad_url",
+    [
+        "http://www.goharddrive.com/category-s/35.htm",
+        "https://www.serverpartdeals.com/category-s/35.htm",
+        "https://www.goharddrive.com/some-product-p/abc.htm",
+        "https://www.goharddrive.com/category-s/35.htm?page=2",
+    ],
+)
+def test_ghd_url_must_be_a_goharddrive_category(bad_url: str, tmp_path: Path) -> None:
+    with pytest.raises(CommandError, match="not a goHardDrive category URL"):
+        call_command(
+            "harvest_corpus",
+            "--source",
+            "goharddrive",
+            "--ghd-url",
+            bad_url,
+            "--out",
+            str(tmp_path),
+        )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Seagate Exos X18", harvest_corpus.EbayQuery("Seagate Exos X18")),
+        ("11200:WD Gold", harvest_corpus.EbayQuery("WD Gold", "11200")),
+        # Only a purely numeric prefix is a category id.
+        ("WD: Red Plus", harvest_corpus.EbayQuery("WD: Red Plus")),
+    ],
+)
+def test_parse_ebay_query(value: str, expected: harvest_corpus.EbayQuery) -> None:
+    assert harvest_corpus.parse_ebay_query(value) == expected
+
+
+@pytest.mark.parametrize("value", ["", "   ", "11200:", "11200:  "])
+def test_parse_ebay_query_rejects_blank(value: str) -> None:
+    with pytest.raises(ValueError, match="empty eBay query"):
+        harvest_corpus.parse_ebay_query(value)
+
+
+def _browse_handler(sent: list[httpx.Request]) -> Callable[[httpx.Request], httpx.Response]:
+    """Fake Browse: a token endpoint plus a search that echoes one item per query.
+
+    Item "shared" comes back for every query, so the per-query `new` count and
+    the command's first-wins dedupe are both exercised.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/oauth2/token"):
+            return httpx.Response(200, json={"access_token": "t", "expires_in": 7200})
+        sent.append(request)
+        q = request.url.params["q"]
+        summaries = [
+            {"itemId": f"v1|{q}|0", "title": f"{q} 18TB drive", "price": {"value": "150.00"}},
+            {"itemId": "v1|shared|0", "title": "Shared listing", "price": {"value": "99.00"}},
+        ]
+        return httpx.Response(200, json={"total": 1234, "itemSummaries": summaries})
+
+    return handler
+
+
+def test_ebay_queries_run_single_fixed_price_pages_without_hints(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("EBAY_CLIENT_ID", "id")
+    monkeypatch.setenv("EBAY_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("EBAY_API_BASE", "https://api.harvest-test.invalid")
+    sweeps_before = ebay.CATEGORY_SWEEPS
+    registry_before = dict(sources.ADAPTERS)
+    # The production harvest entry must not be reached when queries are given.
+    unfiltered = _install(monkeypatch, {"ebay": FakeAdapter("ebay", [])})["ebay"]
+    sent: list[httpx.Request] = []
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_browse_handler(sent)))
+    real_adapter = harvest_corpus.EbayQueryHarvestAdapter
+
+    def with_mock_client(
+        queries: list[harvest_corpus.EbayQuery], limit: int
+    ) -> harvest_corpus.EbayQueryHarvestAdapter:
+        return real_adapter(queries, limit, client=client)
+
+    monkeypatch.setattr(harvest_corpus, "EbayQueryHarvestAdapter", with_mock_client)
+
+    call_command(
+        "harvest_corpus",
+        "--source",
+        "ebay",
+        "--ebay-query",
+        "Seagate Exos X18",
+        "--ebay-query",
+        "11200:WD Gold",
+        "--ebay-query-limit",
+        "40",
+        "--out",
+        str(tmp_path),
+    )
+
+    assert not unfiltered.fetched
+    assert [dict(r.url.params) for r in sent] == [
+        {"q": "Seagate Exos X18", "filter": "buyingOptions:{FIXED_PRICE}", "limit": "40"},
+        {
+            "q": "WD Gold",
+            "filter": "buyingOptions:{FIXED_PRICE}",
+            "limit": "40",
+            "category_ids": "11200",
+        },
+    ]
+    entries, meta = _read_staging(tmp_path)
+    assert [e["id"] for e in entries] == [
+        "ebay:v1|Seagate Exos X18|0",
+        "ebay:v1|shared|0",
+        "ebay:v1|WD Gold|0",
+    ]
+    assert all("category_hint" not in e["listing"] for e in entries)
+    report = meta["sources"]["ebay"]
+    assert report["scopes"] == []
+    assert report["duplicates_dropped"] == 1
+    assert [
+        (q["q"], q["total"], q["returned"], q["parsed"], q["new"]) for q in report["queries"]
+    ] == [
+        ("Seagate Exos X18", 1234, 2, 2, 2),
+        ("WD Gold", 1234, 2, 2, 1),
+    ]
+    # Harvest-only: production sweep configuration and the schedulable
+    # registry are exactly what they were.
+    assert ebay.CATEGORY_SWEEPS is sweeps_before
+    assert registry_before == sources.ADAPTERS
+    assert sources.ADAPTERS["ebay"] is sources.admitted_ebay_adapter
+
+
+_PAGED_CATEGORY_HTML = """<html><body>
+<script>var SearchParams = 'searching=Y&sort=1&cat=3&show=21&page={page}';</script>
+<b>Page <input type="text" value="{page}" title="Go to page" /> of 6  </b>
+</body></html>"""
+
+
+def _category_page(url: str, page: int) -> HtmlResponse:
+    body = _PAGED_CATEGORY_HTML.format(page=page).encode()
+    return HtmlResponse(url=url, body=body, encoding="utf-8")
+
+
+def _paging_spider(start_urls: list[str], max_pages: int) -> PagingGoHardDriveSpider:
+    crawler = get_crawler(PagingGoHardDriveSpider)
+    return PagingGoHardDriveSpider.from_crawler(crawler, start_urls=start_urls, max_pages=max_pages)
+
+
+def _followed(spider: PagingGoHardDriveSpider, response: HtmlResponse) -> list[str]:
+    """URLs of the page requests parse() schedules (product items are ignored)."""
+    # Scrapy ships no type for Response, so parse()'s signature is partly Unknown.
+    out = spider.parse(response)  # pyright: ignore[reportUnknownMemberType]
+    return [r.url for r in out if isinstance(r, Request)]
+
+
+def test_ghd_pagination_respects_the_total_page_cap() -> None:
+    base = "https://www.goharddrive.com/3-5-inch-Desktop-SATA-IDE-SCSI-SAS-Hard-Drive-s/3.htm"
+    other = "https://www.goharddrive.com/category-s/35.htm"
+    # Two start pages + a cap of 5 leaves 3 follow-ups in total, although the
+    # first category alone advertises 6 pages.
+    spider = _paging_spider([base, other], max_pages=5)
+
+    first = _followed(spider, _category_page(base, 1))
+    second = _followed(spider, _category_page(other, 1))
+
+    assert first == [
+        f"{base}?searching=Y&sort=1&cat=3&show=21&page=2",
+        f"{base}?searching=Y&sort=1&cat=3&show=21&page=3",
+        f"{base}?searching=Y&sort=1&cat=3&show=21&page=4",
+    ]
+    assert second == []
+
+
+def test_ghd_later_pages_schedule_nothing() -> None:
+    base = "https://www.goharddrive.com/category-s/35.htm"
+    spider = _paging_spider([base], max_pages=8)
+
+    assert _followed(spider, _category_page(base + "?page=2", 2)) == []
+
+
+def test_ghd_expansion_leads_with_the_production_category(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, object] = {}
+    extra = "https://www.goharddrive.com/category-s/69.htm"
+
+    async def fake_run_spider(spider_cls: type, **kwargs: object) -> SpiderResult:
+        captured.update(kwargs, spider_cls=spider_cls)
+        item: dict[str, object] = {
+            "url": "https://www.goharddrive.com/x-p/sku-1.htm",
+            "title": "WD Ultrastar DC HC550 18TB",
+            "price_text": "$189.99",
+        }
+        return SpiderResult(items=[item], stats={"harvest/pages": [GHD_CATEGORY_URL, extra]})
+
+    monkeypatch.setattr(goharddrive_harvest, "run_spider", fake_run_spider)
+
+    call_command(
+        "harvest_corpus",
+        "--source",
+        "goharddrive",
+        "--ghd-url",
+        extra,
+        "--ghd-max-pages",
+        "6",
+        "--out",
+        str(tmp_path),
+    )
+
+    assert captured == {
+        "spider_cls": PagingGoHardDriveSpider,
+        "start_urls": [GHD_CATEGORY_URL, extra],
+        "max_pages": 6,
+    }
+    entries, meta = _read_staging(tmp_path)
+    assert [e["id"] for e in entries] == ["goharddrive:sku-1"]
+    assert meta["sources"]["goharddrive"]["pages_fetched"] == [GHD_CATEGORY_URL, extra]
+    # The registered adapter stays the plain first-page connector.
+    assert sources.ADAPTERS["goharddrive"] is GoHardDriveAdapter
