@@ -1,6 +1,6 @@
 # Specs And Plans
 
-Last updated: 2026-09-25 (session 4: plan revs 9–11, Slices D and E complete on dev)
+Last updated: 2026-09-26 (release `ded1000`)
 
 ## MS-2 Plan Review Lineage
 
@@ -20,12 +20,12 @@ Last updated: 2026-09-25 (session 4: plan revs 9–11, Slices D and E complete o
 
 | Artifact | Role | Status |
 | --- | --- | --- |
-| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 12 (+ landing notes). Slices A–E complete on `dev`; rev 12 (no runtime account reads, OQ30) implemented; F5a synthetic Actor proof executed 2026-09-25 (evidence `docs/evidence/2026-09-25-f5a-synthetic-proof.md`). Next: F1–F3 pilot sources; F6 owner-gated. |
+| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 12 (+ landing notes). Slices A–F code-complete and deployed (latest `ded1000`); F5a proof executed 2026-09-25 (`docs/evidence/2026-09-25-f5a-synthetic-proof.md`); F1–F3 landed 2026-09-25 (`docs/evidence/2026-09-25-f1-f3-pilot.md`). Remaining: F6, blocked on OQ34 plus the per-cell checklist. |
 | `docs/research/2026-09-24-ms2-code-dependency-map.md` | Code dependency map supporting the MS-2 plan | Active; keep alongside the plan |
 | `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` | Advanced HDD/SSD scoring design | Revision 14 owner-accepted; **deferred from immediate milestone sequencing by ADR 0022**; retain for later category-local drive scoring |
 | `docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md` | Deferred HDD/SSD scoring-substrate plan | Revision 4 reviewed; **do not execute now**. Rebase schema/migration assumptions before any future owner-authorized activation. |
-| `docs/superpowers/specs/2026-07-06-ms1e-validation-corpus-ratification-design.md` | MS-1e validation-corpus + ADR-0019 ratification design | Implemented on dev; §6 owner-gated |
-| `docs/superpowers/plans/2026-08-16-ms1e-validation-corpus.md` | MS-1e harvest-tooling implementation plan | Implemented on dev; converged |
+| `docs/superpowers/specs/2026-07-06-ms1e-validation-corpus-ratification-design.md` | MS-1e validation-corpus + ADR-0019 ratification design | Implemented and deployed; §6 owner audit applied 2026-09-26, ADR-0019 flip waits on OQ33 |
+| `docs/superpowers/plans/2026-08-16-ms1e-validation-corpus.md` | MS-1e harvest-tooling implementation plan | Implemented and deployed; converged |
 | `docs/research/2026-07-05-ms1c-catalog-seed-inputs.md` | MS-1c catalog seed input ledger | Implemented; keep for provenance |
 | `docs/superpowers/plans/2026-07-05-ms1c-catalog-seed.md` | MS-1c catalog seed implementation plan | Implemented; keep for provenance |
 | `docs/superpowers/specs/2026-07-05-ms1-ingestion-design.md` | MS-1 ingestion design and milestone split | Implemented foundation; retain for provenance/current drive ingestion behavior |

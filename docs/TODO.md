@@ -21,23 +21,9 @@ Instructions for AI agents:
   `prepare_run_input`'s `extra=forbid`, but a dedicated nested-key guard is a cleaner fix (low).
 - [ ] Add listing-row fields (`title_raw`, `condition_label_raw`, `is_international`) to the
   eligibility evaluation binding; not currently read by the evaluator (verifier finding, low).
-- [x] Scoped runtime Apify token created by the owner (OpenBao `secret/apps/hw-radar/apify`, env
-  `HW_RADAR_APIFY_TOKEN`), restricted to the Hardware Radar Actor (`Read`, `Run`, `List runs`,
-  `Manage runs`, restricted access, default run storages). No account permission is needed: the
-  runtime reads no account state (OQ30, plan rev 12, MS2-D-48). Capability probe recorded
-  2026-09-25 (403 for inaccessible storage, 404 for nonexistent).
 - [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
   saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
   Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.
-- [x] Add an acquisition-provider boundary to hw-radar. **Slice D (core) complete 2026-09-25**
-  (D1–D12; D9 verifier 10/11 bullets hold, the storage-deadline bullet with the plan's accepted
-  exceptions). A FULL Actor start is refused while a same-scope run's import is undecided
-  (`scope_run_outstanding`, `3c117c9`). Migration `0021` deployed 2026-09-25 (`508b1f0`).
-- [x] Add Hardware Radar Apify budget admission/accounting ($20/month cash ceiling, $12 operating
-  target, reserve-before-run + reconcile-after-run, `budget_paused`, no automatic escalation).
-  **Slice E complete 2026-09-25** (E1–E8; E7 verifier 16/16 acceptance claims hold; crash windows
-  d1/d2 closed `40b7295`). Migration `0022` deployed 2026-09-25 (`508b1f0`). Keep `report._place` in step with
-  `ledger._tally` (pinned by `test_cycle_totals_match_ledger_cycle_debits`).
 - [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
   categories and both local + self-owned-Apify provider paths. F1–F3 landed 2026-09-25 (eBay
   category sweeps, `pilot_report`; evidence `docs/evidence/2026-09-25-f1-f3-pilot.md`). Remaining:
@@ -49,14 +35,8 @@ Instructions for AI agents:
   grain, so change it only with a `matcher_version` bump after, or together with, the MS-1e
   ratification. Same change: keep the title/label join visible to the negation window (today
   "... No Screws" + label "Used" denies the label; canonical text erases the " | " join).
-- [x] Seed CPU reference rows in production. **Done 2026-09-26** (`import_refdata --category cpu`
-  on release `478baf0`: 2 manufacturers, 2 families, 9 models, 9 specs, 19 aliases). Remaining:
-  extend seeds to cover the chosen F6 EPYC models; GPU/RAM production seeding stays deferred
-  until their own pilot/owner gate is scheduled.
-- [x] Coordinate one self-owned private Hardware Radar Actor as the integration proof. **F5a
-  executed 2026-09-25** in a non-production proof environment (evidence:
-  `docs/evidence/2026-09-25-f5a-synthetic-proof.md`): build `1.0.1`, eleven admitted runs over every
-  fault mode, zero delistings, live AC-4 switch, $0.00527 total account usage.
+- [ ] Extend the CPU seeds to cover the chosen F6 EPYC models (production CPU refdata seeded
+  2026-09-26 on `478baf0`); GPU/RAM production seeding stays deferred until their own owner gate.
 - [ ] F5a step 5 (MS2-D-45): before any production environment admits paid Apify work in the
   2026-09-05 cycle, drain the proof environment. Run its tick wrapper
   (`~/.local/state/hw-radar-f5a/tick.sh N GAP`, workstation-local; reads the runtime token from
@@ -73,8 +53,6 @@ Instructions for AI agents:
   owner-approved F-01 value).
 - [ ] Promote the synthetic Actor build to the `prod` tag (MS2-D-43 *Deploy*) only if a production
   smoke is ever wanted; the synthetic Actor is not a production collection source.
-- [x] Keep provider identity separate from marketplace/source identity: proven by D7
-  (`test_provider_switch_preserves_identity_history_and_watch_state`, AC-4).
 - [ ] MS-1e drive-matcher ratification: owner-audited corpus measures 366/366 at `2026.09.3`
   (floors met, rung-0 PASS); the audit gate waits only on OQ33 (8 legacy-family rows, 7 sampled).
   After the owner answers: relabel those rows, re-measure on the pinned refdata, and flip ADR-0019

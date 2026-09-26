@@ -127,7 +127,7 @@ The root gate runs these commands from the repository root. They live in
 uv run --directory actors/hw-radar-synthetic-collector --locked basedpyright
 uv run --directory actors/hw-radar-synthetic-collector --locked coverage run -m pytest
 uv run --directory actors/hw-radar-synthetic-collector --locked coverage report
-uv run --directory actors/hw-radar-synthetic-collector --locked pip-audit
+uv run --directory actors/hw-radar-synthetic-collector --locked pip-audit --skip-editable
 ```
 
 They use `--directory` rather than `--project`, because the tools read their

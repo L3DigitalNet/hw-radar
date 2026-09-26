@@ -6,7 +6,7 @@ description: 'Score each listing 0–100 as a weighted geometric mean of four no
 doc_type: 'adr'
 status: 'active'
 created: '2026-07-04'
-updated: '2026-09-06'
+updated: '2026-09-24'
 reviewed: null
 owner: ''
 consumer: 'mix'

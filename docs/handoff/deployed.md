@@ -115,5 +115,5 @@ least one resolved listing has a non-`none` grain (`detail_json` on the run, or 
 resolver isn't matching and needs investigation first.
 
 The MS-1e owner-in-the-loop drive-matcher ratification (design §6) must complete and `ADR-0019`
-flip to accepted before any drive cell is admitted; every source above gates on it (`AGENTS.md`,
-MS-2 plan risk R5).
+flip to accepted before any drive cell is admitted; every `x drive` cell above gates on it (MS-2
+plan risk R5). Non-drive cells gate on their own category corpus (for CPU, OQ34).

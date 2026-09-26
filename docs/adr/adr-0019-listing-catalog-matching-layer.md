@@ -6,7 +6,7 @@ description: 'Fix the matching layer that joins noisy marketplace listings to th
 doc_type: 'adr'
 status: 'active'
 created: '2026-07-04'
-updated: '2026-07-04'
+updated: '2026-09-26'
 reviewed: null
 owner: ''
 consumer: 'mix'
@@ -117,7 +117,7 @@ Owner decisions of 2026-09-26, resolving [OQ24](../resolved-questions.md#oq24--p
 
 **4. Category isolation (clarifies scope; part of the OQ31 consequences).** The MS-1e/ADR-0019 ratification gate governs **drive** matching and drive source × category enablement only. It does not block CPU/GPU/RAM enablement once those categories pass their own matching and source-admission gates — drive ratification is not a prerequisite for the other three categories.
 
-**5. Confirmed matcher traps (owner audit; informs rule 3's decoder contract).** Comparison-context MPNs in a title — e.g. "comparable to ST16000NM002G" — are not identity evidence for the listed model; a decoder/rule must not treat a comparison phrase as an MPN match. The `ST…NM…` prefix does not universally mean Exos: `ST1000NM0001` is a Constellation-family part, not Exos. Fixes for both traps land with a `matcher_version` bump; that work is in progress, and this amendment does not itself state a version number.
+**5. Confirmed matcher traps (owner audit; informs rule 3's decoder contract).** Comparison-context MPNs in a title — e.g. "comparable to ST16000NM002G" — are not identity evidence for the listed model; a decoder/rule must not treat a comparison phrase as an MPN match. The `ST…NM…` prefix does not universally mean Exos: `ST1000NM0001` is a Constellation-family part, not Exos. Fixes for both traps landed with matcher `2026.09.2` (comparison-context masking; `ST…NM…` no longer implies Exos) and are carried in `2026.09.3`.
 
 **6. Anti-anchoring note on label fingerprints (informs the MS-1e ratification procedure, design spec §6).** The recorded label fingerprints are self-recorded file-integrity evidence — they show the labeled corpus file did not change after hashing — not independent proof of who authored the labels or when.
 

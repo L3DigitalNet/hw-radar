@@ -177,3 +177,6 @@ Owner decisions of 2026-09-24 (session 2); the decision above is unchanged.
   Existing local connectors are not grandfathered into an Actor path.
 - Whether MS-2 may exit on the synthetic proof while the Actor-backed pilot source
   waits on OQ24 is an open owner decision, recorded as risk R31 in the MS-2 plan.
+  _(Resolved 2026-09-25 by [OQ28](../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone):
+  the synthetic proof suffices for MS-2's Apify exit; OQ24 was resolved 2026-09-26 with F5b
+  deferred.)_

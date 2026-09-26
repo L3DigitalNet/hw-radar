@@ -1,5 +1,11 @@
 # MS-2 — Multi-category watch core: Implementation Plan
 
+> **Status (2026-09-26):** Slices A–F code-complete and deployed (release `ded1000`). F5a executed
+> 2026-09-25; F5b deferred (OQ24 resolved 2026-09-26); F6 blocked on OQ34 plus the per-cell
+> checklist. The *Open risks* table and *Next slice after A (historical)* are the plan-time record;
+> R25's Read-grant and delete-probe residuals and R38 were closed by F5a / owner acceptance
+> 2026-09-25.
+
 > For the executing agent: slices land in order, **one slice = one PR into `dev`**.
 > Inside a slice, work top to bottom. Every behavior task is TDD: write the failing
 > test first, watch it fail for the stated reason, implement, get it green, and make
@@ -7702,7 +7708,7 @@ orchestrator in place, no new decision):
 | R12-201 a delayed direct 402 callback re-trips a trip the owner already cleared (`trip_latch` is idempotent over open trips only) | medium | Accepted; resolved. The callback uses budget-locked `ledger.trip_start_refusal`, sharing the open-or-cleared predicate with the repair sweep; other reasons unchanged | E9.3 | `test_delayed_402_callback_after_repair_and_owner_clear_does_not_retrip` |
 | R12-202 operator reconciliation "recommended" contradicts C-011's "each billing cycle" | low | Accepted; resolved. Reconciliation is required each billing cycle and during F5a | MS2-D-48 *Operator reconciliation* | procedure |
 
-## Next slice after A
+## Next slice after A (historical)
 
 First the Slice A F-04 correction lands (see *Revision 3 correction* under A6).
 Then **Slice B — first-class category specs and rules** (migrations `0018`,

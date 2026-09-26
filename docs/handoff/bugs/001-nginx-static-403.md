@@ -23,7 +23,7 @@ runbook (`docs/runbooks/provisioning.md`) creates the app directory for
 
 ## Fix
 
-Implemented on dev, pending production deployment. The owner chose to move
+Deployed and verified in production 2026-09-25 (`531916e`). The owner chose to move
 collected static files out of `/opt/hw-radar` (candidate 1).
 
 - `src/hw_radar/settings.py`: production `STATIC_ROOT` defaults to
@@ -54,9 +54,8 @@ Rejected: adding `www-data` to group `hwradar`, or granting it ACLs into
 (`/run/bao-agent/hw-radar.env`, `root:hwradar 0640`), so either option would
 expose application secrets to the web-server workers.
 
-Remaining before close: provision the directory, install the new nginx conf,
-deploy, and confirm that the static smoke step and a styled admin page work in
-production.
+Closed: directory provisioned, nginx conf installed, deployed, and the static
+smoke step and a styled admin page confirmed in production (see Verification).
 
 ## Lesson
 

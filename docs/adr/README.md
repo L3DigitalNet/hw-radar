@@ -7,7 +7,7 @@ This directory holds the project's **Architecture Decision Records (ADRs)** — 
 - **Format:** [MADR](https://adr.github.io/madr/), per the [project-standards ADR Standard](https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/adr). Author new ADRs from that standard's template.
 - **Filename:** `adr-NNNN-short-title.md` (zero-padded sequence; repo-name omitted).
 - **`id` (in ADR frontmatter):** `adr-NNNN-hw-radar-short-title` (embeds the repo name for global uniqueness).
-- **Frontmatter:** ADR files carry the ADR template's YAML frontmatter as a **local, unvalidated convention** — this repo deliberately does **not** adopt the enforced Markdown Frontmatter Standard or a CI validator. See [ADR 0001](adr-0001-decline-markdown-frontmatter-standard.md). This index and all non-ADR docs carry no frontmatter.
+- **Frontmatter:** ADR files carry the ADR template's YAML frontmatter as a **local, unvalidated convention** — this repo deliberately does **not** adopt the enforced Markdown Frontmatter Standard or a CI validator. See [ADR 0001](adr-0001-decline-markdown-frontmatter-standard.md). This index and all other non-ADR docs carry no frontmatter, except the archived original spec (`docs/archived/hw-radar.md`), whose frontmatter records its supersession.
 - **Supersession:** when a new ADR replaces an old one, set `supersedes` on the new record and `superseded_by` + `status: superseded` on the old one, in the same change.
 
 ## When to write an ADR
