@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable
+from dataclasses import replace
 
 from hw_radar.matching import mpn
 from hw_radar.matching.normalize import normalize_alias_text
@@ -76,6 +77,8 @@ class CandidateSet:
                 confidence=confidence,
                 from_structured_field=structured,
             )
+        elif existing.from_structured_field and not structured:
+            self._out[normalized] = replace(existing, also_in_title=True)
 
     def __contains__(self, normalized: str) -> bool:
         return normalized in self._out

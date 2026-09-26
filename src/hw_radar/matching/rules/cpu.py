@@ -127,12 +127,22 @@ _SOCKETS = (
 _CORES = re.compile(r"\b(\d{1,3})[- ]?cores?\b|\b(\d{1,3})c/\d{1,3}t\b")
 _TDP = re.compile(r"\b(\d{2,3})\s?w\b")
 
-# (vendor, pattern, bare-number group or None). Group 0 is the full product-line
-# phrase; the named group is the bare model number emitted alongside it.
+# (vendor, pattern). Group 0 is the full product-line phrase; the `num` group
+# is the bare model number emitted alongside it. Every pattern must end on the
+# COMPLETE model token: without a terminating boundary a near-model string's
+# prefix is a seeded model ('Xeon Gold 63380' emitted 'xeon gold 6338' and
+# '6338', both authoritative aliases; round-3 R3-D). The Scalable pattern
+# needs (?![a-z0-9]) rather than \b because its '+' suffix ('8480+') is a
+# non-word character, after which \b would fail before a space. The bare
+# number must also start its own token, hence the Ryzen tier digit needs
+# whitespace after it: an optional '[3579]?' let 'Ryzen 79500' read as tier 7
+# plus model '9500'.
 _NAMES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "intel",
-        re.compile(r"\bxeon\s+(?:platinum|gold|silver|bronze)\s+(?P<num>\d{4}[a-z]{0,2}\+?)"),
+        re.compile(
+            r"\bxeon\s+(?:platinum|gold|silver|bronze)\s+(?P<num>\d{4}[a-z]{0,2}\+?)(?![a-z0-9])"
+        ),
     ),
     ("intel", re.compile(r"\bxeon\s+(?P<num>(?:e[357]|w|d)-?\s?\d{4,5}[a-z]{0,2}(?:\s+v\d)?)\b")),
     ("intel", re.compile(r"\bcore\s+(?P<num>i[3579]-?\s?\d{4,5}[a-z]{0,3})\b")),
@@ -147,7 +157,7 @@ _NAMES: tuple[tuple[str, re.Pattern[str]], ...] = (
     (
         "amd",
         re.compile(
-            r"\bryzen\s+(?:threadripper\s+)?(?:pro\s+)?[3579]?\s*(?P<num>\d{4}[a-z0-9]{0,3})\b"
+            r"\bryzen\s+(?:threadripper\s+)?(?:pro\s+)?(?:[3579]\s+)?(?P<num>\d{4}[a-z0-9]{0,3})\b"
         ),
     ),
     ("amd", re.compile(r"\bthreadripper\s+(?:pro\s+)?(?P<num>\d{4}[a-z]{0,2})\b")),
@@ -198,14 +208,16 @@ _SAMPLE = re.compile(
 
 # Product-type markers that make the LISTING a board, system or bundle, matched
 # as whole tokens on the reference-masked title (so "compatible with H12SSL
-# motherboard" does not fire). Deliberately absent: 'server', 'board' and
+# motherboard" does not fire). Board words take joined, hyphenated or spaced
+# forms: "Mother Board + AMD EPYC 7763" is as much a board listing as
+# "Motherboard" (round-3 R3-E). Deliberately absent: 'server', bare 'board' and
 # 'workstation'. Bare-CPU titles say "Server CPU", "Server Processor", "for
 # 7002/7003 Series Boards" and "Workstation CPU" all the time, so those words
 # would turn ordinary retail listings into reviews. The count forms need a
 # bundling word or a CPU noun beside them, because a bare 'Nx' is often a core
 # count ('32x 3.25GHz').
 _BUNDLE = re.compile(
-    r"(?<![a-z0-9])(?:mother-?boards?|mainboards?|mobo|barebones?|combos?|bundles?|kits?"
+    r"(?<![a-z0-9])(?:mother[-\s]?boards?|main[-\s]?boards?|mobo|barebones?|combos?|bundles?|kits?"
     r"|(?:with|w/|incl|including|plus|\+)\s*[2-9]\s?x"
     r"|[2-9]\s?x\s+(?:cpus?|processors?|amd|intel|epyc|xeon))(?![a-z0-9])"
 )

@@ -31,4 +31,9 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               2026.09.2 also: drive title-family contradiction and multi-MPN
 #               reviews; WD `ef` decodes only Red Plus datasheet suffixes;
 #               drive-local "fit for"/"suitable for"/leading-"for" masking.
+#               2026.09.2 also: unclosed "(" masks to the end; "for sale" is not a
+#               reference; conflicting-model aliases review at every rung;
+#               structured MPNs keep title provenance; WD 0F retail PNs are
+#               review-only candidates; complete CPU model tokens only; spaced
+#               "mother board"/"main board" is a CPU bundle.
 MATCHER_VERSION = "2026.09.2"

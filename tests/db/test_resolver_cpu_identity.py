@@ -34,6 +34,8 @@ from hw_radar.catalog.models import (
 from hw_radar.matching import categories
 from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.resolver import CatalogResolver
+from hw_radar.refdata.loader import load_seed_documents
+from hw_radar.refdata.persist import import_documents
 
 _OBSERVED_AT = datetime(2026, 9, 26, 12, 0, tzinfo=UTC)
 # No condition word, so an accept stays at model grain.
@@ -183,3 +185,60 @@ def test_structured_mpn_sample_marking_goes_to_review(
     assert edge.evidence["outcome"] == "review"
     assert edge.evidence["veto"] == ["sample"]
     assert listing.product_model is None
+
+
+def test_spaced_mother_board_goes_to_review(site: SourceSite, epyc_7763: ProductModel) -> None:
+    """Round-3 R3-E: "Mother Board" is the ordinary spelling of a board listing."""
+    listing = _cpu_listing(
+        site, "mother-board", "Supermicro H12SSL-i Mother Board + AMD EPYC 7763 64-Core SP3"
+    )
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["veto"] == ["bundle"]
+    assert listing.product_model is None
+
+
+@pytest.fixture
+def seeded_cpus(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The shipped CPU seeds (OPN and bare-number aliases included) with CPU
+    auto-accept forced on, as in the epyc_7763 fixture."""
+    import_documents([d for d in load_seed_documents() if d.category == "cpu"])
+    rules = categories.rules_for("cpu")
+    assert rules is not None
+    monkeypatch.setitem(
+        categories._REGISTRY,  # pyright: ignore[reportPrivateUsage] - test-only registration, as in test_resolver_categories.py
+        "cpu",
+        lambda: replace(rules, auto_accept=True),
+    )
+
+
+def test_two_opns_of_different_models_do_not_inherit_the_prior(
+    site: SourceSite, seeded_cpus: None
+) -> None:
+    """Round-3 N3 residual: two OPNs (9354's and 9654's) name no EPYC model
+    number, so the multi_model marker stays empty; rung 0 must still refuse."""
+    listing = _cpu_listing(site, "opn-pair", "AMD EPYC 9354 32-Core SP5")
+    assert _resolve(listing).evidence["outcome"] == "accept"
+    assert listing.product_model == ProductModel.objects.get(model_number="EPYC 9354")
+    Listing.objects.filter(pk=listing.pk).update(
+        title_raw="AMD 100-000000798 / 100-000000789 SP5 processors"
+    )
+    listing.refresh_from_db()
+    _observe(listing, observed_at=_OBSERVED_AT + timedelta(hours=1))
+    edge = _resolve(listing)
+    assert edge.evidence["rung"] == 0
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["conflicting_alias_models"] == ["100000000789", "100000000798"]
+    assert listing.product_model is None
+
+
+def test_near_model_xeon_number_does_not_reach_the_seeded_model(
+    site: SourceSite, seeded_cpus: None
+) -> None:
+    """Round-3 R3-D: 'Gold 63380' is not 'Gold 6338'."""
+    listing = _cpu_listing(site, "xeon-63380", "Intel Xeon Gold 63380 32-Core LGA4189")
+    edge = _resolve(listing)
+    assert edge.evidence["outcome"] != "accept"
+    assert listing.product_model is None
+    control = _cpu_listing(site, "xeon-6338", "Intel Xeon Gold 6338 32-Core LGA4189")
+    assert _resolve(control).evidence["outcome"] == "accept"

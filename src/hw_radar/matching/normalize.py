@@ -81,9 +81,11 @@ _CATEGORY_REFERENCE_PHRASES: tuple[str, ...] = ("oem version of", "fit for", "su
 #       compatible part, not the cited drive (MS-1e ebay-0190/0240/0387).
 #       Mid-title "for" stays unmasked: "ST4000NM000A 4TB for Dell server" is
 #       the drive itself. "for parts" is condition vocabulary (vocab
-#       _CONDITIONS), never a reference, so it is excluded.
+#       _CONDITIONS), never a reference, so it is excluded. So is "for sale"
+#       ("For sale: Seagate ST12000NE0008"): a sales preamble whose object is
+#       the listed item itself, and masking it erased the whole identity.
 _CATEGORY_LEADING_REFERENCE_WORDS: tuple[str, ...] = ("for",)
-_LEADING_EXCLUSIONS = r"(?!\s+parts\b)"
+_LEADING_EXCLUSIONS = r"(?!\s+(?:parts|sale)\b)"
 
 # Non-ASCII reference phrases, folded to their registered ASCII form BEFORE
 # noise stripping, which would otherwise erase them and hand the cited
@@ -184,10 +186,24 @@ def canonicalize_listing_text(title: str, condition_label: str = "") -> str:
 
     The label is joined behind a clause boundary so a reference span running
     to the end of the title stops before it: the seller's structured condition
-    is asserted evidence about this item, never part of a cited product. For a
+    is asserted evidence about this item, never part of a cited product. When
+    such a title leaves a "(" unclosed, the missing ")" is appended to the
+    title before the boundary, so the label is never inside the group. For a
     title with no reference phrase the result equals the historical
     canonicalize_title(f"{title} {condition_label}".strip())."""
 
+    if title.strip() and condition_label.strip():
+        # mask_reference_spans runs an unclosed "(" opened inside a span to the
+        # end of the text, so without this close the label would be masked
+        # with the cited product. Closing here, not in _span_end, is what lets
+        # the span ignore every internal boundary: _span_end cannot tell an
+        # internal comma from this label boundary, since both canonicalize to
+        # " - " (round-3 F1/F4 residual: "comparable to (Seagate,
+        # ST12000NE0008" leaked the MPN through the comma). Gated on a phrase
+        # so a phrase-free title keeps its historical canonical text.
+        canonical_title = canonicalize_title(title)
+        if _ANY_REFERENCE_PHRASE.search(canonical_title) is not None:
+            title += ")" * _open_paren_depth(canonical_title)
     return canonicalize_title(" | ".join(p for p in (title, condition_label) if p.strip()))
 
 
@@ -229,12 +245,9 @@ def _span_end(title: str, start: int, *, inside_parens: bool) -> int:
     # condition (F4 residual). Over-masking only costs identity evidence
     # (unresolved), whereas under-masking is a false merge.
     depth = 0
-    unclosed_at = -1
     for i in range(start, len(title)):
         ch = title[i]
         if ch == "(":
-            if depth == 0:
-                unclosed_at = i
             depth += 1
         elif ch == ")":
             if depth:
@@ -244,14 +257,13 @@ def _span_end(title: str, start: int, *, inside_parens: bool) -> int:
                 return i
         elif depth == 0 and _SPAN_BOUNDARY.match(title, i):
             return i
-    if depth:
-        # An unclosed "(" would otherwise hide every later boundary, including
-        # the one canonicalize_listing_text puts before the seller's condition
-        # label, which must never be masked. Fall back to the first boundary
-        # after the unclosed opener.
-        boundary = _SPAN_BOUNDARY.search(title, unclosed_at)
-        if boundary is not None:
-            return boundary.start()
+    # Reaching here with depth > 0 means a "(" the span opened was never
+    # closed, so every later boundary sits inside the comparison object and
+    # the span runs to the end. Ending at the first boundary after the "("
+    # released "(Seagate, ST12000NE0008" and "(used, factory recertified
+    # drives" as listing evidence (round-3 F1/F4 residual). The seller's
+    # condition label is protected upstream: canonicalize_listing_text closes
+    # the group before appending it.
     return len(title)
 
 
@@ -270,7 +282,9 @@ def mask_reference_spans(title: str, phrases: re.Pattern[str] = _REFERENCE_PHRAS
     Parentheses the span itself opens never end it: a group right after the
     phrase ("comparable to (Seagate) ST12000NE0008") is part of the comparison
     object, and the span runs past its ")" to the clause boundary. If such a
-    group is never closed, the span ends at the first boundary after its "(".
+    group is never closed, the span runs to the end of the text: every later
+    boundary is inside the group. canonicalize_listing_text closes the group
+    before the seller's condition label, so the label stays outside.
 
     Text outside spans is returned unchanged and the length is preserved, so
     offsets and word boundaries elsewhere are stable. A title with no phrase

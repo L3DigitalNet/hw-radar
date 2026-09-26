@@ -425,6 +425,7 @@ def _alias_hits(
                 candidate_vendor=candidate.vendor_hint,
                 candidate_structured=candidate.from_structured_field,
                 candidate_normalized=candidate.normalized,
+                candidate_review_only=candidate.review_only,
             )
         )
     return hits

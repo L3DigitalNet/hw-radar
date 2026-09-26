@@ -160,3 +160,34 @@ def test_reference_only_condition_without_a_label_stays_model_grain(
     assert listing.product_model == ironwolf_pro_12tb
     assert listing.product_variant is None
     assert not ProductVariant.objects.exists()
+
+
+def test_unclosed_paren_comma_does_not_expose_the_cited_mpn(
+    site: SourceSite, ironwolf_pro_12tb: ProductModel
+) -> None:
+    # Round-3 F1 residual: the span used to end at the first comma after an
+    # unclosed "(", handing the cited exact-alias MPN to rung 1.
+    listing = _resolve(site, "f1unclosed", "WL 12TB comparable to (Seagate, ST12000NE0008", "New")
+    assert listing.resolution_grain == ResolutionGrain.NONE
+    assert listing.product_model is None
+    assert not ProductVariant.objects.filter(product_model=ironwolf_pro_12tb).exists()
+
+
+def test_unclosed_paren_comma_creates_no_recertified_variant(
+    site: SourceSite, ironwolf_pro_12tb: ProductModel
+) -> None:
+    # Round-3 F4 residual: "factory recertified drives" after the comma
+    # outranked the seller's New label.
+    listing = _resolve(
+        site,
+        "f4unclosed",
+        "Seagate ST12000NE0008 12TB comparable to (used, factory recertified drives",
+        "New",
+    )
+    assert listing.resolution_grain == ResolutionGrain.VARIANT
+    variant = listing.product_variant
+    assert variant is not None
+    assert variant.product_model == ironwolf_pro_12tb
+    assert variant.condition == Condition.NEW
+    assert variant.recert_channel == RecertChannel.UNKNOWN
+    assert not ProductVariant.objects.filter(condition=Condition.RECERTIFIED).exists()

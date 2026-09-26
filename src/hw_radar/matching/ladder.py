@@ -10,6 +10,8 @@ rung: exact hits that all contradict the listing's brand go to review, and a
 grammar decode whose vendor contradicts it never attaches at rung 2. A title
 that names a sibling product line of the target's family (IronWolf Pro vs an
 IronWolf decode) is the same kind of conflict and reviews at every rung.
+So does a listing whose identifiers hit aliases of two different catalog
+models (decide: conflicting_alias_models), inherited priors included.
 
 Confidence constants are OQ-provisional tunables; ADR-0016 settings-row
 versions arrive with the rung-3/occurrence thresholds at MS-1c."""
@@ -111,6 +113,9 @@ class AliasHit:
     # The colliding candidate's normalized text: the distinct-MPN guard uses
     # it to tell two spellings of one model from two different models.
     candidate_normalized: str = ""
+    # MpnCandidate.review_only: the hit counts for conflicting_alias_models
+    # only; decide() withholds it from rungs 0-2.
+    candidate_review_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -227,13 +232,15 @@ def distinct_mpns(candidates: Sequence[MpnCandidate], alias_hits: Sequence[Alias
     MANUFACTURER_MPN candidates count: an OEM/customer part number ("0F38353"),
     a repeated MPN, and an MPN's own dash-suffixed form ("WD60EFRX-68MYMN1",
     whose suffix is not MPN-shaped) all leave one MPN. The structured field is
-    exempt; it is the merchant's single assertion."""
+    exempt; it is the merchant's single assertion. A structured candidate the
+    title also carries (`also_in_title`) still counts as a title MPN."""
 
     mpns = sorted(
         {
             c.normalized
             for c in candidates
-            if c.kind is TokenKind.MANUFACTURER_MPN and not c.from_structured_field
+            if c.kind is TokenKind.MANUFACTURER_MPN
+            and (not c.from_structured_field or c.also_in_title)
         }
     )
     if len(mpns) < 2:
@@ -243,6 +250,32 @@ def distinct_mpns(candidates: Sequence[MpnCandidate], alias_hits: Sequence[Alias
     if every_mpn_hit and len(models) == 1 and None not in models:
         return []
     return mpns
+
+
+def conflicting_alias_models(alias_hits: Sequence[AliasHit]) -> list[str]:
+    """The identifiers whose alias hits no single catalog model explains, else [].
+
+    Each identifier (candidate join key, title or structured) that hits a
+    model- or variant-grain alias names a set of models. The listing is
+    ambiguous when those sets share no model: "WUH722424ALE6L1 / 0F62796"
+    names ALE6L1 and, by its retail PN, ALE6L4. Two spellings of one model,
+    a repeated identifier, and one OEM part number fanning out to several
+    models (the rung-1 family attach) all leave a shared model, so none of
+    them conflict. Identifiers with no alias hit say nothing here; family-grain
+    hits carry no model and are rung 1's conflicting_targets business."""
+
+    models_by_identifier: dict[str, set[int]] = {}
+    for hit in alias_hits:
+        if hit.target.model_id is not None:
+            models_by_identifier.setdefault(hit.candidate_normalized, set()).add(
+                hit.target.model_id
+            )
+    if len(models_by_identifier) < 2:
+        return []
+    first, *rest = models_by_identifier.values()
+    if first.intersection(*rest):
+        return []
+    return sorted(models_by_identifier)
 
 
 def decide(
@@ -262,18 +295,37 @@ def decide(
     model ("WD40EFPX/WD40EFZX"): the ladder would otherwise attach whichever
     token hit or decoded first, an arbitrary pick between two products. Off by
     default because non-drive extractors emit several MANUFACTURER_MPN
-    candidates for ONE product (a CPU's OPN plus its bare model number)."""
+    candidates for ONE product (a CPU's OPN plus its bare model number).
 
-    verdict = _decide(extracted, candidates, prior, alias_hits, decoded, veto=veto)
-    if distinct_mpn_guard and verdict.outcome is Outcome.ACCEPT:
+    Every category, unconditionally: an ACCEPT at any rung, an inherited prior
+    included, becomes REVIEW when the listing's alias hits name catalog models
+    no single model reconciles (conflicting_alias_models). That is the catalog
+    saying the listing names two products, which no category's extractor
+    shape can make benign. It is checked here rather than inside a rung
+    because rung 0 reads no candidates at all: a prior accepted under one
+    title would otherwise be inherited after the title started naming a
+    second model by an identifier the category's own markers do not see (an
+    AMD OPN pair; a WD retail PN)."""
+
+    grounding = [h for h in alias_hits if not h.candidate_review_only]
+    verdict = _decide(extracted, candidates, prior, grounding, decoded, veto=veto)
+    if verdict.outcome is not Outcome.ACCEPT:
+        return verdict
+    ambiguity: dict[str, object] = {}
+    conflicting = conflicting_alias_models(alias_hits)
+    if conflicting:
+        ambiguity["conflicting_alias_models"] = conflicting
+    if distinct_mpn_guard:
         mpns = distinct_mpns(candidates, alias_hits)
         if mpns:
-            return Verdict(
-                Outcome.REVIEW,
-                Grain.NONE,
-                rung=verdict.rung,
-                evidence={**verdict.evidence, "multiple_mpns": mpns},
-            )
+            ambiguity["multiple_mpns"] = mpns
+    if ambiguity:
+        return Verdict(
+            Outcome.REVIEW,
+            Grain.NONE,
+            rung=verdict.rung,
+            evidence={**verdict.evidence, **ambiguity},
+        )
     return verdict
 
 

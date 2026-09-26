@@ -21,6 +21,7 @@ field is exempt — the merchant asserted it as this item's MPN."""
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from hw_radar.matching.normalize import (
     DRIVE_REFERENCE_PHRASE,
@@ -53,6 +54,13 @@ _OEM_RULES: tuple[tuple[str, re.Pattern[str], re.Pattern[str] | None], ...] = (
 HOUSE_SKU_PREFIXES: dict[str, tuple[str, ...]] = {}
 
 _CODE_SHAPE = re.compile(r"\b[a-z0-9][a-z0-9./-]{5,23}\b")
+# WD/HGST orderable part numbers ("0F62796"): the seeds carry them as
+# catalog-authoritative retail_pn aliases, but with a single letter they fail
+# the code-token _TWO_ALPHA test, so a title naming one never reached the
+# alias table. That hid a second model from the conflicting-alias review
+# (round-3 R3-A: "WUH722424ALE6L1 / 0F62796", ALE6L4's retail PN). See the
+# extraction pass for why these are review_only UNKNOWN_CODE candidates.
+_WD_RETAIL_PN = re.compile(r"\b0f\d{5}\b")
 _TWO_ALPHA = re.compile(r"[a-z].*[a-z]")
 _TWO_DIGIT = re.compile(r"\d.*\d")
 # Vocab-owned tokens that are code-shaped but never MPN candidates.
@@ -75,6 +83,8 @@ def extract_candidates(
         existing = out.get(candidate.normalized)
         if existing is None or candidate.confidence > existing.confidence:
             out[candidate.normalized] = candidate
+        elif existing.from_structured_field and not candidate.from_structured_field:
+            out[candidate.normalized] = replace(existing, also_in_title=True)
 
     if structured_mpn:
         canonical = structured_mpn.casefold().strip()
@@ -151,5 +161,27 @@ def extract_candidates(
                 confidence=0.3,
             )
         )
+
+    # review_only: the retail PN may turn an accept into a review (another
+    # model's PN beside the MPN) but never grounds one. Letting it accept would
+    # widen drive recall beyond the review fix that motivated it, and the
+    # MS-1e corpus showed the cost: "Compatible WD Ultrastar DC HC560 0F38785"
+    # (ebay-0388, a look-alike part labeled none) became a false accept.
+    # UNKNOWN_CODE with no vendor, not MANUFACTURER_MPN: the shape asserts no
+    # brand, and an unseeded one beside the MPN ("WUH721818AL5204 0F38353")
+    # must not count as a second MPN for the distinct-MPN guard.
+    for m in _WD_RETAIL_PN.finditer(title):
+        normalized = normalize_alias_text(m.group(0))
+        if normalized not in out:
+            add(
+                MpnCandidate(
+                    raw=m.group(0),
+                    normalized=normalized,
+                    kind=TokenKind.UNKNOWN_CODE,
+                    vendor_hint="",
+                    confidence=0.3,
+                    review_only=True,
+                )
+            )
 
     return sorted(out.values(), key=lambda c: -c.confidence)
