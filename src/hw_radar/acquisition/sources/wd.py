@@ -31,10 +31,17 @@ WD's taxonomy is undocumented and unversioned: these category codes can drift
 without notice and have no stability guarantee from WD. WD Purple recert
 exists in the catalog but is deliberately excluded (owner decision covers only
 Gold/Red/Ultrastar).
+
+Store titles carry no part number ("WD Red Plus Internal NAS HDD 3.5" -
+Recertified"), so the variant `code` is the only identity signal WD exposes.
+For bare internal drives that code is "R" + the manufacturer MPN (RWD20EFPX is
+the recertified WD20EFPX); parse() promotes that MPN into attrs["mpn"], the
+structured-MPN key the resolver reads (see _recert_mpn for what is refused).
 """
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import cast
@@ -70,6 +77,20 @@ PRODUCT_PARAMS = {
 # OCC stockLevelStatus values that signal availability; a variant still needs
 # saleable=true on top of this (recon: variants can be inStock yet not saleable).
 _IN_STOCK_STATUSES = {"instock", "lowstock"}
+
+# Recertified internal-drive SKU: "R" + a WD manufacturer MPN. The MPN group
+# mirrors the WD-prefixed shape in matching.mpn._MFR_SHAPES (`wd\d{2,4}[a-z]{4}`,
+# there applied to casefolded text; WD's store codes are uppercase). Cross-file
+# contract: a promoted value must classify as a western_digital MANUFACTURER_MPN
+# in the matcher, pinned by tests/unit/test_wd_recert_mpn.py — loosening this
+# pattern past the matcher's shape would feed the resolver structured values it
+# then treats as UNKNOWN_CODE at 0.98 confidence. The matcher's HGST-lineage
+# shapes (wuh/hus/...) are deliberately not mirrored: WD's store keys Ultrastar
+# SKUs as "R" + a WD part number (R0F62802), which is not an MPN at all.
+_RECERT_INTERNAL_SKU = re.compile(r"R(WD\d{2,4}[A-Z]{4})")
+# WD retail codes (WDBBGB0040HBK = My Book 4TB) identify consumer enclosures.
+_RETAIL_CODE = re.compile(r"R?WDB[A-Z]")
+_ENCLOSURE_TITLE = re.compile(r"\b(?:my\s+book|my\s+passport|elements)\b", re.IGNORECASE)
 
 
 def _product_url(code: str) -> str:
@@ -200,7 +221,7 @@ class WdAdapter:
                         price=price,
                         stock_status=_stock_status(variant),
                         raw_url=item.url,  # per-item raw-payload association (Task B4)
-                        attrs={"saleable": bool(variant.get("saleable", False))},
+                        attrs=_listing_attrs(variant, str(code), title),
                     )
                 )
         return out
@@ -222,6 +243,36 @@ class WdAdapter:
             )
             for p in self.parse(batch)
         ]
+
+
+def _recert_mpn(code: str, title: str) -> str | None:
+    """Return the manufacturer MPN a recertified internal-drive SKU encodes, else None.
+
+    Only a code that is exactly "R" + a WD internal-drive MPN shape qualifies;
+    every other key (no R prefix like WD240KFGX, Ultrastar R0F... part numbers,
+    enclosure retail codes) yields None rather than a guessed MPN, so the
+    listing falls back to title-only matching exactly as before."""
+    # Consumer enclosures are refused on BOTH key shape and title: the drive
+    # identity model covers bare drives only, and an enclosure's inner drive is
+    # unspecified, so promoting any code-derived MPN would resolve a My Book
+    # onto a bare-drive model and write enclosure prices into its history. The
+    # title check stands alone so the refusal survives a future loosening of
+    # _RECERT_INTERNAL_SKU or a store key that drifts off the WDB retail shape.
+    if _RETAIL_CODE.match(code) or _ENCLOSURE_TITLE.search(title):
+        return None
+    match = _RECERT_INTERNAL_SKU.fullmatch(code)
+    return match.group(1) if match else None
+
+
+def _listing_attrs(variant: dict[str, object], code: str, title: str) -> dict[str, object]:
+    # source_listing_key stays the raw store code: listing identity and history
+    # key on it, and the MPN is only a derived reading of it, so a later change
+    # to the promotion rule can never split a listing or orphan its history.
+    attrs: dict[str, object] = {"saleable": bool(variant.get("saleable", False))}
+    mpn = _recert_mpn(code, title)
+    if mpn is not None:
+        attrs["mpn"] = mpn
+    return attrs
 
 
 def _stock_status(variant: dict[str, object]) -> str:
