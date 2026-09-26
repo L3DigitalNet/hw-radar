@@ -409,6 +409,16 @@ def _vendor_lock(title: str) -> Attribute[str] | None:
     return Attribute(value=value, confidence=0.9, layer=LAYER, source_text=m.group(0))
 
 
+def _is_amd(title: str) -> bool:
+    """The vendor-lock scope. The lock is AMD Platform Secure Boot; on an Intel
+    part "Unlocked"/"locked" states the multiplier (K-series), so reading it
+    there would satisfy an unlocked requirement with the wrong property. Read
+    on the unmasked title like the lock wording itself, so a masked span cannot
+    drop the brand while the lock words stay visible."""
+    brand = _brand(title)
+    return brand is not None and brand.value == "amd"
+
+
 def extract(title: str) -> ExtractedAttributes:
     sockets = [(socket_key(m.group(0)), m.group(0)) for p in _SOCKETS for m in p.finditer(title)]
     cores = [(int(m.group(1) or m.group(2)), m.group(0)) for m in _CORES.finditer(title)]
@@ -416,6 +426,7 @@ def extract(title: str) -> ExtractedAttributes:
     # read the reference-masked title: "replacement for an engineering sample"
     # does not make the listed part one.
     identity = _identity_text(title)
+    brand = _brand(identity)
     payload = CpuAttributes(
         socket=sole_value(sockets, 0.9),
         cores=sole_value(cores, 0.85),
@@ -423,9 +434,8 @@ def extract(title: str) -> ExtractedAttributes:
         sample=_marker(_SAMPLE, identity),
         bundle=_marker(_BUNDLE, identity),
         multi_model=_multi_model(identity),
-        vendor_lock=_vendor_lock(title),
+        vendor_lock=_vendor_lock(title) if _is_amd(title) else None,
     )
-    brand = _brand(identity)
     # quantity feeds ladder.decide's lot review (a "Lot of 4" CPU listing is
     # not a single-unit offer); read from the one vocab table, like drive.
     return replace(

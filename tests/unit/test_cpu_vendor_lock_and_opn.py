@@ -189,3 +189,20 @@ def test_vendor_lock_clause_truth_table(
     if not required:
         assert result.evidence_tier is EvidenceTier.NONE
         assert result.detail == "no constraint"
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Intel Core i9-13900K Unlocked Desktop Processor",
+        "Intel Xeon Gold 6448Y locked multiplier server CPU",
+        "Unlocked CPU 16 cores",  # no brand: scope unknown, never read
+    ],
+)
+def test_vendor_lock_is_read_only_on_amd_parts(title: str) -> None:
+    # Intel "Unlocked"/"locked" is the multiplier, not a PSB vendor lock.
+    assert _lock(title) is None
+
+
+def test_amd_vendor_lock_still_read_with_brand_in_a_masked_span() -> None:
+    assert _lock("OEM Version of AMD EPYC 7763 unlocked") == cpu.VENDOR_UNLOCKED
