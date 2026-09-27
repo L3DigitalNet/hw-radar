@@ -2,10 +2,10 @@
 
 ## Current focus
 
-- eBay x CPU live since 2026-09-27 01:09Z (only enabled source); F6 proven; watch 1 requires unlock.
-- Next: review a few days of pilot runs (quota, delists, 219 unknowns) before widening any scope.
-- Owner call pending: admit eBay/WD/goHardDrive x drive now that ADR 0019 is accepted.
-- F5a: run the proof-env tick after 2026-10-02 21:10Z; verify 0/0; handoff only if paid admission wanted.
+- eBay x CPU is the only admitted cell and stays unchanged for 3–5 days from 2026-09-27 01:09Z.
+- Review pilot health around Sep 30–Oct 2 before widening; cover all six scopes and unknown reasons.
+- Owner decision: no drive cell admission; assess eBay x drive first, then WD/goHardDrive per-cell gates.
+- F5a: after 2026-10-02 21:10Z run proof tick; verify 0/0; handoff only for intentional paid admission.
 
 ## Active incidents
 

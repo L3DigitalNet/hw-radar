@@ -24,12 +24,9 @@ Instructions for AI agents:
 - [ ] Define the v1 watch/requirement contract and implement the smallest complete buyer flow:
   saved requirement → eligible observations → evidence-backed shortlist → exactly-one alert.
   Advanced ADR-0011 drive scoring is optional enrichment, not an eligibility dependency.
-- [ ] Select a deliberately small initial source set (roughly 3–5) that exercises the first-class
-  categories and both local + self-owned-Apify provider paths. F1–F3 landed 2026-09-25 (eBay
-  category sweeps, `pilot_report`; evidence `docs/evidence/2026-09-25-f1-f3-pilot.md`). Remaining:
-  measure a sustained pilot (more than one run per source), which needs the owner's per-cell
-  enablement. Only eBay, goHardDrive, and WD are usable local sources — ServerPartDeals and
-  Seagate are retired (OQ31) — and no Actor-backed merchant is admitted yet (OQ24, F5b deferred).
+- [ ] Hold source expansion at eBay x CPU during its 3–5-day pilot. F1–F3 landed 2026-09-25 (eBay
+  sweeps, `pilot_report`; evidence `docs/evidence/2026-09-25-f1-f3-pilot.md`). Evaluate eBay x drive
+  first; WD/goHardDrive follow with per-cell gates. No Actor-backed merchant is admitted (OQ24, F5b).
 - [ ] Capture listing condition: the pilot measured 0% condition coverage on every source (eBay
   Browse `condition`/`conditionId` is not mapped). Condition feeds the drive matcher's variant
   grain, so change it only with a `matcher_version` bump after, or together with, the MS-1e
@@ -44,13 +41,15 @@ Instructions for AI agents:
   commits (monitoring windows close 2026-10-02 19:40–21:09Z; interim reads that fall due
   2026-09-26 are optional, and a missed one becomes overdue and is taken by the closing read). Then
   confirm `apify_spend_report` shows 0 monitoring and 0 outstanding, and run `apify_ledger_handoff`
-  only if production paid admission is actually wanted. Until then the proof environment holds the
-  cycle's ledger authority.
+  only for an admitted Actor-backed source with intentional production paid admission. Until then
+  the proof environment holds the cycle's ledger authority.
 - [ ] Production Apify runtime rendering: production secrets come from the Hetzner-side OpenBao
   peer through the CT's bao-agent template, not the workstation path; add the scoped runtime token
-  there and render `HW_RADAR_APIFY_TOKEN` only when production paid admission is intentionally
-  configured (with the account settings, prices, ledger authority, and `MAX_KV_WRITES=3`, the
+  there and render `HW_RADAR_APIFY_TOKEN` only for an admitted Actor-backed source with production
+  paid admission intentionally configured (account settings, prices, ledger authority, and `MAX_KV_WRITES=3`, the
   owner-approved F-01 value).
+- [ ] Ship these decision-document changes with the next runtime release; do not create a docs-only
+  deployment.
 - [ ] Promote the synthetic Actor build to the `prod` tag (MS2-D-43 *Deploy*) only if a production
   smoke is ever wanted; the synthetic Actor is not a production collection source.
 - [ ] The drive corpus is now a CI gate (`test_ms1_ratification_gate`, refdata digest pinned): a
@@ -66,17 +65,28 @@ Instructions for AI agents:
   because the pilot sweep queries only "EPYC 7302".
 - [ ] Ratify further CPU families only with their own owner-audited corpus (Intel Xeon first): add
   the family key to `categories.CPU_RATIFIED_FAMILIES`; EPYC-only today (OQ34, matcher 2026.09.4).
-- [ ] eBay x CPU pilot (live since 2026-09-27): before widening, review a few days of runs (quota,
-  completeness, delist behavior) and the 219 `unknown` shortlist reviews. Any new EPYC scope must
-  stay single-page provable; an OEM part (7R13, 7J13, ...) needs its own seed and audit, never a
-  7763 alias.
+- [ ] eBay x CPU pilot (live 2026-09-27 01:09Z): run unchanged for 3–5 days; review about Sep 30–
+  Oct 2 before widening. Report single-page scope proof, Browse calls/headroom, successful/failed runs,
+  and `COMPLETE` delist provenance for all six scopes.
+- [ ] Report eBay x CPU churn, duplicates, variations, unknown reasons over time, lock distribution,
+  shipping-known share, and shortlist stability/usefulness for each of its six scopes.
+- [ ] Diagnose `unknown`: histogram target unresolved, vendor lock unknown, shipping unknown, price
+  indeterminate, and multiple reasons. Sample 10–20 largest-bucket rows; do not lower unknown as a KPI.
+- [ ] Classify sampled unknowns as missing marketplace evidence, extraction defects, unseeded legitimate
+  models, or unsupported OEM/sample parts. Fix only demonstrated defects.
+- [ ] Keep new EPYC scopes single-page provable. An OEM part (7R13, 7J13, ...) needs its own seed and
+  audit; never treat it as a 7763 alias.
+- [ ] Evaluate eBay x drive first, without admission: assess ranking-limited legacy-query completeness,
+  identifier coverage, CPU-plus-drive Browse quota, legacy-heartbeat effect, and watch usefulness.
+- [ ] Evaluate WD/goHardDrive only after eBay x drive, with fresh policy verification and their own
+  remaining per-cell gates. ADR 0019 ratifies the matcher only; no drive cell is admitted.
 - [ ] Residual latent CPU matcher gap: Ryzen/Core "or" alternatives are unflagged because their
   lines are unseeded (cannot alias-hit). (Model priors now upgrade on a new condition: 2026.09.3.)
-- [ ] Deliberately admit each `(source, category)` cell in the admission matrix
-  (`src/hw_radar/acquisition/admission.py`) only after its operational, retention/ToS,
-  completeness, match-quality, and cost gates pass, then flip the source's `enabled` bit. Before
-  the first flip, an operator must run the per-cell live checklist in `docs/handoff/deployed.md`
-  against the live system (done for eBay x CPU only, 2026-09-27; every other cell unchecked).
+- [ ] Admit a `(source, category)` cell only after its independent operational, retention/ToS,
+  completeness, match-quality, and cost checklist passes. eBay x CPU alone is admitted; drive cells
+  remain unchecked pending the evaluations above.
+- [ ] Before each future cell flip, an operator must run its live checklist in `docs/handoff/deployed.md`;
+  then enable the source only when that cell is admitted.
 - [ ] Re-verify eBay category IDs (27386, 170083, 11210, 164, 56088) through the Taxonomy API
   quarterly and on eBay category-change notices (last 2026-09-25, tree 0, version 134).
 - [ ] Add the remaining SanDisk/WD real-corpus alias verification; blocked on the owner-gated

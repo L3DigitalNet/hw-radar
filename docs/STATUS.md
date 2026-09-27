@@ -38,6 +38,11 @@
   stale-delist unless the sweep is provably complete.
 - **Admission matrix:** eBay x CPU `ADMITTED` 2026-09-27 after its live checklist; every other
   cell `NOT_ADMITTED`, each waiting on its own checklist and an owner decision.
+- **Post-Session-9 owner direction (2026-09-27):** admit no drive cell. Keep eBay x CPU unchanged
+  for 3–5 days from 01:09Z, then review pilot health before any widening; evaluate eBay x drive first.
+- Drive-matcher ratification does not admit a source/category cell. WD and goHardDrive follow eBay x
+  drive only after fresh policy verification and their independent remaining gates.
+- Decision documentation rides the next runtime release; no docs-only deployment is planned.
 - **Owner decisions:** session 2 (2026-09-24) — HR Actors live in this repo under `actors/`;
   OQ23 (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12, no PAYG). 2026-09-25 — OQ25-OQ29
   (scoped runtime token; $5.00/cycle external liability; MS-2 exits on F5a; $1.00/cycle operator
