@@ -4,13 +4,17 @@
 
 - MS-0 and MS-1a through MS-1d are implemented and merged: Django/TimescaleDB foundation, ingestion
   substrate, matching, catalog seed, five connectors, and availability heartbeat.
-- **Production deployed `ded1000`** (PR #39, Deploy run 36273962897, 2026-09-26): **matcher
-  `2026.09.3`** live (owner audit rulings; 5 Codex rounds + verifier), migration `0024`, evaluator
-  `ms2c.3`. Gate @`0788356`: 3205 passed / 3 opt-in skips, 95% cov; synthetic Actor 75, 99% cov.
+- **Production deployed `646809d`** (PR #41, 2026-09-27; `5f2d300`/PR #40 before it): matcher
+  `2026.09.4`, evaluator `ms2c.3`, migration `0024`. Gate @`a78ebd2`: 3249 passed / 2 opt-in
+  skips, 96% cov; synthetic Actor 75, 99% cov. PR #41 CI green.
+- **First live cell, 2026-09-27: eBay x CPU admitted and eBay enabled** (six EPYC scopes, 600 s).
+  **F6 proven**: live eBay listings -> EPYC identity -> vendor lock -> eligibility -> shortlist
+  (17 match / 51 no_match / 219 unknown). Evidence: `docs/evidence/2026-09-27-ebay-cpu-sa004-f6.md`.
 - **OQ31 (owner, 2026-09-26):** ServerPartDeals and Seagate-recertified are retired — permission-
   required, any venue. SA-004's global enable order is replaced by a per-`(source, category)`
-  admission matrix (`admission.py`; every live cell `NOT_ADMITTED`; `docs/handoff/deployed.md`).
-- All marketplace sources ship disabled; scoring and alerting are not implemented.
+  admission matrix (`admission.py`; only eBay x CPU `ADMITTED`; `docs/handoff/deployed.md`).
+- Only eBay is enabled (eBay x CPU pilot); every other source is disabled. Scoring and alerting
+  are not implemented.
 - **Strategy re-baselined 2026-09-24:** [ADR 0021](adr/adr-0021-hybrid-acquisition-apify.md)
   adopts hybrid acquisition (retain cheap direct/local collectors; use self-owned private Apify
   Actors selectively; third-party Actors by measured exception) with a hard **$20/month**
@@ -19,7 +23,7 @@
 - **Drive matcher ratified (s9, 2026-09-26): ADR 0019 accepted.** OQ33 relabels 8 legacy-family
   rows (historical family wins); composite PASS in one full run: 366/366 = 100% (FP 0, FN 204),
   floors ebay 132 / wd 22 / ghd 9, audit PASS, rung-0 PASS. The corpus is now a CI gate.
-- **CPU (s9): AMD EPYC is the only ratified CPU family** (OQ34; matcher `2026.09.4`, on dev). EPYC
+- **CPU (s9): AMD EPYC is the only ratified CPU family** (OQ34; matcher `2026.09.4`, live). EPYC
   auto-accepts, 105/105 under production rules; Xeon and other families review `family_not_ratified`.
   Vendor lock is listing evidence; watches can require unlocked (migration `0024`; unknown never passes).
 - **MS-2 plan** (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`) Slices A-F
@@ -32,8 +36,13 @@
   ~21:09Z (see `docs/handoff/state.md`).
 - **Delist rule amendment (ADR 0020, 2026-09-26):** no eBay scope (legacy drive or category) may
   stale-delist unless the sweep is provably complete.
-- **Admission matrix (2026-09-26):** every cell `NOT_ADMITTED`; each waits on its per-cell live
-  checklist (`docs/handoff/deployed.md`). eBay x CPU (EPYC) is the F6 candidate.
+- **Admission matrix:** eBay x CPU `ADMITTED` 2026-09-27 after its live checklist; every other
+  cell `NOT_ADMITTED`, each waiting on its own checklist and an owner decision.
+- **Post-Session-9 owner direction (2026-09-27):** admit no drive cell. Keep eBay x CPU unchanged
+  for 3–5 days from 01:09Z, then review pilot health before any widening; evaluate eBay x drive first.
+- Drive-matcher ratification does not admit a source/category cell. WD and goHardDrive follow eBay x
+  drive only after fresh policy verification and their independent remaining gates.
+- Owner requested release/deployment of the decision documentation on 2026-09-27; pilot settings stay unchanged.
 - **Owner decisions:** session 2 (2026-09-24) — HR Actors live in this repo under `actors/`;
   OQ23 (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12, no PAYG). 2026-09-25 — OQ25-OQ29
   (scoped runtime token; $5.00/cycle external liability; MS-2 exits on F5a; $1.00/cycle operator

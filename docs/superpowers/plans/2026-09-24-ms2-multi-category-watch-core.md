@@ -1,8 +1,9 @@
 # MS-2 — Multi-category watch core: Implementation Plan
 
-> **Status (2026-09-26):** Slices A–F code-complete and deployed (release `ded1000`). F5a executed
-> 2026-09-25; F5b deferred (OQ24 resolved 2026-09-26); F6 blocked on OQ34 plus the per-cell
-> checklist. The *Open risks* table and *Next slice after A (historical)* are the plan-time record;
+> **Status (2026-09-27):** Slices A–F code-complete and deployed (release `646809d`). F5a executed
+> 2026-09-25; F5b deferred (OQ24 resolved 2026-09-26); **F6 done 2026-09-27** (eBay × CPU admitted
+> and enabled; watch 1 shortlisted 17 real EPYC listings with no score:
+> `docs/evidence/2026-09-27-ebay-cpu-sa004-f6.md`). AC-1..AC-8 are evidenced. The *Open risks* table and *Next slice after A (historical)* are the plan-time record;
 > R25's Read-grant and delete-probe residuals and R38 were closed by F5a / owner acceptance
 > 2026-09-25.
 
@@ -7221,6 +7222,8 @@ follow-up R12-01).**
 - **F6 — End-to-end exit (owner-gated: R5).** With pilot sources enabled by the
   owner, create one real watch. `show_shortlist` produces a qualifying shortlist
   from real observations with no score (AC-3). Record the evidence in STATUS.
+  **Done 2026-09-27** (eBay × CPU, EPYC scopes, `require_vendor_unlocked`):
+  [F6 evidence](../../evidence/2026-09-27-ebay-cpu-sa004-f6.md).
 
 **MS-2 exit:** AC-1..AC-8 evidenced. The live halves of AC-4 and AC-5 are
 recorded by F5a on the synthetic source (revision 5). The live half of AC-3 is

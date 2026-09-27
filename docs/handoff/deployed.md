@@ -1,35 +1,32 @@
 # Deployed State
 
-Last updated: 2026-09-27 (release `5f2d300`)
+Last updated: 2026-09-27 (release `646809d`; eBay × CPU live)
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `5f2d300` (PR #40 merge, matcher
-  `2026.09.4`: EPYC-only CPU auto-accept, OQ34; ADR 0019 ratified), Deploy run 36281409520,
-  approved via `pending_deployments`, deployed 2026-09-27 00:21Z. Earlier: `ded1000` (matcher
-  `2026.09.3`, migration 0024), `478baf0` (matcher `2026.09.2`), `c2adae0` (Slice F).
-- Host-verified after `5f2d300`: `/healthz` reports `5f2d300`, `database: true`; no pending
-  migration; all 6 `SourceConfig` rows `enabled=False`; no admitted cell; no `APIFY` env var;
-  `MATCHER_VERSION` `2026.09.4`, `EVALUATOR_VERSION` `ms2c.3`.
+- Deploys run from `main` via the Deploy workflow. Latest: `646809d` (PR #41: admits eBay × CPU
+  only), Deploy run 36283534627, 2026-09-27 ~01:07Z; before it `5f2d300` (PR #40, matcher
+  `2026.09.4`, EPYC-only CPU auto-accept) and `ded1000` (migration 0024).
+- Host-verified after `646809d`: `/healthz` reports it, `database: true`; no pending migration;
+  admitted cells exactly `[("ebay","cpu")]`; no `APIFY` env var; matcher `2026.09.4`, evaluator
+  `ms2c.3`. The release shipped with every source disabled.
+- **Live since 2026-09-27 01:09Z: eBay enabled** (the only enabled source) after the eBay × CPU
+  checklist passed: six EPYC query scopes every 600 s; production watch 1 requires a stated
+  unlock. F6 is proven: [evidence](../evidence/2026-09-27-ebay-cpu-sa004-f6.md).
 - eBay credentials render in production since 2026-09-26 (`EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET`
   from the hw-radar service-store bundle; [bug 004](bugs/004-ebay-credentials-not-rendered-in-production.md)).
-  eBay × CPU live checklist: [evidence](../evidence/2026-09-27-ebay-cpu-sa004-f6.md).
-- Post-deploy `import_refdata --category cpu` (rehearsed first on a production-shaped DB): 2
-  manufacturers, 2 families, 9 models, 9 specs, 19 aliases; `product_model` 15 -> 24 (cpu 9,
-  drive 15 unchanged). GPU and RAM refdata are still 0 rows in production.
+- Production CPU refdata (`import_refdata --category cpu`, 2026-09-26): 2 families, 9 models, 9
+  specs, 19 aliases. GPU and RAM refdata are still 0 rows in production.
 - Monthly refresh (2026-10-01 07:00Z, rehearsed): re-imports drive + cpu only, adds 253 drive
   models, moves the 3 HC550 models to "Ultrastar"; the empty "Ultrastar DC HC550" family stays
   (owner, 2026-09-26: leave it; no manual deletion).
-- Delist rule amendment (ADR 0020, 2026-09-26): no eBay scope (legacy drive or category) may
-  stale-delist unless the sweep is provably complete.
 - Apify stays fail-closed in production: no `APIFY` variable is rendered, so admission denies by
   construction; no ledger authority, cycle, reservation, latch, or provider run exists. The F5a
   proof environment holds the 2026-09-05 cycle's ledger authority; production may claim paid
   admission only after that environment's correction monitoring closes (2026-10-02 ~21:09Z) and
   `apify_ledger_handoff` runs.
-- Static files: `STATIC_ROOT` `/var/lib/hw-radar/staticfiles` (deploy-owned, 0755/0644, no
-  `hwradar` link); the deploy smoke fetches `base.css` through nginx.
-  [Bug 001](bugs/001-nginx-static-403.md) is fixed and verified.
+- Static files: `STATIC_ROOT` `/var/lib/hw-radar/staticfiles` (deploy-owned, 0755/0644); the
+  deploy smoke fetches `base.css` through nginx ([bug 001](bugs/001-nginx-static-403.md), fixed).
 - The production environment needs a reviewer approval per push to `main`; an unapproved run dies
   at GitHub's 30-day cap. The owner's account approves via the `pending_deployments` API.
 
@@ -59,14 +56,15 @@ production-enableable. Code and history are preserved. Re-admission needs a fres
 source-admission review on materially changed Terms or written merchant permission; nothing
 re-admits a retired source automatically.
 
-Every live cell below is `NOT_ADMITTED` today. "not verified" marks a gate this document cannot
+Only eBay × CPU is `ADMITTED` (2026-09-27, [evidence](../evidence/2026-09-27-ebay-cpu-sa004-f6.md));
+every other live cell is `NOT_ADMITTED`. "not verified" marks a gate this document cannot
 confirm from the repo alone; verify it live before admitting that cell. Seagate-recertified sells
 drives only, so its GPU/RAM/CPU cells are `NOT_APPLICABLE` and are not shown as separate rows.
 
 | Source × category | Terms/policy | Connector/API | Retention | Completeness | Refdata seeded (prod) | Corpus ratified | Identifier quality | Condition/shipping | Cost/budget | Cell state |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | eBay × drive | Official Browse API | Legacy keyword sweep, live | `ebay_listing_observation` ≤6h, delete-on-delist; never stale-delists an unprovably-complete scope (ADR 0020 amendment, 2026-09-26) | not verified | Yes (MS-1 drive seed) | Ratified 2026-09-26 — ADR-0019 accepted (composite PASS, 366/366) | not verified | 0% condition coverage (pilot, 2026-09-25) | No direct cost (unmetered) | `NOT_ADMITTED` |
-| eBay × CPU | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above; same amendment applies | Single-page only provable (F1) | Yes — CPU refdata now seeded in prod (2026-09-26) | AMD EPYC ratified (OQ34): 105/105 under production rules, matcher `2026.09.4`; other CPU families review; F6 watch must set `require_vendor_unlocked` | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
+| eBay × CPU | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above; same amendment applies | Six EPYC scopes, each single-page complete (live 2026-09-27) | Yes — CPU refdata seeded in prod (2026-09-26) | AMD EPYC ratified (OQ34): 105/105 under production rules, matcher `2026.09.4`; other CPU families review | EPYC exact alias; OEM/ES/QS parts resolve to `none` (live: 112/112) | Unknown shipping keeps a price clause `unknown`; buying watches set `require_vendor_unlocked` | No direct cost; about 864 Browse calls/day at 600 s | **`ADMITTED`**, eBay enabled 2026-09-27 |
 | eBay × GPU | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above | Single-page only provable (F1) | No — 0 rows in production | Harvested unlabeled (F4: 851 GPU entries); not ratified | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
 | eBay × RAM | Official Browse API | Query-scoped sweep, live-verified 2026-09-25 | Same class as above | Single-page only provable (F1) | No — 0 rows in production | Harvested unlabeled (F4: 991 RAM entries); not ratified | not verified | 0% condition coverage (pilot) | No direct cost (unmetered) | `NOT_ADMITTED` |
 | WD-recertified × drive | not verified | Live connector, deployed | not verified | not verified | Yes (MS-1 drive seed) | Ratified (ADR-0019 accepted 2026-09-26) | SKU carries no part number (MS-1e finding F2) | not verified | No direct cost (unmetered) | `NOT_ADMITTED` |
@@ -78,7 +76,8 @@ drives only, so its GPU/RAM/CPU cells are `NOT_APPLICABLE` and are not shown as 
 
 Run this checklist against the **live production system** — not from this document — immediately
 before a specific `(source, category)` cell is admitted or its source's `enabled` bit flips.
-Every box below is unchecked: nothing has been enabled.
+The boxes are the reusable template; eBay × CPU's completed run is in its
+[evidence](../evidence/2026-09-27-ebay-cpu-sa004-f6.md), and every other cell is unchecked.
 
 - [ ] Current release migrated (`migrate --plan` empty); web and poller services healthy, 0
       unexpected restarts.
@@ -111,6 +110,9 @@ FROM source_site
 WHERE source_config.source_site_id = source_site.id
   AND source_site.normalized_name = '<source-normalized-name>';
 ```
+
+The poller reads enabled rows once at start, so restart only `hw-radar-poller.service` after the
+flip (and after a disable); the first full-lane run fires one `cadence_baseline_s` later.
 
 After each flip, watch `scraper_runs` until the first run reaches `status = 'success'` and at
 least one resolved listing has a non-`none` grain (`detail_json` on the run, or the resulting

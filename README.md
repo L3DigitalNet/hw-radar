@@ -36,15 +36,15 @@ workflow, using hybrid acquisition: inexpensive direct/local collectors where th
 fit and self-owned private Apify Actors selectively under a hard **$20/month**
 Hardware Radar Apify ceiling.
 
-**The multi-category watch core is under way.** Its first slices are deployed
-with every marketplace source still disabled: GPU/RAM/CPU first-class
-categories, category-specific `match | no_match | unknown` requirement
+**The multi-category watch core is under way.** Its slices are deployed:
+GPU/RAM/CPU first-class categories, category-specific `match | no_match | unknown` requirement
 evaluation, and Hardware Radar's first self-owned Apify Actor project
 (`actors/hw-radar-synthetic-collector`, deployed privately and proven by eleven admitted runs in a
 non-production proof environment on 2026-09-25). The provider-run and Apify spend-ledger
 infrastructure behind it is deployed too, with Apify admission deliberately left unconfigured in
 production. eBay GPU/RAM/CPU category sweeps and a pilot measurement report (`pilot_report`) are deployed;
-every source x category cell stays `NOT_ADMITTED` until its per-cell live checklist passes.
+each source x category cell is admitted only after its own per-cell live checklist passes. The
+first, eBay x CPU (AMD EPYC scopes), went live on 2026-09-27; every other cell stays off.
 
 ## Documentation
 
