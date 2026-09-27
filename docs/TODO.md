@@ -48,8 +48,6 @@ Instructions for AI agents:
   there and render `HW_RADAR_APIFY_TOKEN` only for an admitted Actor-backed source with production
   paid admission intentionally configured (account settings, prices, ledger authority, and `MAX_KV_WRITES=3`, the
   owner-approved F-01 value).
-- [ ] Ship these decision-document changes with the next runtime release; do not create a docs-only
-  deployment.
 - [ ] Promote the synthetic Actor build to the `prod` tag (MS2-D-43 *Deploy*) only if a production
   smoke is ever wanted; the synthetic Actor is not a production collection source.
 - [ ] The drive corpus is now a CI gate (`test_ms1_ratification_gate`, refdata digest pinned): a

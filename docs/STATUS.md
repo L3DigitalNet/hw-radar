@@ -42,7 +42,7 @@
   for 3–5 days from 01:09Z, then review pilot health before any widening; evaluate eBay x drive first.
 - Drive-matcher ratification does not admit a source/category cell. WD and goHardDrive follow eBay x
   drive only after fresh policy verification and their independent remaining gates.
-- Decision documentation rides the next runtime release; no docs-only deployment is planned.
+- Owner requested release/deployment of the decision documentation on 2026-09-27; pilot settings stay unchanged.
 - **Owner decisions:** session 2 (2026-09-24) — HR Actors live in this repo under `actors/`;
   OQ23 (cash ceiling ~$20 incl. $19 Starter fee, HR <=$12, no PAYG). 2026-09-25 — OQ25-OQ29
   (scoped runtime token; $5.00/cycle external liability; MS-2 exits on F5a; $1.00/cycle operator
