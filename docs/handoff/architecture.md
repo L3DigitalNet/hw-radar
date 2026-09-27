@@ -61,13 +61,13 @@ Last updated: 2026-09-26
 
 - MS-1e drive-matcher ratification: done 2026-09-26 (composite PASS, 366/366,
   ADR-0019 accepted); the corpus runs as a CI gate. CPU auto-accept is scoped
-  to AMD EPYC (OQ34, `CategoryRules.ratified_families`); every
-  admission-matrix cell is `NOT_ADMITTED`
+  to AMD EPYC (OQ34, `CategoryRules.ratified_families`); only the eBay x
+  CPU admission cell is `ADMITTED` (live 2026-09-27)
 - MS-2 multi-category watch core (re-baselined by ADR-0021/ADR-0022, replacing
   the old MS-2a scoring-substrate sequencing): Slices A–F code-complete and
-  deployed (migrations 0021–0024 in production, release `ded1000`); F5a
-  synthetic Actor proof executed 2026-09-25; F6 (eBay x CPU x EPYC) waits on
-  the `2026.09.4` release plus the per-cell live checklist;
+  deployed (migrations 0021–0024 in production, release `646809d`); F5a
+  synthetic Actor proof executed 2026-09-25; F6 (eBay x CPU x EPYC) proven
+  live 2026-09-27;
   OQ25–OQ29 resolved 2026-09-25; OQ24 part (b) (production merchant source)
   resolved 2026-09-26 — none is admitted now, F5b deferred, not a blocker.
   ADR-0011's detailed drive-scoring design is accepted but deferred from

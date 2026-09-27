@@ -35,8 +35,8 @@ Instructions for AI agents:
   grain, so change it only with a `matcher_version` bump after, or together with, the MS-1e
   ratification. Same change: keep the title/label join visible to the negation window (today
   "... No Screws" + label "Used" denies the label; canonical text erases the " | " join).
-- [ ] Extend the CPU seeds to cover the chosen F6 EPYC models (production CPU refdata seeded
-  2026-09-26 on `478baf0`); GPU/RAM production seeding stays deferred until their own owner gate.
+- [ ] GPU/RAM production refdata seeding stays deferred until their own owner gate (CPU seeds
+  cover the four F6 EPYC models, seeded 2026-09-26).
 - [ ] F5a step 5 (MS2-D-45): before any production environment admits paid Apify work in the
   2026-09-05 cycle, drain the proof environment. Run its tick wrapper
   (`~/.local/state/hw-radar-f5a/tick.sh N GAP`, workstation-local; reads the runtime token from
@@ -66,15 +66,17 @@ Instructions for AI agents:
   because the pilot sweep queries only "EPYC 7302".
 - [ ] Ratify further CPU families only with their own owner-audited corpus (Intel Xeon first): add
   the family key to `categories.CPU_RATIFIED_FAMILIES`; EPYC-only today (OQ34, matcher 2026.09.4).
-- [ ] F6 (eBay x CPU x EPYC) waits on the matcher `2026.09.4` release plus the per-cell live
-  checklist (`docs/handoff/deployed.md`); its watch must set `require_vendor_unlocked`.
+- [ ] eBay x CPU pilot (live since 2026-09-27): before widening, review a few days of runs (quota,
+  completeness, delist behavior) and the 219 `unknown` shortlist reviews. Any new EPYC scope must
+  stay single-page provable; an OEM part (7R13, 7J13, ...) needs its own seed and audit, never a
+  7763 alias.
 - [ ] Residual latent CPU matcher gap: Ryzen/Core "or" alternatives are unflagged because their
   lines are unseeded (cannot alias-hit). (Model priors now upgrade on a new condition: 2026.09.3.)
 - [ ] Deliberately admit each `(source, category)` cell in the admission matrix
   (`src/hw_radar/acquisition/admission.py`) only after its operational, retention/ToS,
   completeness, match-quality, and cost gates pass, then flip the source's `enabled` bit. Before
   the first flip, an operator must run the per-cell live checklist in `docs/handoff/deployed.md`
-  against the live system (still unchecked; every cell is `NOT_ADMITTED`).
+  against the live system (done for eBay x CPU only, 2026-09-27; every other cell unchecked).
 - [ ] Re-verify eBay category IDs (27386, 170083, 11210, 164, 56088) through the Taxonomy API
   quarterly and on eBay category-change notices (last 2026-09-25, tree 0, version 134).
 - [ ] Add the remaining SanDisk/WD real-corpus alias verification; blocked on the owner-gated

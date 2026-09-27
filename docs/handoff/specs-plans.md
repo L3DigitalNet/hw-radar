@@ -20,7 +20,7 @@ Last updated: 2026-09-26 (release `ded1000`)
 
 | Artifact | Role | Status |
 | --- | --- | --- |
-| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 12 (+ landing notes). Slices A–F code-complete and deployed (latest `ded1000`); F5a proof executed 2026-09-25 (`docs/evidence/2026-09-25-f5a-synthetic-proof.md`); F1–F3 landed 2026-09-25 (`docs/evidence/2026-09-25-f1-f3-pilot.md`). Remaining: F6, which waits on the `2026.09.4` release (OQ34 EPYC scope) plus the per-cell checklist. |
+| `docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md` | MS-2 multi-category watch-core implementation plan | Active, revision 12 (+ landing notes). Slices A–F code-complete and deployed (latest `646809d`); F5a proof executed 2026-09-25 (`docs/evidence/2026-09-25-f5a-synthetic-proof.md`); F1–F3 landed 2026-09-25 (`docs/evidence/2026-09-25-f1-f3-pilot.md`); F6 done live 2026-09-27 (`docs/evidence/2026-09-27-ebay-cpu-sa004-f6.md`). Exit evidence complete (AC-1..AC-8). |
 | `docs/research/2026-09-24-ms2-code-dependency-map.md` | Code dependency map supporting the MS-2 plan | Active; keep alongside the plan |
 | `docs/superpowers/specs/2026-09-06-ms2-scoring-design.md` | Advanced HDD/SSD scoring design | Revision 14 owner-accepted; **deferred from immediate milestone sequencing by ADR 0022**; retain for later category-local drive scoring |
 | `docs/superpowers/plans/2026-09-06-ms2a-scoring-substrate.md` | Deferred HDD/SSD scoring-substrate plan | Revision 4 reviewed; **do not execute now**. Rebase schema/migration assumptions before any future owner-authorized activation. |

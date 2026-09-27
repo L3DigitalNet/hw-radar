@@ -161,6 +161,7 @@ This decision is confirmed when:
 - **Amends scope assumption in** [ADR 0010](adr-0010-canonical-data-model.md): v1 is no longer drives-only; the generic-spine decision remains unchanged.
 - **Narrows launch-critical scope of** [ADR 0011](adr-0011-composite-deal-score.md): it remains the accepted drive-score design, but no longer gates the multi-category first release.
 - [ADR 0021](adr-0021-hybrid-acquisition-apify.md) supplies the acquisition-provider strategy and cost ceiling for the broader source/category plan.
+- **Confirmation progress (2026-09-27):** items 1 and 2 are verified (MS-2 AC-1/AC-2). Item 3's real-shortlist half is evidenced by the live F6 run ([evidence](../evidence/2026-09-27-ebay-cpu-sa004-f6.md)); its alert half is scheduled for MS-4 (MS-2 plan R10).
 
 ## Amendment — 2026-09-24: Actor proof and Actor-backed pilot sources (owner clarification)
 
