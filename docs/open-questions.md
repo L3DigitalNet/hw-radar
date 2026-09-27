@@ -13,60 +13,19 @@
   - [Important Notes](#important-notes)
   - [Table of Contents](#table-of-contents)
   - [Open questions](#open-questions)
-    - [OQ33 — Legacy and rebranded drive family names in corpus labels](#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)
-    - [OQ34 — CPU auto-accept scope: category-wide or the ratified EPYC family](#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family)
+  - [Previously resolved](#previously-resolved)
   - [How to maintain this document](#how-to-maintain-this-document)
 
 ## Open questions
 
-### OQ33 — Legacy and rebranded drive family names in corpus labels
+No question is open. When a new one is raised, add it here per
+[How to maintain this document](#how-to-maintain-this-document).
 
-Raised 2026-09-26 by the MS-1e stratified audit
-([packet §7](evidence/2026-09-26-ms1e-expanded-audit-packet.md#7-owner-rulings-applied-and-final-measurement-2026-09-26-matcher-2026093)).
-Q2 counts an explicitly named family at family grain, but does not say how to name a line that was
-discontinued or renamed. Should a listing naming one be labeled:
+## Previously resolved
 
-1. with the **historical family name** as written (Constellation ES, Enterprise Capacity, WD RE,
-   pre-2020 "WD Red" on an EFRX drive now sold as Red Plus);
-2. with the **current successor line** (Enterprise Capacity → Exos, WD RE → Gold, EFRX → Red Plus); or
-3. **`none`** (legacy names are not family evidence)?
-
-Rows: ebay-0446, ghd-0085, ghd-0062, ghd-0039, ghd-0033, ghd-0038, ghd-0011 (all in the audit sample),
-and ebay-0017. It blocks only the MS-1e audit gate. The matcher resolves all eight rows to `none`, so
-no answer changes measured precision (366/366).
-
-#### Agent notes
-
-- Option 1 matches Q3's reasoning (a product's historical brand identity is not erased by a later
-  owner) and needs no successor mapping. Option 2 needs a first-party rebrand table per line.
-  Option 3 is the most conservative, but contradicts Q2 for lines that are unambiguous (Pipeline HD).
-- Whatever the answer, the matcher change (if any) is recall-only and can follow separately.
-
-#### My Comments
-
-### OQ34 — CPU auto-accept scope: category-wide or the ratified EPYC family
-
-Raised 2026-09-26 by the CPU owner audit
-([packet §9](evidence/2026-09-26-cpu-epyc-audit-packet.md#9-owner-audit-applied-and-final-measurement-2026-09-26-matcher-2026093)).
-The owner-audited EPYC corpus passes the identity gate (105/105 would-accepts, audit PASS).
-`CategoryRules.auto_accept` is one flag for the whole CPU category, but production refdata also
-holds five Intel Xeon models the corpus never measured. Should the flip:
-
-1. enable auto-accept **category-wide** (Xeon exact-alias hits auto-accept on EPYC evidence);
-2. be **scoped to the ratified family** (a small code change: auto-accept only aliases whose
-   family is on a per-category ratified list, starting with AMD EPYC); or
-3. **wait** for a Xeon corpus?
-
-#### Agent notes
-
-- Recommendation: option 2. It ratifies exactly what was measured, keeps Xeon in review, and the
-  Intel refdata already carries a TODO about bare-number alias collision risk.
-- None of these admits collection: eBay × CPU stays `NOT_ADMITTED` until the per-cell live
-  checklist in `docs/handoff/deployed.md` passes, and the F6 watch must set
-  `require_vendor_unlocked`.
-
-#### My Comments
-
+OQ33 and OQ34 — historical drive family labels and the CPU auto-accept scope, raised by the
+session-8 audits — were owner-resolved 2026-09-26 and relocated to
+[`resolved-questions.md`](resolved-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels).
 OQ24, OQ31, and OQ32 — the production Actor-backed merchant
 source fork, the ServerPartDeals/Seagate Terms conflict, and the MS-1e ratification-gate floor —
 were owner-resolved 2026-09-26 and relocated to [`resolved-questions.md`](resolved-questions.md).
@@ -92,6 +51,8 @@ fork was owner-resolved 2026-09-26 and relocated to
 (MS-2 exit on the synthetic proof alone), and OQ29 (operator allowance size) were
 owner-resolved 2026-09-25 and relocated to
 [`resolved-questions.md`](resolved-questions.md#oq25--hardware-radar-apify-credential-and-mcp-tool-scope).
+OQ30 (runtime Apify account reads, R25) was owner-resolved 2026-09-25 and recorded in
+[`resolved-questions.md`](resolved-questions.md#oq30--runtime-apify-account-reads-r25).
 
 ## How to maintain this document
 
@@ -110,4 +71,4 @@ These rules govern **both** files: this one (open) and its companion [`resolved-
    - `#### Agent notes` — research/reconciliation context, maintained by the assistant.
    - `#### My Comments` — the owner's notes and decisions; **the assistant does not edit this block.** (When an OQ is relocated to `resolved-questions.md`, its owner comments are preserved verbatim.)
 5. **Cross-reference by stable ID.** `OQ#` = open question, `RQ#` = resolved question, `gap #` = original gap. ADRs, the spec, and TODO link here by those IDs — keep them stable. The `#oq#` / `#gap#` **anchors** derive from heading _text_, so they survive a move between files — **but a link that names the file (`open-questions.md#oq…`) breaks when the item moves to `resolved-questions.md`; update every referring ADR/TODO/spec/research link to the new file in the same change.** If you must renumber, update the referencing docs in the same change.
-6. **Not a log:** Do not append a log of routine maintenance or administrative changes. This is a _decision record_, not a change log. Use the Git history for that and `docs/handoff.md` and/or `TODO.md` where appropriate.
+6. **Not a log:** Do not append a log of routine maintenance or administrative changes. This is a _decision record_, not a change log. Use the Git history for that and the Agent Handoff documents (`docs/handoff/`) and/or `docs/TODO.md` where appropriate.

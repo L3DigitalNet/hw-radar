@@ -59,6 +59,8 @@
     - [OQ31 — Existing local connectors whose Terms prohibit automated access](#oq31--existing-local-connectors-whose-terms-prohibit-automated-access)
     - [OQ32 — MS-1e ratification gate when two named sources are unusable](#oq32--ms-1e-ratification-gate-when-two-named-sources-are-unusable)
     - [MS-1e and CPU audit rulings (2026-09-26)](#ms-1e-and-cpu-audit-rulings-2026-09-26)
+    - [OQ33 — Legacy and rebranded drive family names in corpus labels](#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)
+    - [OQ34 — CPU auto-accept scope: category-wide or the ratified EPYC family](#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family)
 
 ---
 
@@ -607,7 +609,7 @@ source-admission records (`docs/research/source-admission/`), none of which reac
 **✅ Resolved (owner, 2026-09-25) — recorded here; [ADR 0021's 2026-09-25 amendment](adr/adr-0021-hybrid-acquisition-apify.md#amendment--2026-09-25-credential-namespace-runtimeoperator-authority-split-and-policy-values-owner-clarification) carries the architectural rule.** Raised by the MS-2 session-2 review (R24, R25), which asked how to provision a Hardware Radar-scoped Apify credential and whether to widen `.mcp.json`.
 
 - **Decision: two credentials in a dedicated Hardware Radar namespace, never the `apify-actors` venture's credential.** The **operator/deploy** key is unscoped, at OpenBao `secret/apps/hw-radar/agent/apify` (fields `token`, `org_id`); Apify does not allow a scoped token to create or modify Actors, so operator work (push/build, operator inspection) needs it. It is exported per-command as `APIFY_TOKEN` and is never rendered to the production application environment.
-- The **runtime** role needs a separate **scoped** token at OpenBao `secret/apps/hw-radar/apify`, env `HW_RADAR_APIFY_TOKEN`, limited to running Hardware Radar-owned Actors and reading their runs/storages. The owner has not yet created this token; production rendering is deferred until Slice E live admission is ready. `HW_RADAR_APIFY_ENABLED=false` (default) remains the fail-closed kill switch regardless.
+- The **runtime** role needs a separate **scoped** token at OpenBao `secret/apps/hw-radar/apify`, env `HW_RADAR_APIFY_TOKEN`, limited to running Hardware Radar-owned Actors and reading their runs/storages. At decision time the owner had not yet created this token; it was created 2026-09-25 and exercised by the F5a proof (see [OQ30](#oq30--runtime-apify-account-reads-r25)); production rendering stays deferred until live admission is intentionally configured. `HW_RADAR_APIFY_ENABLED=false` (default) remains the fail-closed kill switch regardless.
 - **`.mcp.json` is unchanged** (four anonymous read-only tools). It widens only once a scoped read credential and operator reservations (MS2-D-46) exist, to the read-only tool list MS2-D-43 names (`get-actor-run`, `get-actor-run-list`, `get-actor-log`, `get-dataset`, `get-dataset-items`, `get-dataset-schema`, `get-key-value-store`, `get-key-value-store-keys`, `get-key-value-store-record`). `call-actor`, the RAG web browser, abort, and task tools stay excluded — MCP is an operator surface, not the runtime protocol.
 - **Verification (orchestrator, no value exposed):** the operator key's `GET /v2/users/me` and `/users/me/limits` succeed (STARTER plan, current cycle $0.09 of $19); `POST /v2/acts` with an invalid body reaches schema validation, confirming create permission and therefore unscoped status. sha comparison confirms the key is distinct from the `apify-actors` agent token.
 
@@ -747,5 +749,49 @@ Evidence: [MS-1e packet §7](evidence/2026-09-26-ms1e-expanded-audit-packet.md) 
   identity; vendor lock is explicit-wording listing evidence (`locked`/`unlocked`/unknown), not a
   `CpuSpec` field; the F6 watch must require unlocked and unknown never satisfies it.
 - **HC550:** the empty "Ultrastar DC HC550" family left by the monthly refresh stays.
-- Follow-ups raised: [OQ33](open-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels) (legacy family names) and
-  [OQ34](open-questions.md#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family) (CPU `auto_accept` scope).
+- Follow-ups raised: [OQ33](#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels) (legacy family names) and
+  [OQ34](#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family) (CPU `auto_accept` scope), both resolved below.
+
+### OQ33 — Legacy and rebranded drive family names in corpus labels
+
+**✅ Resolved (owner, 2026-09-26) — historical family identity wins; no ADR of its own (labeling
+rule under [ADR 0019](adr/adr-0019-listing-catalog-matching-layer.md) amendment 1).** Raised by the
+MS-1e stratified audit ([packet §7](evidence/2026-09-26-ms1e-expanded-audit-packet.md)): Q2 counts an
+explicitly named family at family grain, but did not say how to name a discontinued or renamed line.
+
+- **Decision:** "A listing that explicitly and unambiguously names a historical product family is
+  labeled with the historical family identity that product belonged to when sold. A later
+  acquisition, rename, or successor product line does not retroactively change its canonical family
+  identity." Constellation is not Exos, Enterprise Capacity is not Exos, WD RE is not Gold, and an
+  older WD Red (EFRX) is not Red Plus. It extends Q3's HGST reasoning.
+- **Applied:** ebay-0446 `western_digital`/Red; ghd-0085 `western_digital`/RE; ghd-0062
+  `seagate`/Enterprise Capacity 3.5; ghd-0039 `seagate`/Enterprise Performance; ghd-0033
+  `seagate`/Constellation ES; ghd-0038 `seagate`/Constellation ES.2; ghd-0011 `seagate`/Pipeline HD;
+  ebay-0017 `seagate`/Barracuda ES.2 — all family grain, `owner_corrected` after the measurement.
+- **Matcher:** labeling only. No successor remap is added; the matcher's `none` on these rows is a
+  recall gap, not a false positive. Future support attaches to the historical family itself, backed
+  by reference evidence (`docs/TODO.md`).
+- **Outcome:** the audit gate passes and the composite MS-1e gate passes; ADR 0019 is accepted
+  ([packet §8](evidence/2026-09-26-ms1e-expanded-audit-packet.md)).
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-26 direction.)_
+
+### OQ34 — CPU auto-accept scope: category-wide or the ratified EPYC family
+
+**✅ Resolved (owner, 2026-09-26) — option 2, family-scoped ratification; recorded as an
+[ADR 0022 amendment](adr/adr-0022-multi-category-watch-first-v1.md#amendment--2026-09-26-family-scoped-category-ratification-owner-decision).**
+Raised by the CPU owner audit ([packet §9](evidence/2026-09-26-cpu-epyc-audit-packet.md)):
+`CategoryRules.auto_accept` was one flag for the whole CPU category, while production refdata also
+held five Intel Xeon models the EPYC corpus never measured.
+
+- **Decision:** "CPU auto-accept is scoped to ratified product families. The first ratified CPU
+  family is AMD EPYC. Unratified CPU families, including Intel Xeon, remain review-only even if they
+  have authoritative exact aliases." A corpus ratifies only what it measured; no category-wide flip.
+- **Applied (matcher `2026.09.4`):** `CategoryRules.ratified_families` holds logical
+  `(manufacturer, normalized family)` keys, never DB ids; CPU ratifies `amd`/`epyc` only. An
+  otherwise acceptable hit on another family reviews with `family_not_ratified`; EPYC condition
+  variants inherit their model's family. The scope also binds inherited rung-0 automated priors.
+- **Extension:** a future audited Xeon corpus adds its family key without changing EPYC; gpu/ram keep
+  `auto_accept=False` until their own corpora.
+
+**My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-26 direction.)_

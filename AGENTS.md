@@ -17,19 +17,12 @@ shape belongs in repo docs; private fleet details belong outside this repo.
 
 ## Current Product State
 
-MS-0 and MS-1a..MS-1e code-side work are implemented/deployed: Django 6,
-TimescaleDB, the ADR-0010 identity ladder, ingestion substrate, drive matching/
-catalog seed, five drive-focused connectors, availability heartbeat, and the
-MS-1e evaluation/harvest tooling. The owner-in-the-loop drive-matcher ratification
-is still pending, so all sources ship disabled.
+MS-0, MS-1a..MS-1e, and MS-2 Slices A–F (multi-category watch core, ADRs 0021–0022) are
+deployed: drive matching, GPU/RAM/CPU categories with `match | no_match | unknown`
+evaluation, and hybrid acquisition under a hard $20/month Apify ceiling. Every
+admission-matrix cell is `NOT_ADMITTED`, so all sources ship disabled. The drive matcher is
+ratified (ADR-0019); CPU auto-accepts AMD EPYC only (OQ34). ADR-0011 scoring is deferred.
 
-Strategy was re-baselined 2026-09-24 by ADRs 0021–0022. The next implementation
-milestone is the **multi-category watch core**, not the old MS-2a scoring substrate:
-HDD/SSD + GPU/accelerator + RAM + CPU first-class categories, category-specific
-`match | no_match | unknown` requirement evaluation, and hybrid acquisition
-(cheap direct/local paths retained; self-owned private Apify Actors selectively)
-under a hard $20/month Hardware Radar Apify ceiling. The detailed ADR-0011 drive
-scoring design remains accepted but is deferred from the immediate critical path.
 Hardware Radar's Apify Actors are built and managed in this repository under
 `actors/<name>/`, not in the separate `apify-actors` repository.
 
@@ -62,20 +55,13 @@ uv run ruff format . && uv run ruff check . --fix
 
 DB tests need live TimescaleDB. On this workstation, port `5432` may be owned by
 host PostgreSQL; use `HW_RADAR_DB_PORT=5433` when the dev container is mapped to
-`127.0.0.1:5433`.
+`127.0.0.1:5433` (a local override; the committed `compose.yaml` maps 5432).
 
 ## Verification
 
-Before claiming completion after code changes:
-
-```bash
-uv run ruff format --check .
-uv run ruff check .
-uv run basedpyright
-uv run coverage run -m pytest
-uv run coverage report
-uv run pip-audit --skip-editable
-```
+Before claiming completion after code changes, run `uv run python -m scripts.check`: root
+`ruff format --check`, `ruff check`, `basedpyright`, `coverage run -m pytest`,
+`coverage report`, `pip-audit --skip-editable`, plus each `actors/<name>/` project's gate.
 
 Use `uv add`, `uv add --dev`, and `uv remove` for dependency changes. Do not
 hand-edit `uv.lock`.

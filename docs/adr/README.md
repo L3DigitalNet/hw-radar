@@ -7,7 +7,7 @@ This directory holds the project's **Architecture Decision Records (ADRs)** — 
 - **Format:** [MADR](https://adr.github.io/madr/), per the [project-standards ADR Standard](https://github.com/L3DigitalNet/project-standards/tree/v5.11.0/standards/adr). Author new ADRs from that standard's template.
 - **Filename:** `adr-NNNN-short-title.md` (zero-padded sequence; repo-name omitted).
 - **`id` (in ADR frontmatter):** `adr-NNNN-hw-radar-short-title` (embeds the repo name for global uniqueness).
-- **Frontmatter:** ADR files carry the ADR template's YAML frontmatter as a **local, unvalidated convention** — this repo deliberately does **not** adopt the enforced Markdown Frontmatter Standard or a CI validator. See [ADR 0001](adr-0001-decline-markdown-frontmatter-standard.md). This index and all non-ADR docs carry no frontmatter.
+- **Frontmatter:** ADR files carry the ADR template's YAML frontmatter as a **local, unvalidated convention** — this repo deliberately does **not** adopt the enforced Markdown Frontmatter Standard or a CI validator. See [ADR 0001](adr-0001-decline-markdown-frontmatter-standard.md). This index and all other non-ADR docs carry no frontmatter, except the archived original spec (`docs/archived/hw-radar.md`), whose frontmatter records its supersession.
 - **Supersession:** when a new ADR replaces an old one, set `supersedes` on the new record and `superseded_by` + `status: superseded` on the old one, in the same change.
 
 ## When to write an ADR
@@ -36,7 +36,7 @@ Write one for a **significant** and **costly-to-reverse** decision — datastore
 | [0016](adr-0016-search-api-self-governance.md) | Search-API self-governance — the ordered SearchBudgetGate | Accepted | 2026-07-04 |
 | [0017](adr-0017-resilient-acquisition.md) | Resilient acquisition — per-source isolation + circuit-break lifecycle | Accepted | 2026-07-04 |
 | [0018](adr-0018-manufacturer-spec-catalog.md) | Manufacturer spec catalog — a first-class reference-data source | Accepted | 2026-07-04 |
-| [0019](adr-0019-listing-catalog-matching-layer.md) | Listing→catalog matching layer — grain-elastic resolution against the MPN matrix | Proposed | 2026-07-04 |
+| [0019](adr-0019-listing-catalog-matching-layer.md) | Listing→catalog matching layer — grain-elastic resolution against the MPN matrix | Accepted (ratified 2026-09-26) | 2026-07-04 |
 | [0020](adr-0020-per-lane-scheduling-state.md) | Per-lane scheduling state — one state row per (source, lane) | Accepted | 2026-08-16 |
 | [0021](adr-0021-hybrid-acquisition-apify.md) | Hybrid acquisition — local collectors + self-owned Apify Actors | Accepted | 2026-09-24 |
 | [0022](adr-0022-multi-category-watch-first-v1.md) | Broaden v1 to multi-category, watch-first hardware monitoring | Accepted | 2026-09-24 |

@@ -34,11 +34,13 @@ from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag, model_validator
 
-from hw_radar.matching.normalize import normalize_alias_text
+from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 
 SEED_SCHEMA = "hw-radar.refdata.seed/v1"
 
-_MANUFACTURER_KEY = re.compile(r"^[a-z][a-z0-9_]*$")
+# Also the manufacturer half of matching.categories.FamilyKey, so a ratified
+# family key and a seed can never disagree on what a normalized key looks like.
+MANUFACTURER_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Slugs with a spec satellite; must stay equal to persist._SPEC_MODELS' keys and
 # name Category rows seeded by catalog migrations 0001/0019. Basic-watch
@@ -247,8 +249,14 @@ class SeedDocument(BaseModel):
 
     @model_validator(mode="after")
     def _document_coherent(self) -> SeedDocument:
-        if not _MANUFACTURER_KEY.fullmatch(self.manufacturer_key):
+        if not MANUFACTURER_KEY_RE.fullmatch(self.manufacturer_key):
             msg = f"manufacturer_key {self.manufacturer_key!r} is not a normalized key"
+            raise ValueError(msg)
+        # persist keys the family by canonicalize_title(family_name); a name
+        # that normalizes to nothing would create a family no FamilyKey can
+        # name (matching.categories), so reject it here, at import.
+        if not canonicalize_title(self.family_name):
+            msg = f"family_name {self.family_name!r} normalizes to an empty family key"
             raise ValueError(msg)
         for model in self.models:
             if model.spec.category != self.category:

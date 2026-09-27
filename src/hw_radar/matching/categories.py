@@ -20,11 +20,17 @@ Contract:
 - `gpu`, `ram`, `cpu` and the basic-watch categories (`nic`, `hba`,
   `motherboard`, `server`) run their `matching.rules` modules under
   NEW_CATEGORY_ACCEPTANCE: only a `catalog_authoritative` alias at model or
-  variant grain may accept (MS2-D-21). gpu/ram/cpu additionally ship with
-  `auto_accept=False` until an owner-ratified category corpus exists (MS2-D-05,
-  risk R4), so even an authoritative hit is `review`. The basic-watch categories
-  keep `auto_accept=True`: the plan scopes the disabled flag to gpu/ram/cpu, and
+  variant grain may accept (MS2-D-21). gpu/ram ship with `auto_accept=False`
+  until an owner-ratified category corpus exists (MS2-D-05, risk R4), so even
+  an authoritative hit is `review`. The basic-watch categories keep
+  `auto_accept=True`: the plan scopes the disabled flag to gpu/ram/cpu, and
   their exact curated aliases are gated by the policy alone.
+- A corpus ratifies only the families it measured (OQ34, owner 2026-09-26).
+  `ratified_families` narrows auto-accept to named `FamilyKey`s; cpu ratifies
+  AMD EPYC alone, so an authoritative Intel Xeon hit is `review` with
+  `family_not_ratified`. A condition variant belongs to its model's family, so
+  it inherits that family's ratification. A future Xeon corpus adds a key here;
+  it never needs a category-wide flip.
 
 Reserved prefix: slugs starting `zz-` are test sentinels (e.g. `zz-unregistered`)
 and must never be registered. The unsupported-category tests rely on a slug that
@@ -44,8 +50,10 @@ from dataclasses import dataclass
 from typing import Final, Protocol
 
 from hw_radar.matching import grammars, ladder, mpn, vocab
+from hw_radar.matching.normalize import canonicalize_title
 from hw_radar.matching.rules import basic, cpu, gpu, no_decode, ram
 from hw_radar.matching.types import DecodeResult, ExtractedAttributes, Grain, MpnCandidate
+from hw_radar.refdata.contracts import MANUFACTURER_KEY_RE
 
 DRIVE: Final = "drive"
 LEGACY_DEFAULT_CATEGORY: Final = DRIVE
@@ -79,6 +87,52 @@ NEW_CATEGORY_ACCEPTANCE: Final = AcceptancePolicy(
 )
 
 
+@dataclass(frozen=True, order=True)
+class FamilyKey:
+    """A product family's stable logical identity: `Manufacturer.normalized_name`
+    plus `ProductFamily.normalized_name`, the pair `product_family_unique_per_mfr`
+    makes unique. Never a primary key: a ratification must name the same family
+    in every environment and survive a catalog rebuild.
+
+    Both halves must already be in normalized form (build one with `of`). The
+    resolver compares keys by exact equality, so an un-normalized key could only
+    ever fail to match; rejecting it at import makes that typo loud instead of
+    silently leaving a ratified family in review. Equality is also the whole
+    guard against look-alikes: `amd/epyc` is not `intel/epyc`, and `epyc` is not
+    `epyc embedded`."""
+
+    manufacturer: str
+    family: str
+
+    def __post_init__(self) -> None:
+        if not MANUFACTURER_KEY_RE.fullmatch(self.manufacturer):
+            raise ValueError(f"manufacturer {self.manufacturer!r} is not a normalized key")
+        if not self.family or self.family != canonicalize_title(self.family):
+            raise ValueError(f"family {self.family!r} is not a normalized family name")
+
+    @classmethod
+    def of(cls, manufacturer_key: str, family_name: str) -> FamilyKey:
+        """Key a seed's `manufacturer_key` and display `family_name`, normalized
+        exactly as refdata.persist normalizes the family row it creates."""
+        return cls(manufacturer_key, canonicalize_title(family_name))
+
+
+@dataclass(frozen=True)
+class RatifiedFamilies:
+    """The families an owner-ratified corpus measured (OQ34). Non-empty by
+    construction: "no family ratified" is `auto_accept=False`, never an empty
+    set, so an empty allowlist can't be misread as "no restriction"."""
+
+    keys: frozenset[FamilyKey]
+
+    def __post_init__(self) -> None:
+        if not self.keys:
+            raise ValueError("RatifiedFamilies needs at least one family; use auto_accept=False")
+
+    def permits(self, key: FamilyKey | None) -> bool:
+        return key is not None and key in self.keys
+
+
 @dataclass(frozen=True)
 class CategoryRules:
     slug: str
@@ -86,9 +140,14 @@ class CategoryRules:
     extract_candidates: CandidateExtractor
     decode: Callable[[str], DecodeResult | None]
     veto: ladder.Veto
-    # False turns every rung-1 accept that survives the policy into `review`
+    # False turns every accept that survives the policy into `review`
     # (`auto_accept_disabled`). Flipping it needs a ratified category corpus.
     auto_accept: bool = True
+    # None = every family auto_accept allows. Otherwise only these families may
+    # auto-accept; any other policy-passing hit is `review` with
+    # `family_not_ratified` (OQ34). Needs an AcceptancePolicy and auto_accept on:
+    # drive has no policy, and a scope under a disabled flag would be dead.
+    ratified_families: RatifiedFamilies | None = None
     # False keeps an accepted model-grain listing at model grain instead of
     # creating a condition variant; `server` configurations are not variants.
     variant_on_demand: bool = True
@@ -104,6 +163,17 @@ class CategoryRules:
     # MPNs of more than one model. Drive only; the other extractors emit
     # several MPN-kind candidates for one product (see ladder.decide).
     distinct_mpn_guard: bool = False
+
+    def __post_init__(self) -> None:
+        if self.ratified_families is not None and (self.acceptance is None or not self.auto_accept):
+            raise ValueError(
+                f"{self.slug}: ratified_families needs an AcceptancePolicy and auto_accept=True"
+            )
+
+
+# OQ34 (owner, 2026-09-26): the EPYC corpus ratifies AMD EPYC and nothing else.
+# Intel Xeon stays review until its own corpus is audited; it is not listed here.
+CPU_RATIFIED_FAMILIES: Final = RatifiedFamilies(frozenset({FamilyKey.of("amd", "EPYC")}))
 
 
 def _drive_rules() -> CategoryRules:
@@ -148,7 +218,7 @@ def _cpu_rules() -> CategoryRules:
         extract_candidates=cpu.extract_candidates,
         decode=no_decode,
         veto=cpu.veto,
-        auto_accept=False,
+        ratified_families=CPU_RATIFIED_FAMILIES,
         fold_structured=cpu.with_structured_mpn,
         acceptance=NEW_CATEGORY_ACCEPTANCE,
     )

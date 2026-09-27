@@ -6,7 +6,7 @@ description: 'Broaden the first release from HDD/SSD-only scoring to multiple PC
 doc_type: 'adr'
 status: 'active'
 created: '2026-09-24'
-updated: '2026-09-24'
+updated: '2026-09-26'
 reviewed: '2026-09-24'
 owner: 'Chris Purcell'
 consumer: 'mix'
@@ -177,3 +177,27 @@ Owner decisions of 2026-09-24 (session 2); the decision above is unchanged.
   Existing local connectors are not grandfathered into an Actor path.
 - Whether MS-2 may exit on the synthetic proof while the Actor-backed pilot source
   waits on OQ24 is an open owner decision, recorded as risk R31 in the MS-2 plan.
+  _(Resolved 2026-09-25 by [OQ28](../resolved-questions.md#oq28--can-ms-2-exit-on-the-synthetic-proof-alone):
+  the synthetic proof suffices for MS-2's Apify exit; OQ24 was resolved 2026-09-26 with F5b
+  deferred.)_
+
+## Amendment — 2026-09-26: Family-scoped category ratification (owner decision)
+
+Owner decision of 2026-09-26, resolving
+[OQ34](../resolved-questions.md#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family);
+the decision above is unchanged.
+
+- **A corpus ratifies only what it measured.** Category auto-accept is scoped to ratified product
+  families, not flipped category-wide. The owner-audited EPYC corpus
+  ([CPU packet](../evidence/2026-09-26-cpu-epyc-audit-packet.md)) makes **AMD EPYC** the first
+  ratified CPU family. Unratified families — Intel Xeon included — stay review-only even when they
+  have authoritative exact aliases.
+- **Mechanism.** `CategoryRules.ratified_families` holds logical `(manufacturer, normalized
+  family)` keys. A hit that passes the acceptance policy and every veto but falls outside the scope
+  reviews with `family_not_ratified`. A condition variant is inside its model's family's scope.
+  Matcher `2026.09.4` (the auto-accept disposition changed).
+- **Extension.** A future owner-audited corpus for another family (Xeon first) adds that family's
+  key without touching EPYC. GPU and RAM keep `auto_accept=False` until their own corpora exist.
+- Auto-accept is identity only. It admits no source: each source × category cell still needs its
+  own admission checklist (`docs/handoff/deployed.md`).
+

@@ -6,7 +6,7 @@ description: 'Use a hybrid acquisition model: retain inexpensive direct/API/stru
 doc_type: 'adr'
 status: 'active'
 created: '2026-09-24'
-updated: '2026-09-24'
+updated: '2026-09-25'
 reviewed: '2026-09-24'
 owner: 'Chris Purcell'
 consumer: 'mix'
@@ -236,8 +236,9 @@ controlled synthetic source through a real private Apify Actor, so it proves
 compute, lifecycle, dataset retrieval, delayed completion, cost accounting, and
 API behavior without a merchant legal decision. A production Actor-backed
 merchant source is a separate source-admission decision per candidate
-(`docs/research/source-admission/`); it stays open as
-[OQ24](../resolved-questions.md#oq24--production-actor-backed-merchant-source-admission).
+(`docs/research/source-admission/`); it stayed open as
+[OQ24](../resolved-questions.md#oq24--production-actor-backed-merchant-source-admission)
+_(resolved 2026-09-26: no production merchant source for now; F5b deferred)_.
 Existing local connectors are not grandfathered into an Actor path.
 
 **9. Operations.** Deployment is an explicit, reviewed operator or agent action
@@ -311,7 +312,8 @@ credentials:
   `HW_RADAR_APIFY_TOKEN` — limited to running Hardware Radar-owned Actors and reading their runs
   and default storages. The owner has not yet created this token; production rendering is
   deferred until Slice E live admission is ready, and `HW_RADAR_APIFY_ENABLED=false` (default)
-  remains the fail-closed kill switch regardless of credential state.
+  remains the fail-closed kill switch regardless of credential state. _(Superseded 2026-09-25: the
+  token exists — item 14(a) below.)_
 - `.mcp.json` is unchanged (four anonymous read-only tools). It stays an operator surface, not
   the runtime protocol, and widens only once a scoped read credential and operator reservations
   exist.

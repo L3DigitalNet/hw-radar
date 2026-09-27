@@ -1,22 +1,27 @@
 # Credential References
 
-Last updated: 2026-09-25
+Last updated: 2026-09-26
 
 Never store credential values in this repository.
 
 ## Runtime Environment Variables
 
-- `HW_RADAR_SECRET_KEY`
-- `HW_RADAR_ALLOWED_HOSTS`
-- `HW_RADAR_CSRF_TRUSTED_ORIGINS`
+- `DJANGO_SECRET_KEY` (required in production)
+- `HW_RADAR_ENV`
+- `HW_RADAR_ALLOWED_HOSTS` (`CSRF_TRUSTED_ORIGINS` is derived from it; no separate variable)
+- `HW_RADAR_STATIC_ROOT` (optional `collectstatic` target override)
 - `HW_RADAR_DB_NAME`
 - `HW_RADAR_DB_USER`
 - `HW_RADAR_DB_PASSWORD`
 - `HW_RADAR_DB_HOST`
 - `HW_RADAR_DB_PORT`
 - `HW_RADAR_KUMA_PUSH_URL`
-- `EBAY_CLIENT_ID` — OpenBao `secret/api-keys/commerce/ebay`
-- `EBAY_CLIENT_SECRET` — OpenBao `secret/api-keys/commerce/ebay`
+- `EBAY_API_BASE` (optional endpoint override)
+- `EBAY_CLIENT_ID` / `EBAY_CLIENT_SECRET` — eBay Developer application keys. Workstation OpenBao
+  `secret/api-keys/commerce/ebay`, fields `username` (client ID) and `password` (client secret):
+  the record is login-shaped but holds the API keys. Production: the CT's bao-agent renders both
+  from the service-store record `services/apps/hw-radar/config`, fields `ebay_client_id` and
+  `ebay_client_secret` (added 2026-09-26 for eBay x CPU; template in the private homelab repo).
 - `HW_RADAR_APIFY_TOKEN` — OpenBao `secret/apps/hw-radar/apify`. Runtime, **scoped** token,
   created by the owner 2026-09-25. It needs **Run** and **Read** on the Hardware Radar Actor:
   Read covers `GET /v2/actor-runs/{id}` polls and the `GET /v2/actor-builds/{id}` build reads
@@ -26,7 +31,9 @@ Never store credential values in this repository.
   R25). The owner's grant also includes `List runs` and `Manage runs` (abort on a start mismatch). It needs **no** account limits or usage
   permission: those reads return 403 for scoped tokens, and the runtime makes none (MS-2 plan
   MS2-D-48, [OQ30](../resolved-questions.md#oq30--runtime-apify-account-reads-r25)). Production
-  rendering is deferred until Slice E live admission is ready. `HW_RADAR_APIFY_ENABLED` defaults
+  rendering is deferred until production paid admission is intentionally configured (after the
+  F5a proof-environment drain and `apify_ledger_handoff`). The other `HW_RADAR_APIFY_*` budget and
+  admission settings are non-secret configuration read in `src/hw_radar/settings.py`. `HW_RADAR_APIFY_ENABLED` defaults
   to `false` as the fail-closed kill switch.
 
 ## Apify — Operator/Deploy Credential

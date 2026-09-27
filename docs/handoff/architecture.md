@@ -1,6 +1,6 @@
 # Architecture Notes
 
-Last updated: 2026-09-25
+Last updated: 2026-09-26
 
 ## Component Graph
 
@@ -11,10 +11,12 @@ Last updated: 2026-09-25
 - Data model: ADR-0010 identity ladder plus market/evidence tables and
   TimescaleDB `offer_snapshot` observations, now with GPU/RAM/CPU spec
   satellites and first-class category rows (migrations 0018–0019) and watch
-  requirements/eligibility verdicts (migration 0020).
+  requirements/eligibility verdicts (migration 0020), provider runs and the Apify
+  spend ledger (0021–0022), OQ31 source retirement (0023), and CPU
+  `require_vendor_unlocked` (0024).
 - `matching`: category-dispatched resolution (`categories.py` registry) over
   drive's existing ADR-0019 vocab/mpn/grammar/ladder path plus `rules/`
-  (`drive`, `gpu`, `ram`, `cpu`, `basic`) for the new first-class categories,
+  (`gpu`, `ram`, `cpu`, `basic`) for the new first-class categories,
   each with its own extraction and acceptance policy.
 - `eligibility`: persisted watch requirements and `match | no_match | unknown`
   verdicts per (watch, listing) — `requirements` (the single writer),
@@ -57,14 +59,15 @@ Last updated: 2026-09-25
 
 ## Standing Backlog
 
-- MS-1e owner-in-the-loop drive-matcher ratification (harness/harvest tooling
-  implemented; live harvest, label draft, owner audit, and the ADR-0019 flip
-  are pending, so all marketplace sources ship disabled)
+- MS-1e drive-matcher ratification: done 2026-09-26 (composite PASS, 366/366,
+  ADR-0019 accepted); the corpus runs as a CI gate. CPU auto-accept is scoped
+  to AMD EPYC (OQ34, `CategoryRules.ratified_families`); every
+  admission-matrix cell is `NOT_ADMITTED`
 - MS-2 multi-category watch core (re-baselined by ADR-0021/ADR-0022, replacing
-  the old MS-2a scoring-substrate sequencing): Slices A–E complete on `dev`
-  (migrations 0021/0022 undeployed); plan rev 12 (no runtime account reads)
-  landed; F5a synthetic Actor proof executed 2026-09-25; Slice F pilot sources
-  (F1–F3) and the owner-gated F6 remain;
+  the old MS-2a scoring-substrate sequencing): Slices A–F code-complete and
+  deployed (migrations 0021–0024 in production, release `ded1000`); F5a
+  synthetic Actor proof executed 2026-09-25; F6 (eBay x CPU x EPYC) waits on
+  the `2026.09.4` release plus the per-cell live checklist;
   OQ25–OQ29 resolved 2026-09-25; OQ24 part (b) (production merchant source)
   resolved 2026-09-26 — none is admitted now, F5b deferred, not a blocker.
   ADR-0011's detailed drive-scoring design is accepted but deferred from

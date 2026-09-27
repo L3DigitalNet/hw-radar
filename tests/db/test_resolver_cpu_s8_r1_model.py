@@ -2,14 +2,13 @@
 model name must not be overridden by a seeded OPN, on a fresh listing, on the
 redecision after the title changes, and on every later poll.
 
-Runs the real CatalogResolver over the shipped CPU seeds with CPU auto-accept
-forced on (as in test_resolver_cpu_s8_audit.py), so an ACCEPT here is what a
-ratified flip would write.
+Runs the real CatalogResolver over the shipped CPU seeds under the production
+CPU rules (AMD EPYC ratified, OQ34), so an ACCEPT here is what production
+writes.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -25,7 +24,6 @@ from hw_radar.catalog.models import (
     RetentionClass,
     SourceSite,
 )
-from hw_radar.matching import categories
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata.loader import load_seed_documents
 from hw_radar.refdata.persist import import_documents
@@ -39,15 +37,8 @@ _P_OVER_798 = "AMD EPYC GENOA SP5 ZEN4 9354P 32-Core 3.25GHz Processor CPU 100-0
 
 
 @pytest.fixture
-def seeded_cpus(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def seeded_cpus(db: None) -> None:
     import_documents([d for d in load_seed_documents() if d.category == "cpu"])
-    rules = categories.rules_for("cpu")
-    assert rules is not None
-    monkeypatch.setitem(
-        categories._REGISTRY,  # pyright: ignore[reportPrivateUsage] - test-only registration, as in test_resolver_categories.py
-        "cpu",
-        lambda: replace(rules, auto_accept=True),
-    )
 
 
 @pytest.fixture

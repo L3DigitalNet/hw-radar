@@ -6,7 +6,7 @@ description: 'Fix the matching layer that joins noisy marketplace listings to th
 doc_type: 'adr'
 status: 'active'
 created: '2026-07-04'
-updated: '2026-07-04'
+updated: '2026-09-26'
 reviewed: null
 owner: ''
 consumer: 'mix'
@@ -43,7 +43,7 @@ project:
 
 # ADR 0019: Listing→catalog matching layer — grain-elastic resolution against the MPN matrix
 
-MADR status: **proposed** — flips to _accepted_ when the pre-ratification validation corpus (rule 8) passes; the design itself is owner-approved (2026-07-04).
+MADR status: **accepted** (ratified 2026-09-26) — the rule-8 composite gate, as amended 2026-09-26, passed in one full suite run on the owner-audited corpus; see [Ratified — 2026-09-26](#ratified--2026-09-26-composite-gate-pass). The design itself is owner-approved (2026-07-04).
 
 ## Context and Problem Statement
 
@@ -98,7 +98,7 @@ Chosen option: **Option 2**, with the Option 4 machinery designed-in as a deferr
 
 ### Confirmation
 
-Pre-ratification: the labeled-corpus run meets rule 8 and the result is recorded here. Implementation confirmation (MS-1–MS-2, alongside the entity-resolver hardening): the normalizer-parity CI test exists and passes; a recert listing with an exact MPN resolves at rung 1 and inherits full `drive_spec`; a family-only listing attaches at family/model grain with only agreement-set fields populated and appears in the backfill view; a decoded-but-unknown MPN crossing the occurrence threshold enqueues a targeted catalog fetch; a manual correction writes a learned alias that resolves the next occurrence at rung 1, and revoking it re-runs the listings it resolved; a capacity-contradicting exact-alias hit lands in review, not in the price history.
+Pre-ratification: the labeled-corpus run meets rule 8 and the result is recorded here — met 2026-09-26 (see [Ratified — 2026-09-26](#ratified--2026-09-26-composite-gate-pass)). Implementation confirmation (MS-1–MS-2, alongside the entity-resolver hardening): the normalizer-parity CI test exists and passes; a recert listing with an exact MPN resolves at rung 1 and inherits full `drive_spec`; a family-only listing attaches at family/model grain with only agreement-set fields populated and appears in the backfill view; a decoded-but-unknown MPN crossing the occurrence threshold enqueues a targeted catalog fetch; a manual correction writes a learned alias that resolves the next occurrence at rung 1, and revoking it re-runs the listings it resolved; a capacity-contradicting exact-alias hit lands in review, not in the price history.
 
 ## More Information
 
@@ -117,7 +117,7 @@ Owner decisions of 2026-09-26, resolving [OQ24](../resolved-questions.md#oq24--p
 
 **4. Category isolation (clarifies scope; part of the OQ31 consequences).** The MS-1e/ADR-0019 ratification gate governs **drive** matching and drive source × category enablement only. It does not block CPU/GPU/RAM enablement once those categories pass their own matching and source-admission gates — drive ratification is not a prerequisite for the other three categories.
 
-**5. Confirmed matcher traps (owner audit; informs rule 3's decoder contract).** Comparison-context MPNs in a title — e.g. "comparable to ST16000NM002G" — are not identity evidence for the listed model; a decoder/rule must not treat a comparison phrase as an MPN match. The `ST…NM…` prefix does not universally mean Exos: `ST1000NM0001` is a Constellation-family part, not Exos. Fixes for both traps land with a `matcher_version` bump; that work is in progress, and this amendment does not itself state a version number.
+**5. Confirmed matcher traps (owner audit; informs rule 3's decoder contract).** Comparison-context MPNs in a title — e.g. "comparable to ST16000NM002G" — are not identity evidence for the listed model; a decoder/rule must not treat a comparison phrase as an MPN match. The `ST…NM…` prefix does not universally mean Exos: `ST1000NM0001` is a Constellation-family part, not Exos. Fixes for both traps landed with matcher `2026.09.2` (comparison-context masking; `ST…NM…` no longer implies Exos) and are carried in `2026.09.3`.
 
 **6. Anti-anchoring note on label fingerprints (informs the MS-1e ratification procedure, design spec §6).** The recorded label fingerprints are self-recorded file-integrity evidence — they show the labeled corpus file did not change after hashing — not independent proof of who authored the labels or when.
 
@@ -130,7 +130,32 @@ the MS-1e audit questions Q1–Q8 and delegated the stratified audit
 ([packet §7](../evidence/2026-09-26-ms1e-expanded-audit-packet.md#7-owner-rulings-applied-and-final-measurement-2026-09-26-matcher-2026093)).
 On the pinned production refdata the gate measures 366/366 auto-accepts correct, every declared
 source floor met, and rung-0 PASS. The audit gate still fails on 7 sampled rows naming legacy or
-rebranded family lines ([OQ33](../open-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)),
+rebranded family lines ([OQ33](../resolved-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)),
 so the composite is FAIL and **the status stays `proposed`**. Q3 keeps HGST-branded HUS/HUH drives
 under manufacturer `hgst`, and Q2 confirms the family-grain rule of amendment 1 for families that
 are named but unseeded.
+
+## Ratified — 2026-09-26 (composite gate PASS)
+
+The owner resolved [OQ33](../resolved-questions.md#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)
+the same day: a listing naming a historical family is labeled with that family (Constellation is
+not Exos, WD RE is not Gold). The eight legacy-family rows became `owner_corrected` family-grain
+labels, which closed the only failing gate. No matcher change was needed. The composite was
+then re-measured rather than predicted
+([packet §8](../evidence/2026-09-26-ms1e-expanded-audit-packet.md#8-oq33-applied-and-ratification-2026-09-26)):
+
+| Record | Value |
+| --- | --- |
+| Ratification date | 2026-09-26 |
+| Corpus | `tests/fixtures/matching_corpus/corpus.jsonl`, `corpus_version` `ms1e-2026-09-26`, 718 rows; audit rollup 283 draft / 303 confirmed / 132 corrected |
+| Matcher | `2026.09.3` (drive decisions unchanged in `2026.09.4`, which scopes CPU auto-accept only) |
+| Refdata digest | `0f2db1a790c5eb0ba6d4f2e3673b8d10163518c98a917c7e338b02498ed4c6ce` (pinned and matched) |
+| Auto-accepts / correct | 366 / 366 — precision 100% (≥ 99.5%), FP 0, FN 204 (recall only) |
+| Source floor (OQ32) | eBay 132, WD recertified 22, goHardDrive 9 — all declared sources met |
+| Audit gate | PASS — 144-row sample fully owner-audited, 0 unaudited disagreements, rollup consistent |
+| Rung-0 regression | PASS (6/6) |
+| Composite | **PASS** — one full suite run at `982c29a` (3206 passed, 2 opt-in measurement skips) with `test_ms1_ratification_gate` and `tests/db/test_rung0_regression.py` both green |
+
+Installing the corpus at the gate's fixture path makes `test_ms1_ratification_gate` run on every
+suite run, so a later drive regression fails CI instead of silently invalidating this record.
+

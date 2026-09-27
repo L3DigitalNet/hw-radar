@@ -35,12 +35,13 @@ Invariants:
   `unsupported_category` none-edge and never runs drive rules. Every edge the
   ladder path writes records `category` and `category_source`, and a change of
   `category` alone is a decision-input change that writes a new edge.
-- Category gates (MS2-D-05/-21), applied to the ladder's verdict in this order:
-  cross-category guard (an accept whose target family belongs to another
-  category), the category's AcceptancePolicy, then its auto_accept flag. Each
-  failure turns the accept into `review` — never `none` — so the collision stays
-  visible in the review queue. Drive has no policy and auto_accept on, so for
-  drive only the guard can fire, and only on a non-drive target."""
+- Category gates (MS2-D-05/-21, OQ34), applied to the ladder's verdict in this
+  order: cross-category guard (an accept whose target family belongs to another
+  category), the category's AcceptancePolicy, then its auto-accept scope (the
+  auto_accept flag, then ratified_families). Each failure turns the accept into
+  `review` — never `none` — so the collision stays visible in the review queue.
+  Drive has no policy and auto_accept on, so for drive only the guard can fire,
+  and only on a non-drive target."""
 
 from __future__ import annotations
 
@@ -475,6 +476,7 @@ GATE_REVIEW_REASON_KEYS: Final = frozenset(
         "cross_category",
         "acceptance_policy",
         "auto_accept_disabled",
+        "family_not_ratified",
         "offer_condition_conflict",
         "variant_contradicted",
     }
@@ -521,6 +523,17 @@ def _review_reason(evidence: Mapping[str, object]) -> tuple[str, ...]:
         elif key == "variant_contradicted" and isinstance(value, Mapping):
             fields_ = cast("Mapping[object, object]", value)
             reason.update(f"variant_contradicted:{field}" for field in fields_)
+        elif key == "family_not_ratified" and isinstance(value, Mapping):
+            # The named family is the reason's subject: a model re-filed under
+            # another unratified family (or a mixed-maker row, None) must write
+            # a new edge rather than keep naming the old one (Codex s9 r1 #2).
+            family = cast("Mapping[str, object]", value).get("family")
+            named = (
+                "{manufacturer}/{family}".format_map(cast("Mapping[str, object]", family))
+                if isinstance(family, Mapping)
+                else "none"
+            )
+            reason.add(f"family_not_ratified:{named}")
         else:
             reason.add(key)
     for key in _MISS_IDENTITY_KEYS:
@@ -549,6 +562,58 @@ def _target_category(target: ladder.TargetRef) -> str:
     if target.family_id is None:
         return categories.LEGACY_DEFAULT_CATEGORY
     return ProductFamily.objects.values_list("category__slug", flat=True).get(pk=target.family_id)
+
+
+def _target_family_key(target: ladder.TargetRef) -> categories.FamilyKey | None:
+    """The logical family a catalog target belongs to, or None when it has none.
+
+    Read from the model row when there is one, so a variant is keyed by its
+    model's family (a condition variant inherits the family's ratification) and
+    the target's cached family_id is not trusted on its own. A model whose own
+    manufacturer differs from its family's manufacturer reads as None: the key
+    must name one manufacturer, and a mixed row is not evidence for either."""
+    if target.model_id is not None:
+        maker, family_maker, family = ProductModel.objects.values_list(
+            "manufacturer__normalized_name",
+            "product_family__manufacturer__normalized_name",
+            "product_family__normalized_name",
+        ).get(pk=target.model_id)
+        if family is None or family_maker != maker:
+            return None
+    elif target.family_id is None:
+        return None
+    else:
+        family_maker, family = ProductFamily.objects.values_list(
+            "manufacturer__normalized_name", "normalized_name"
+        ).get(pk=target.family_id)
+    try:
+        return categories.FamilyKey(family_maker, family)
+    except ValueError:
+        # A stored row that is not a valid key (e.g. a family name that
+        # normalized to nothing) names no ratifiable family: review it as
+        # unratified rather than raising into an error edge, which would keep
+        # the listing's previous accepted state (Codex s9 r1 #1).
+        return None
+
+
+def _unratified_family(
+    rules: categories.CategoryRules, target: ladder.TargetRef
+) -> dict[str, object] | None:
+    """The `family_not_ratified` detail when the category's ratified_families
+    excludes this target; None when there is no scope or the family is in it.
+
+    At rung 1 the caller checks the auto_accept flag first, so gpu/ram keep
+    reporting `auto_accept_disabled` exactly as before. The detail names the family found
+    (None for a family-less or mixed-maker model): the hit itself passed the
+    AcceptancePolicy, so this is not an alias failure (OQ34)."""
+    scope = rules.ratified_families
+    if scope is None:
+        return None
+    key = _target_family_key(target)
+    if scope.permits(key):
+        return None
+    named = None if key is None else {"manufacturer": key.manufacturer, "family": key.family}
+    return {"family": named}
 
 
 @dataclass(frozen=True)
@@ -842,13 +907,21 @@ def _offer_reconsideration(
 def _apply_category_gates(
     listing: Listing, slug: str, rules: categories.CategoryRules, verdict: ladder.Verdict
 ) -> ladder.Verdict:
-    """Cross-category guard, then AcceptancePolicy, then auto_accept (the module
-    docstring's order). Only an ACCEPT is ever changed, and only toward REVIEW.
+    """Cross-category guard, then AcceptancePolicy, then the auto-accept scope
+    (the module docstring's order). Only an ACCEPT is ever changed, and only
+    toward REVIEW.
 
     Order matters: the guard runs first so a foreign target is reported as
     `cross_category` rather than as a policy miss, and the policy runs before
-    auto_accept so a non-authoritative hit reads `acceptance_policy` even while
-    auto-accept is off (MS2-D-21)."""
+    the scope so a non-authoritative hit reads `acceptance_policy` even while
+    auto-accept is off or its family is unratified (MS2-D-21, OQ34).
+
+    Rung 0 is gated by the policy and the family scope, not by the auto_accept
+    flag: switching new automation off does not un-accept history (MS2-D-05),
+    but an automated prior on a family that is not (or no longer) ratified goes
+    back to review rather than being inherited forever (OQ34). An owner's
+    manual accept always inherits: it is the owner's decision, not the
+    automation's."""
     target = verdict.target
     if verdict.outcome is not ladder.Outcome.ACCEPT or target is None:
         return verdict
@@ -869,8 +942,12 @@ def _apply_category_gates(
         trusted = basis is not None and (
             basis.method == ResolutionMethod.MANUAL.value
             or (
+                # Everything the rung-1 policy checks, grain included: a
+                # family-grain automated prior is not one the policy could have
+                # accepted itself (Codex s9 r1 #3; rung 1 cannot write one).
                 basis.method == ResolutionMethod.EXACT_ALIAS.value
                 and basis.source_kind in policy.authoritative_source_kinds
+                and target.grain in policy.grains
             )
         )
         if basis is None or not trusted:
@@ -882,6 +959,15 @@ def _apply_category_gates(
                     "prior_method": basis.method if basis else None,
                 },
             )
+        # The auto_accept flag deliberately does not gate rung 0 (turning new
+        # automation off does not un-accept history), but the family scope does:
+        # an unratified family stays review-only however its prior was reached.
+        if basis.method != ResolutionMethod.MANUAL.value:
+            unratified = _unratified_family(rules, target)
+            if unratified is not None:
+                return _review(
+                    verdict, family_not_ratified=unratified, alias_source_kind=basis.source_kind
+                )
         return replace(
             verdict,
             evidence={
@@ -902,6 +988,9 @@ def _apply_category_gates(
         )
     if not rules.auto_accept:
         return _review(verdict, auto_accept_disabled=True, alias_source_kind=source_kind)
+    unratified = _unratified_family(rules, target)
+    if unratified is not None:
+        return _review(verdict, family_not_ratified=unratified, alias_source_kind=source_kind)
     return replace(verdict, evidence={**verdict.evidence, "alias_source_kind": source_kind})
 
 

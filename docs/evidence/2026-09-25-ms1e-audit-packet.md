@@ -1,5 +1,10 @@
 # MS-1e draft corpus: owner audit packet (2026-09-25)
 
+Status (updated 2026-09-26): owner audit applied to 36 rows (13 corrected, commit `6977563`);
+superseded for ratification by
+[`2026-09-26-ms1e-expanded-audit-packet.md`](2026-09-26-ms1e-expanded-audit-packet.md). The text
+below is the pre-audit packet, kept as the record.
+
 This packet prepares the ADR 0019 drive-matcher ratification (design
 `docs/superpowers/specs/2026-07-06-ms1e-validation-corpus-ratification-design.md`, §6
 steps 1 and 2). It stops before step 3, the owner audit. Every label is a Claude draft

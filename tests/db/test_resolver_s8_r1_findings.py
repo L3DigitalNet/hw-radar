@@ -3,12 +3,11 @@ as observation SEQUENCES on one listing where the finding is about a stored
 decision surviving changed evidence.
 
 Drive cases import the shipped drive seeds; CPU cases the shipped CPU seeds
-with CPU auto-accept forced on (as test_resolver_cpu_s8_audit.py does), so an
-ACCEPT there is what a ratified flip would write."""
+under the production CPU rules (AMD EPYC ratified, OQ34), so an ACCEPT there
+is what production writes."""
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -31,7 +30,7 @@ from hw_radar.catalog.models import (
 )
 from hw_radar.eligibility import evaluate
 from hw_radar.eligibility.requirements import DriveRequirementSpec, save_requirement
-from hw_radar.matching import categories, resolver, vocab
+from hw_radar.matching import resolver, vocab
 from hw_radar.matching.normalize import canonicalize_listing_text
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata.loader import load_seed_documents
@@ -46,15 +45,8 @@ def drives(db: None) -> None:
 
 
 @pytest.fixture
-def cpus(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def cpus(db: None) -> None:
     import_documents([d for d in load_seed_documents() if d.category == "cpu"])
-    rules = categories.rules_for("cpu")
-    assert rules is not None
-    monkeypatch.setitem(
-        categories._REGISTRY,  # pyright: ignore[reportPrivateUsage] - test-only registration, as in test_resolver_categories.py
-        "cpu",
-        lambda: replace(rules, auto_accept=True),
-    )
 
 
 @pytest.fixture

@@ -110,14 +110,15 @@ def site(db: None) -> SourceSite:
 
 def _enable_auto_accept(monkeypatch: pytest.MonkeyPatch) -> None:
     """The test-only registration `test_resolver_categories.auto_accept_on`
-    uses: gpu/ram/cpu with auto_accept=True, everything else as registered."""
+    uses: gpu/ram/cpu with auto_accept=True and no family scope, everything
+    else as registered."""
     for slug in ("gpu", "ram", "cpu"):
         rules = categories.rules_for(slug)
         assert rules is not None and rules.acceptance is not None
         monkeypatch.setitem(
             categories._REGISTRY,  # pyright: ignore[reportPrivateUsage] - the test-only registration the plan prescribes
             slug,
-            lambda rules=rules: replace(rules, auto_accept=True),
+            lambda rules=rules: replace(rules, auto_accept=True, ratified_families=None),
         )
 
 
@@ -207,7 +208,7 @@ def test_unreached_seed_aliases_are_exactly_the_known_descriptors() -> None:
 @pytest.mark.parametrize(
     ("category", "model_number", "title"), _REACH, ids=[f"{c}:{t}" for c, _, t in _REACH]
 )
-def test_seed_alias_reaches_review_then_accepts_with_auto_accept(
+def test_seed_alias_reaches_its_production_gate_then_accepts_with_gates_lifted(
     site: SourceSite,
     monkeypatch: pytest.MonkeyPatch,
     category: str,
@@ -216,18 +217,35 @@ def test_seed_alias_reaches_review_then_accepts_with_auto_accept(
 ) -> None:
     expected = _seeded_model(model_number)
     assert _candidate_alias_models(category, title) == {expected.pk}
+    rules = categories.rules_for(category)
+    assert rules is not None
+    family = expected.product_family
+    assert family is not None
+    key = categories.FamilyKey(family.manufacturer.normalized_name, family.normalized_name)
+    scope = rules.ratified_families
 
     listing = _hinted(site, "reach", title, category)
     edge = _resolve(listing)
-    assert edge.evidence["outcome"] == "review"
     assert edge.evidence["rung"] == 1
-    assert edge.evidence["auto_accept_disabled"] is True
     assert edge.evidence["alias_source_kind"] == "catalog_authoritative"
     assert edge.evidence["category"] == category
+    if rules.auto_accept and scope is not None and scope.permits(key):
+        # OQ34: a ratified family (AMD EPYC) accepts under production rules.
+        assert edge.evidence["outcome"] == "accept"
+        assert edge.method == ResolutionMethod.EXACT_ALIAS
+        assert listing.product_model == expected
+        return
+    assert edge.evidence["outcome"] == "review"
+    if rules.auto_accept:
+        assert edge.evidence["family_not_ratified"] == {
+            "family": {"manufacturer": key.manufacturer, "family": key.family}
+        }
+    else:
+        assert edge.evidence["auto_accept_disabled"] is True
     assert listing.product_model is None
 
-    # Flipping only the flag turns that same review into an accept of the
-    # expected model: auto_accept is the last gate, so nothing else moved.
+    # Lifting only the auto-accept gates turns that same review into an accept
+    # of the expected model: they are the last gates, so nothing else moved.
     _enable_auto_accept(monkeypatch)
     edge = _resolve(listing)
     assert edge.evidence["outcome"] == "accept"

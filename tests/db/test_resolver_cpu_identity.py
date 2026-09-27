@@ -1,15 +1,14 @@
 """CPU identity vetoes on the live resolver path (s7 EPYC audit; Codex N3/N4).
 
 Each case runs the real CatalogResolver against a seeded EPYC 7763 with an
-authoritative alias and CPU auto-accept forced on, so an ACCEPT here is what a
-ratified flip would write. Pins the four fixes made after the first EPYC
+authoritative alias under the production CPU rules, where AMD EPYC is the
+ratified family (OQ34), so an ACCEPT here is what production writes. Pins the four fixes made after the first EPYC
 measurement: board/bundle listings, codename titles, multi-model re-observation
 at rung 0 (N3), and a sample marking carried only in the structured MPN (N4).
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -31,7 +30,6 @@ from hw_radar.catalog.models import (
     RetentionClass,
     SourceSite,
 )
-from hw_radar.matching import categories
 from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata.loader import load_seed_documents
@@ -43,7 +41,7 @@ _BARE_7763 = "AMD EPYC 7763 64-Core SP3"
 
 
 @pytest.fixture
-def epyc_7763(db: None, monkeypatch: pytest.MonkeyPatch) -> ProductModel:
+def epyc_7763(db: None) -> ProductModel:
     manufacturer, _ = Manufacturer.objects.get_or_create(
         normalized_name="amd", defaults={"name": "AMD"}
     )
@@ -72,15 +70,6 @@ def epyc_7763(db: None, monkeypatch: pytest.MonkeyPatch) -> ProductModel:
         product_model=model,
         source_kind=AliasSourceKind.CATALOG_AUTHORITATIVE,
         retention_class=RetentionClass.MANUFACTURER_REFERENCE,
-    )
-    # With auto-accept off every hit is review for the flag alone, which would
-    # hide whether the veto fired; these cases need the ratified-flip behavior.
-    rules = categories.rules_for("cpu")
-    assert rules is not None
-    monkeypatch.setitem(
-        categories._REGISTRY,  # pyright: ignore[reportPrivateUsage] - test-only registration, as in test_resolver_categories.py
-        "cpu",
-        lambda: replace(rules, auto_accept=True),
     )
     return model
 
@@ -203,17 +192,10 @@ def test_spaced_mother_board_goes_to_review(site: SourceSite, epyc_7763: Product
 
 
 @pytest.fixture
-def seeded_cpus(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The shipped CPU seeds (OPN and bare-number aliases included) with CPU
-    auto-accept forced on, as in the epyc_7763 fixture."""
+def seeded_cpus(db: None) -> None:
+    """The shipped CPU seeds (OPN and bare-number aliases included) under the
+    production CPU rules: AMD EPYC auto-accepts, Intel Xeon reviews (OQ34)."""
     import_documents([d for d in load_seed_documents() if d.category == "cpu"])
-    rules = categories.rules_for("cpu")
-    assert rules is not None
-    monkeypatch.setitem(
-        categories._REGISTRY,  # pyright: ignore[reportPrivateUsage] - test-only registration, as in test_resolver_categories.py
-        "cpu",
-        lambda: replace(rules, auto_accept=True),
-    )
 
 
 def test_two_opns_of_different_models_do_not_inherit_the_prior(
@@ -245,13 +227,20 @@ def test_two_opns_of_different_models_do_not_inherit_the_prior(
 def test_near_model_xeon_number_does_not_reach_the_seeded_model(
     site: SourceSite, seeded_cpus: None
 ) -> None:
-    """Round-3 R3-D: 'Gold 63380' is not 'Gold 6338'."""
+    """Round-3 R3-D: 'Gold 63380' is not 'Gold 6338'. Xeon is unratified (OQ34),
+    so the control's exact hit reaches the model and stops only at the family
+    scope, while the near-model number never reaches the model at all."""
     listing = _cpu_listing(site, "xeon-63380", "Intel Xeon Gold 63380 32-Core LGA4189")
     edge = _resolve(listing)
     assert edge.evidence["outcome"] != "accept"
+    assert "family_not_ratified" not in edge.evidence
     assert listing.product_model is None
     control = _cpu_listing(site, "xeon-6338", "Intel Xeon Gold 6338 32-Core LGA4189")
-    assert _resolve(control).evidence["outcome"] == "accept"
+    edge = _resolve(control)
+    assert edge.evidence["outcome"] == "review"
+    assert edge.evidence["family_not_ratified"] == {
+        "family": {"manufacturer": "intel", "family": "xeon scalable"}
+    }
 
 
 def test_reobserved_title_naming_another_epyc_does_not_inherit(
@@ -261,7 +250,7 @@ def test_reobserved_title_naming_another_epyc_does_not_inherit(
     hits name 7742, so nothing conflicts among the current identifiers and
     both are 64-core SP3 parts (no veto); the 7763 prior must not be kept.
     Since R4-A the changed identifiers discard it and the title is decided
-    afresh: the exact 7742 aliases accept (auto-accept is forced on here)."""
+    afresh: the exact 7742 aliases accept (EPYC is ratified)."""
     listing = _cpu_listing(site, "7763-then-7742", _BARE_7763)
     assert _resolve(listing).evidence["outcome"] == "accept"
     prior_model = ProductModel.objects.get(model_number="EPYC 7763")

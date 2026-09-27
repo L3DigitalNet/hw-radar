@@ -1,8 +1,9 @@
 # CPU (AMD EPYC) draft corpus: owner audit packet (2026-09-26)
 
-Status (updated 2026-09-26, matcher `2026.09.3`): **owner audit applied; identity gate PASS;
-`auto_accept` stays False pending a scope decision** ([OQ34](../open-questions.md#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family)).
-See §9. Sections 1–8 are the pre-audit packet, kept as the record.
+Status (updated 2026-09-26, session 9): **owner audit applied; identity gate PASS; AMD EPYC is the
+ratified CPU family** ([OQ34](../resolved-questions.md#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family):
+family-scoped auto-accept, matcher `2026.09.4`). See §9 and §10. Sections 1–8 are the pre-audit
+packet, kept as the record.
 
 This packet prepares the first F6 cell ratification: **eBay Browse × CPU × a narrow AMD EPYC
 set**. It serves owner gate **R4** (MS2-D-05): CPU ships with `auto_accept=False`, and only an
@@ -283,4 +284,41 @@ PASS, on a pinned CPU seed (`amd-epyc.json` sha256 `e38e350b…d1e7`). The OQ32 
 drive/ADR-0019 rule and does not bind a single `(ebay, cpu)` cell. **The identity gate passes, but
 `auto_accept` is not flipped:** the flag is category-wide, while this corpus covers only the four
 seeded EPYC models, and production also carries five Intel Xeon models this corpus never measured
-(OQ34). eBay × CPU stays `NOT_ADMITTED` until the per-cell live checklist passes.
+(OQ34, resolved in §10). eBay × CPU stays `NOT_ADMITTED` until the per-cell live checklist passes.
+
+## 10. OQ34 applied: EPYC-only ratification, production behavior (2026-09-26, matcher `2026.09.4`)
+
+**Owner ruling** ([OQ34](../resolved-questions.md#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family)):
+CPU auto-accept is scoped to ratified product families; AMD EPYC is the first, and unratified
+families (Intel Xeon included) stay review-only even with authoritative exact aliases. This corpus is
+the ratifying evidence for AMD EPYC and for nothing else.
+
+**Mechanism.** `CategoryRules.ratified_families` holds logical `(manufacturer, normalized family)`
+keys; CPU registers exactly `amd`/`epyc` with `auto_accept=True`. Gate order is: cross-category
+guard, AcceptancePolicy (authoritative alias at model or variant grain), vetoes, the flag, then the
+family scope. A hit that passes everything but the scope reviews with `family_not_ratified` naming
+the family. EPYC condition variants are keyed through their model, so they inherit EPYC. The scope
+also binds inherited rung-0 automated priors; manual priors still inherit.
+
+**Measurement under the production rules** (`test_ms1e_corpus_measurement`, no test-only override):
+
+| Metric | Result |
+| --- | ---: |
+| Rows | 284 |
+| Accepts | 105 (101 model, 4 variant) |
+| Correct | 105 — precision 100.0% |
+| False positives / false negatives | 0 / 0 |
+| Families accepted | `amd`/`epyc` only (7763 ×46, 9354 ×44, 9654 ×12, 7742 ×3) |
+| Reviews | 18 — the §9 `sample` and `bundle` vetoes, unchanged |
+| Audit gate | PASS |
+| Dispositions vs the §9 would-accept run | identical on all 284 rows |
+
+The corpus holds no Xeon title, so Xeon behavior is pinned by tests instead
+(`tests/db/test_resolver_family_ratification.py`, `tests/db/test_category_seed_reachability.py`).
+Every shipped Xeon seed resolves to its model and reviews as `family_not_ratified`; lifting only
+the scope accepts that same model. The tests also pin: an unratified AMD family reviews; a
+non-authoritative or family-grain alias reviews on policy regardless of family; a vetoed EPYC
+reviews; look-alike keys (`intel`/`epyc`, `amd`/`epyc embedded`) are not ratified; and an empty
+scope is a construction error. This does not validate the CPU category as a whole, and a Xeon
+corpus remains future work.
+

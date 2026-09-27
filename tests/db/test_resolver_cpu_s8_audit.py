@@ -1,15 +1,14 @@
 """CPU identity on the live resolver path for the s8 owner EPYC audit.
 
-Runs the real CatalogResolver over the shipped CPU seeds with CPU auto-accept
-forced on (as in test_resolver_cpu_identity.py), so an ACCEPT here is what a
-ratified flip would write. Pins cpu-0082 (qualifier words plus a fused OPN),
+Runs the real CatalogResolver over the shipped CPU seeds under the production
+CPU rules, where AMD EPYC is the ratified family (OQ34), so an ACCEPT here is
+what production writes. Pins cpu-0082 (qualifier words plus a fused OPN),
 that vendor-lock wording never changes identity on rungs 0-2, and the owner's
 cpu-0283 ruling that the listing price is not identity evidence.
 """
 
 from __future__ import annotations
 
-from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -24,7 +23,6 @@ from hw_radar.catalog.models import (
     RetentionClass,
     SourceSite,
 )
-from hw_radar.matching import categories
 from hw_radar.matching.resolver import CatalogResolver
 from hw_radar.refdata.loader import load_seed_documents
 from hw_radar.refdata.persist import import_documents
@@ -35,15 +33,8 @@ _CPU_0283 = "AMD EPYC 7763 Processor 64-Core 2.45GHz 256MB 280W CPU 100-00000031
 
 
 @pytest.fixture
-def seeded_cpus(db: None, monkeypatch: pytest.MonkeyPatch) -> None:
+def seeded_cpus(db: None) -> None:
     import_documents([d for d in load_seed_documents() if d.category == "cpu"])
-    rules = categories.rules_for("cpu")
-    assert rules is not None
-    monkeypatch.setitem(
-        categories._REGISTRY,  # pyright: ignore[reportPrivateUsage] - test-only registration, as in test_resolver_categories.py
-        "cpu",
-        lambda: replace(rules, auto_accept=True),
-    )
 
 
 @pytest.fixture
