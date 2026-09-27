@@ -1,16 +1,19 @@
 # Deployed State
 
-Last updated: 2026-09-26 (release `ded1000`)
+Last updated: 2026-09-27 (release `5f2d300`)
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `ded1000` (PR #39 merge, matcher
-  `2026.09.3`, migration `0024_cpu_requirement_vendor_unlocked`, evaluator `ms2c.3`), Deploy run
-  36273962897, approved via `pending_deployments`, deployed 2026-09-26. Earlier: `478baf0`
-  (matcher `2026.09.2`), `c2adae0` (Slice F), `508b1f0` (Slices D/E).
-- Host-verified after `ded1000`: `/healthz` reports `ded1000`, `database: true`; migration 0024
-  applied; all 6 `SourceConfig` rows `enabled=False`; no `APIFY` env var rendered;
-  `MATCHER_VERSION` `2026.09.3` and `EVALUATOR_VERSION` `ms2c.3` live.
+- Deploys run from `main` via the Deploy workflow. Latest: `5f2d300` (PR #40 merge, matcher
+  `2026.09.4`: EPYC-only CPU auto-accept, OQ34; ADR 0019 ratified), Deploy run 36281409520,
+  approved via `pending_deployments`, deployed 2026-09-27 00:21Z. Earlier: `ded1000` (matcher
+  `2026.09.3`, migration 0024), `478baf0` (matcher `2026.09.2`), `c2adae0` (Slice F).
+- Host-verified after `5f2d300`: `/healthz` reports `5f2d300`, `database: true`; no pending
+  migration; all 6 `SourceConfig` rows `enabled=False`; no admitted cell; no `APIFY` env var;
+  `MATCHER_VERSION` `2026.09.4`, `EVALUATOR_VERSION` `ms2c.3`.
+- eBay credentials render in production since 2026-09-26 (`EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET`
+  from the hw-radar service-store bundle; [bug 004](bugs/004-ebay-credentials-not-rendered-in-production.md)).
+  eBay × CPU live checklist: [evidence](../evidence/2026-09-27-ebay-cpu-sa004-f6.md).
 - Post-deploy `import_refdata --category cpu` (rehearsed first on a production-shaped DB): 2
   manufacturers, 2 families, 9 models, 9 specs, 19 aliases; `product_model` 15 -> 24 (cpu 9,
   drive 15 unchanged). GPU and RAM refdata are still 0 rows in production.

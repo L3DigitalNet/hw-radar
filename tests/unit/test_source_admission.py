@@ -61,16 +61,21 @@ def test_retired_cells_are_exactly_the_retired_sources() -> None:
     assert retired_cells == {(s, c) for s in RETIRED_SOURCES for c in MATRIX_CATEGORIES}
 
 
-def test_current_truth_nothing_is_admitted() -> None:
-    # Owner decision 2026-09-26: no combination has passed its gates yet.
-    assert CellStatus.ADMITTED not in set(ADMISSION_MATRIX.values())
-    assert all(not admitted_categories(s) for s in REGISTRY_KEYS)
+def test_current_truth_only_ebay_cpu_is_admitted() -> None:
+    # 2026-09-26 (s9): eBay x CPU passed its live per-cell checklist; nothing else has.
+    admitted = {cell for cell, status in ADMISSION_MATRIX.items() if status is CellStatus.ADMITTED}
+    assert admitted == {("ebay", "cpu")}
+    assert {s: admitted_categories(s) for s in REGISTRY_KEYS if admitted_categories(s)} == {
+        "ebay": frozenset({"cpu"})
+    }
 
 
 def test_category_coverage_per_source() -> None:
     def live(source: str) -> set[str]:
         return {
-            c for c in MATRIX_CATEGORIES if ADMISSION_MATRIX[(source, c)] is CellStatus.NOT_ADMITTED
+            c
+            for c in MATRIX_CATEGORIES
+            if ADMISSION_MATRIX[(source, c)] in {CellStatus.NOT_ADMITTED, CellStatus.ADMITTED}
         }
 
     assert live("ebay") == {"drive", "cpu", "gpu", "ram"}
@@ -129,6 +134,7 @@ def _categories_requested(seen: list[httpx.Request]) -> list[str | None]:
     return [r.url.params.get("category_ids") for r in seen]
 
 
+@pytest.mark.usefixtures("nothing_admitted")
 def test_ebay_runs_only_the_admitted_category_sweep(
     monkeypatch: pytest.MonkeyPatch, admit: Callable[..., None]
 ) -> None:
@@ -157,6 +163,7 @@ def test_category_harvest_adapter_requests_only_that_category(
     ]
 
 
+@pytest.mark.usefixtures("nothing_admitted")
 def test_ebay_drive_cell_alone_runs_only_the_legacy_drive_get(
     monkeypatch: pytest.MonkeyPatch, admit: Callable[..., None]
 ) -> None:
@@ -180,6 +187,7 @@ def test_ebay_probe_sends_nothing_without_the_drive_cell(
     assert seen == []
 
 
+@pytest.mark.usefixtures("nothing_admitted")
 def test_ebay_with_nothing_admitted_sweeps_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _record_ebay_requests(monkeypatch)
 
@@ -225,6 +233,7 @@ def test_enabled_retired_source_is_never_scheduled(
     assert any("retired" in r.getMessage() and key in r.getMessage() for r in caplog.records)
 
 
+@pytest.mark.usefixtures("nothing_admitted")
 def test_ebay_with_no_admitted_cell_gets_no_job(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level(logging.WARNING, logger="hw_radar.poller.service"):
         jobs = _source_jobs("ebay", [_schedule("ebay", heartbeat=True)])
@@ -239,6 +248,7 @@ def test_drive_only_source_needs_its_drive_cell(key: str, admit: Callable[..., N
     assert _source_jobs(key, [_schedule(key)]) == {f"poll-{key}"}
 
 
+@pytest.mark.usefixtures("nothing_admitted")
 def test_unrelated_admission_is_never_a_prerequisite(admit: Callable[..., None]) -> None:
     # Matrix decision: each combination stands alone. Admitting goharddrive's
     # drive cell alone schedules goharddrive, and nothing else.
