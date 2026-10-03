@@ -1,15 +1,18 @@
 # Deployed State
 
-Last updated: 2026-09-27 (release `646809d`; eBay × CPU live)
+Last updated: 2026-09-27 (release `8f529a8`; eBay × CPU live)
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `646809d` (PR #41: admits eBay × CPU
-  only), Deploy run 36283534627, 2026-09-27 ~01:07Z; before it `5f2d300` (PR #40, matcher
-  `2026.09.4`, EPYC-only CPU auto-accept) and `ded1000` (migration 0024).
-- Host-verified after `646809d`: `/healthz` reports it, `database: true`; no pending migration;
-  admitted cells exactly `[("ebay","cpu")]`; no `APIFY` env var; matcher `2026.09.4`, evaluator
-  `ms2c.3`. The release shipped with every source disabled.
+- Deploys run from `main` via the Deploy workflow. Latest: `8f529a8` (PR #42 documentation-only),
+  Deploy run 36316335683, succeeded 2026-09-27 11:58Z after eligible-owner environment approval.
+- `8f529a8` made no code, dependency, migration, or settings change. The prior application release
+  `646809d` (PR #41) remains the rollback pointer; before it were `5f2d300` and `ded1000`.
+- Post-deploy health checks reported release `8f529a8` and `database: true`; no migrations were
+  pending, `base.css` returned 200, and web and poller were active with zero automatic restarts.
+- Runtime versions remain matcher `2026.09.4`, evaluator `ms2c.3`, and migration `0024`.
+- The deployed `admission.py` matches this repository. Only eBay is enabled every 600 seconds and
+  only eBay × CPU is admitted; all other sources remain disabled and no `APIFY` environment entries render.
 - **Live since 2026-09-27 01:09Z: eBay enabled** (the only enabled source) after the eBay × CPU
   checklist passed: six EPYC query scopes every 600 s; production watch 1 requires a stated
   unlock. F6 is proven: [evidence](../evidence/2026-09-27-ebay-cpu-sa004-f6.md).
@@ -22,9 +25,11 @@ Last updated: 2026-09-27 (release `646809d`; eBay × CPU live)
   (owner, 2026-09-26: leave it; no manual deletion).
 - Apify stays fail-closed in production: no `APIFY` variable is rendered, so admission denies by
   construction; no ledger authority, cycle, reservation, latch, or provider run exists. The F5a
-  proof environment holds the 2026-09-05 cycle's ledger authority; production may claim paid
-  admission only after that environment's correction monitoring closes (2026-10-02 ~21:09Z) and
-  `apify_ledger_handoff` runs.
+  proof environment (2026-09-05 cycle authority) was drained 2026-10-03: every closing read
+  committed, so `apify_ledger_handoff --export` is unblocked; run it only for intentional paid admission.
+- PostgreSQL memory is sized to the 4 GiB CT by `conf.d/50-ct116-memory.conf` (2026-10-03,
+  [bug 005](bugs/005-pilot-report-oom-killed-production-postgres.md)); it overrides the host-sized
+  `timescaledb-tune` values in `postgresql.conf`. A poller restart is needed after any PG restart.
 - Static files: `STATIC_ROOT` `/var/lib/hw-radar/staticfiles` (deploy-owned, 0755/0644); the
   deploy smoke fetches `base.css` through nginx ([bug 001](bugs/001-nginx-static-403.md), fixed).
 - The production environment needs a reviewer approval per push to `main`; an unapproved run dies

@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, cast
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from asgiref.sync import sync_to_async
+from django.db import DatabaseError, connection
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
@@ -64,6 +65,7 @@ from hw_radar.catalog.models import (
 from hw_radar.catalog.models.provider import ImportState
 from hw_radar.matching.categories import DRIVE
 from hw_radar.matching.resolver import CatalogResolver
+from hw_radar.poller.executor import ConnectionHygieneExecutor
 from hw_radar.refdata import refresh as refdata_refresh
 
 if TYPE_CHECKING:
@@ -232,7 +234,36 @@ async def refresh_fx_job() -> None:
     logger.info("fx refresh: %s pairs stored", stored)
 
 
+def database_reachable() -> bool:
+    """Return whether this thread can run a query on the default database.
+
+    Never raises: a failure is logged and reported as False, because the
+    dead-man job must keep running to resume pushing once the database is back.
+    """
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    except DatabaseError:
+        logger.warning("dead-man push withheld: database unreachable", exc_info=True)
+        return False
+    return True
+
+
 async def deadman_job() -> None:
+    """Push the §18.5 dead-man heartbeat only while the poller can reach its database.
+
+    The push is the off-box alert on absence of success (spec §18.5; ADR-0017:
+    "a stalled poller ... reaches a human off the box"), so a live process
+    whose every job is failing must go quiet. Rejected: pushing on bare
+    process liveness, which on 2026-10-03 kept the monitor green while every
+    collection job failed on a dead database connection.
+
+    The probe runs through sync_to_async so it uses the same thread and
+    connection as the jobs' ORM work, after the executor has recycled it
+    (poller.executor); it therefore reports what the next job would see.
+    """
+    if not await sync_to_async(database_reachable)():
+        return
     await deadman.push()
 
 
@@ -425,8 +456,13 @@ def build_scheduler(
     # Codex CR-003: APScheduler defaults to LOCAL time, so the *_UTC constants
     # above were only aspirational until the scheduler itself is pinned — cron
     # triggers inherit the scheduler's timezone, not UTC, unless told to.
+    # The executor recycles Django DB connections around every job; without it
+    # one database restart leaves every later job failing on a dead connection
+    # until the process restarts (poller.executor).
     scheduler = AsyncIOScheduler(
-        job_defaults={"max_instances": 1, "coalesce": True}, timezone="UTC"
+        executors={"default": ConnectionHygieneExecutor()},
+        job_defaults={"max_instances": 1, "coalesce": True},
+        timezone="UTC",
     )
     scheduler.add_job(heartbeat, "interval", seconds=HEARTBEAT_SECONDS, id="poller-heartbeat")
     scheduler.add_job(refresh_fx_job, "cron", hour=FX_REFRESH_HOUR_UTC, id="fx-refresh")
