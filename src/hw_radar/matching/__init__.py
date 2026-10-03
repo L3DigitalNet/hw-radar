@@ -73,4 +73,10 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               reviews as unratified, never an error edge; the review
 #               fingerprint names the family; rung 0 trusts an automated prior
 #               only at a policy grain.
-MATCHER_VERSION = "2026.09.4"
+#   2026.10.1 — condition vocab reads the "non-working"/"nonworking"/
+#               "not-working" and "non-functional"/"not functional" spellings
+#               as for_parts (all categories); they join the negator-owning
+#               registry, so their "non"/"not" negates no neighbouring
+#               condition or vendor-lock wording. Edges stamped 2026.09.4 may
+#               carry a model-grain accept of a broken unit (cpu-0069).
+MATCHER_VERSION = "2026.10.1"

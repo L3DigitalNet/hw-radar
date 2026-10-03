@@ -25,6 +25,7 @@ from hw_radar.matching.normalize import (
     DRIVE_REFERENCE_PHRASE,
     FOR_PARTS_PREAMBLE_WORDS,
     NEGATOR_OWNING_PHRASE,
+    NOT_WORKING_WORDING,
     mask_reference_spans,
 )
 from hw_radar.matching.types import Attribute, ExtractedAttributes
@@ -64,9 +65,11 @@ _CONDITIONS: tuple[tuple[re.Pattern[str], str, str | None, float], ...] = (
         # "for <word>" preamble is exempt from reference masking for exactly
         # the words in normalize.FOR_PARTS_PREAMBLE_WORDS, so this pattern
         # reads the same definition: a word exempted there but not asserted
-        # here puts a broken drive on a working-condition variant.
+        # here puts a broken drive on a working-condition variant. The
+        # "non-working"/"not functional" family is likewise normalize's
+        # NOT_WORKING_WORDING, the same text the negation registry stops at.
         re.compile(
-            r"\bparts only\b|\bas[- ]is\b|\bnot working\b"
+            rf"\bparts only\b|\bas[- ]is\b|\b{NOT_WORKING_WORDING}\b"
             r"|\bspares?(?: or | and | ?/ ?| )repairs?\b"
             rf"|\bfor {FOR_PARTS_PREAMBLE_WORDS}\b"
         ),
