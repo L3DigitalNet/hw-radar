@@ -11,6 +11,11 @@
 - **First live cell, 2026-09-27: eBay x CPU admitted and eBay enabled** (six EPYC scopes, 600 s).
   **F6 proven**: live eBay listings -> EPYC identity -> vendor lock -> eligibility -> shortlist
   (17 match / 51 no_match / 219 unknown). Evidence: `docs/evidence/2026-09-27-ebay-cpu-sa004-f6.md`.
+- **Pilot review, day 6 (2026-10-03):** 874/874 runs succeeded, all six scopes single-page complete,
+  quota ~16%/day; 20/50/229 verdicts; heavy relist churn in category 164. Widening awaits the owner.
+  Evidence: `docs/evidence/2026-10-03-ebay-cpu-pilot-review.md`.
+- **Bug 005 (2026-10-03):** `pilot_report` OOM-killed production PostgreSQL (~50 s outage); PG memory
+  resized to the 4 GiB CT; code fixes on `dev`, unreleased.
 - **OQ31 (owner, 2026-09-26):** ServerPartDeals and Seagate-recertified are retired — permission-
   required, any venue. SA-004's global enable order is replaced by a per-`(source, category)`
   admission matrix (`admission.py`; only eBay x CPU `ADMITTED`; `docs/handoff/deployed.md`).
@@ -32,9 +37,8 @@
   stays fail-closed for Apify: no `APIFY` variable is rendered, no ledger authority or run exists.
 - **F5a executed 2026-09-25 (non-production proof env):** build `1.0.1`, eleven admitted runs over
   every fault mode, 0 delistings, live Actor<->local identity switch held, +$0.00527 account
-  usage. Evidence: `docs/evidence/2026-09-25-f5a-synthetic-proof.md`. Proof env still holds the
-  2026-09-05 cycle's ledger authority; drains after its correction monitoring closes 2026-10-02
-  ~21:09Z (see `docs/handoff/state.md`).
+  usage. Evidence: `docs/evidence/2026-09-25-f5a-synthetic-proof.md`. **Drained 2026-10-03**: all 12
+  closing reads committed, 0 outstanding, `_drain_refusal()` clear; no handoff (no paid admission).
 - **Delist rule amendment (ADR 0020, 2026-09-26):** no eBay scope (legacy drive or category) may
   stale-delist unless the sweep is provably complete.
 - **Admission matrix:** eBay x CPU `ADMITTED` 2026-09-27 after its live checklist; every other

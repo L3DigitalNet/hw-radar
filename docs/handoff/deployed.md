@@ -25,9 +25,11 @@ Last updated: 2026-09-27 (release `8f529a8`; eBay × CPU live)
   (owner, 2026-09-26: leave it; no manual deletion).
 - Apify stays fail-closed in production: no `APIFY` variable is rendered, so admission denies by
   construction; no ledger authority, cycle, reservation, latch, or provider run exists. The F5a
-  proof environment holds the 2026-09-05 cycle's ledger authority; production may claim paid
-  admission only after that environment's correction monitoring closes (2026-10-02 ~21:09Z) and
-  `apify_ledger_handoff` runs.
+  proof environment (2026-09-05 cycle authority) was drained 2026-10-03: every closing read
+  committed, so `apify_ledger_handoff --export` is unblocked; run it only for intentional paid admission.
+- PostgreSQL memory is sized to the 4 GiB CT by `conf.d/50-ct116-memory.conf` (2026-10-03,
+  [bug 005](bugs/005-pilot-report-oom-killed-production-postgres.md)); it overrides the host-sized
+  `timescaledb-tune` values in `postgresql.conf`. A poller restart is needed after any PG restart.
 - Static files: `STATIC_ROOT` `/var/lib/hw-radar/staticfiles` (deploy-owned, 0755/0644); the
   deploy smoke fetches `base.css` through nginx ([bug 001](bugs/001-nginx-static-403.md), fixed).
 - The production environment needs a reviewer approval per push to `main`; an unapproved run dies

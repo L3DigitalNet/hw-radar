@@ -54,7 +54,9 @@ Last updated: 2026-09-26
   provider-switch proof; the site stays disabled and never scheduled.
 - Runtime jobs: APScheduler poller service (UTC-pinned), daily
   maintenance/recovery jobs, monthly refdata refresh, and dead-man heartbeat
-  support.
+  support. `poller.executor.ConnectionHygieneExecutor` recycles Django DB
+  connections around every job; the dead-man push is withheld while the
+  database is unreachable (bug 005).
 - Deployment: systemd units, nginx config, and `deploy/deploy-remote.sh`.
 
 ## Standing Backlog
