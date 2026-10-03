@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, cast
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from asgiref.sync import sync_to_async
+from django.db import DatabaseError, connection
 from django.utils import timezone
 
 from hw_radar.acquisition import deadman, fx
@@ -233,7 +234,36 @@ async def refresh_fx_job() -> None:
     logger.info("fx refresh: %s pairs stored", stored)
 
 
+def database_reachable() -> bool:
+    """Return whether this thread can run a query on the default database.
+
+    Never raises: a failure is logged and reported as False, because the
+    dead-man job must keep running to resume pushing once the database is back.
+    """
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1")
+    except DatabaseError:
+        logger.warning("dead-man push withheld: database unreachable", exc_info=True)
+        return False
+    return True
+
+
 async def deadman_job() -> None:
+    """Push the §18.5 dead-man heartbeat only while the poller can reach its database.
+
+    The push is the off-box alert on absence of success (spec §18.5; ADR-0017:
+    "a stalled poller ... reaches a human off the box"), so a live process
+    whose every job is failing must go quiet. Rejected: pushing on bare
+    process liveness, which on 2026-10-03 kept the monitor green while every
+    collection job failed on a dead database connection.
+
+    The probe runs through sync_to_async so it uses the same thread and
+    connection as the jobs' ORM work, after the executor has recycled it
+    (poller.executor); it therefore reports what the next job would see.
+    """
+    if not await sync_to_async(database_reachable)():
+        return
     await deadman.push()
 
 
