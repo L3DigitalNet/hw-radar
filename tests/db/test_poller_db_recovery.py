@@ -95,7 +95,16 @@ def test_coroutine_job_recovers_after_connection_loss(
     async def sever() -> None:
         await sync_to_async(_sever)()
 
-    outcomes = asyncio.run(_run_jobs(_async_query_job, 3, sever))
+    async def scenario() -> list[bool]:
+        try:
+            return await _run_jobs(_async_query_job, 3, sever)
+        finally:
+            # The persistent variant leaves the shared sync_to_async thread
+            # holding a connection with no close_at, which later tests on that
+            # thread (test_poller_deadman) would silently reuse.
+            await sync_to_async(_close)()
+
+    outcomes = asyncio.run(scenario())
     assert outcomes[0] is True
     if max_age == 0:
         assert outcomes[1:] == [True, True, True]
