@@ -64,6 +64,7 @@ from hw_radar.catalog.models import (
 from hw_radar.catalog.models.provider import ImportState
 from hw_radar.matching.categories import DRIVE
 from hw_radar.matching.resolver import CatalogResolver
+from hw_radar.poller.executor import ConnectionHygieneExecutor
 from hw_radar.refdata import refresh as refdata_refresh
 
 if TYPE_CHECKING:
@@ -425,8 +426,13 @@ def build_scheduler(
     # Codex CR-003: APScheduler defaults to LOCAL time, so the *_UTC constants
     # above were only aspirational until the scheduler itself is pinned — cron
     # triggers inherit the scheduler's timezone, not UTC, unless told to.
+    # The executor recycles Django DB connections around every job; without it
+    # one database restart leaves every later job failing on a dead connection
+    # until the process restarts (poller.executor).
     scheduler = AsyncIOScheduler(
-        job_defaults={"max_instances": 1, "coalesce": True}, timezone="UTC"
+        executors={"default": ConnectionHygieneExecutor()},
+        job_defaults={"max_instances": 1, "coalesce": True},
+        timezone="UTC",
     )
     scheduler.add_job(heartbeat, "interval", seconds=HEARTBEAT_SECONDS, id="poller-heartbeat")
     scheduler.add_job(refresh_fx_job, "cron", hour=FX_REFRESH_HOUR_UTC, id="fx-refresh")
