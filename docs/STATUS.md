@@ -4,10 +4,10 @@
 
 - MS-0 and MS-1a through MS-1d are implemented and merged: Django/TimescaleDB foundation, ingestion
   substrate, matching, catalog seed, five connectors, and availability heartbeat.
-- **Production deployed `8f529a8`** (PR #42, 2026-09-27): documentation-only release; no code,
-  dependency, migration, or settings change. eBay was already the sole enabled source for the CPU pilot.
-- Release gate: 3249 passed / 2 opt-in skips / 96% coverage; Actor 75 passed / 99% coverage;
-  dependency audits clean. PR #42 checks and dependency review passed before the signed merge.
+- **Production deployed `f678247`** (PR #48, 2026-10-03): matcher `2026.10.1`, EPYC 9354P/9654P
+  seeds (OQ38), dead-man collection-freshness gate (OQ37). PR #47 (`1208526`) shipped bug 005's fixes.
+- Release gate: 3293 passed / 2 opt-in skips / 96% coverage; Actor 75 passed / 99% coverage;
+  dependency audits clean (urllib3 2.8.0). PR #48 checks and dependency review passed.
 - **First live cell, 2026-09-27: eBay x CPU admitted and eBay enabled** (six EPYC scopes, 600 s).
   **F6 proven**: live eBay listings -> EPYC identity -> vendor lock -> eligibility -> shortlist
   (17 match / 51 no_match / 219 unknown). Evidence: `docs/evidence/2026-09-27-ebay-cpu-sa004-f6.md`.
@@ -15,7 +15,7 @@
   quota ~16%/day; 20/50/229 verdicts; heavy relist churn in category 164. Widening awaits the owner.
   Evidence: `docs/evidence/2026-10-03-ebay-cpu-pilot-review.md`.
 - **Bug 005 (2026-10-03):** `pilot_report` OOM-killed production PostgreSQL (~50 s outage); PG memory
-  resized to the 4 GiB CT; code fixes released in `1208526` (PR #47).
+  resized to the 4 GiB CT; code fixes released in `1208526`, verified by a live PG-only restart.
 - **OQ31 (owner, 2026-09-26):** ServerPartDeals and Seagate-recertified are retired — permission-
   required, any venue. SA-004's global enable order is replaced by a per-`(source, category)`
   admission matrix (`admission.py`; only eBay x CPU `ADMITTED`; `docs/handoff/deployed.md`).
@@ -29,7 +29,7 @@
 - **Drive matcher ratified (s9, 2026-09-26): ADR 0019 accepted.** OQ33 relabels 8 legacy-family
   rows (historical family wins); composite PASS in one full run: 366/366 = 100% (FP 0, FN 204),
   floors ebay 132 / wd 22 / ghd 9, audit PASS, rung-0 PASS. The corpus is now a CI gate.
-- **CPU (s9): AMD EPYC is the only ratified CPU family** (OQ34; matcher `2026.09.4`, live). EPYC
+- **CPU (s9): AMD EPYC is the only ratified CPU family** (OQ34; matcher `2026.10.1` live since s10). EPYC
   auto-accepts, 105/105 under production rules; Xeon and other families review `family_not_ratified`.
   Vendor lock is listing evidence; watches can require unlocked (migration `0024`; unknown never passes).
 - **MS-2 plan** (`docs/superpowers/plans/2026-09-24-ms2-multi-category-watch-core.md`) Slices A-F

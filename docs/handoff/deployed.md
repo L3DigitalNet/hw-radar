@@ -4,12 +4,15 @@ Last updated: 2026-09-27 (release `8f529a8`; eBay × CPU live)
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `1208526` (PR #47: bug 005 fixes,
-  urllib3 2.8.0), Deploy run 37120027303, succeeded 2026-10-03 11:54Z after owner-authorized approval.
-- Rollback pointer: `8f529a8` (PR #42, docs-only over `646809d`); before it `5f2d300`, `ded1000`.
-- Post-deploy: `/healthz` reported `1208526` and `database: true`; web, poller, and PostgreSQL active,
-  `NRestarts=0`; poller started with 1 source job.
-- Runtime versions: matcher `2026.09.4`, evaluator `ms2c.3`, migration `0024`.
+- Deploys run from `main` via the Deploy workflow. Latest: `f678247` (PR #48: matcher `2026.10.1`,
+  EPYC 9354P/9654P seeds, dead-man freshness gate), Deploy run 37123371541, 2026-10-03 12:53Z.
+- Prior: `1208526` (PR #47, bug 005 fixes, urllib3 2.8.0, run 37120027303); rollback pointers
+  `1208526`, then `8f529a8`, `646809d`.
+- Post-deploy: `/healthz` reported `f678247`, `database: true`; services active, `NRestarts=0`. Run 888
+  (13:03Z) succeeded under `2026.10.1`: 47 P-SKU listings resolve to their own models.
+- Runtime versions: matcher `2026.10.1`, evaluator `ms2c.3`, migration `0024`.
+- Live check 2026-10-03 13:04Z: a PostgreSQL-only restart left the poller running; every job kept
+  succeeding without a poller restart (bug 005 fix verified).
 - The deployed `admission.py` matches this repository. Only eBay is enabled every 600 seconds and
   only eBay × CPU is admitted; all other sources remain disabled and no `APIFY` environment entries render.
 - **Live since 2026-09-27 01:09Z: eBay enabled** (the only enabled source) after the eBay × CPU
@@ -17,8 +20,8 @@ Last updated: 2026-09-27 (release `8f529a8`; eBay × CPU live)
   unlock. F6 is proven: [evidence](../evidence/2026-09-27-ebay-cpu-sa004-f6.md).
 - eBay credentials render in production since 2026-09-26 (`EBAY_CLIENT_ID`/`EBAY_CLIENT_SECRET`
   from the hw-radar service-store bundle; [bug 004](bugs/004-ebay-credentials-not-rendered-in-production.md)).
-- Production CPU refdata (`import_refdata --category cpu`, 2026-09-26): 2 families, 9 models, 9
-  specs, 19 aliases. GPU and RAM refdata are still 0 rows in production.
+- Production CPU refdata (`import_refdata --category cpu`, re-run 2026-10-03 after PR #48): 2 families,
+  11 models, 11 specs, 23 aliases (adds EPYC 9354P/9654P). GPU and RAM refdata are still 0 rows in production.
 - Monthly refresh (2026-10-01 07:00Z, rehearsed): re-imports drive + cpu only, adds 253 drive
   models, moves the 3 HC550 models to "Ultrastar"; the empty "Ultrastar DC HC550" family stays
   (owner, 2026-09-26: leave it; no manual deletion).
@@ -28,7 +31,7 @@ Last updated: 2026-09-27 (release `8f529a8`; eBay × CPU live)
   committed, so `apify_ledger_handoff --export` is unblocked; run it only for intentional paid admission.
 - PostgreSQL memory is sized to the 4 GiB CT by `conf.d/50-ct116-memory.conf` (2026-10-03,
   [bug 005](bugs/005-pilot-report-oom-killed-production-postgres.md)); it overrides the host-sized
-  `timescaledb-tune` values in `postgresql.conf`. A poller restart is needed after any PG restart.
+  `timescaledb-tune` values in `postgresql.conf`. The poller reconnects by itself since `1208526`.
 - Static files: `STATIC_ROOT` `/var/lib/hw-radar/staticfiles` (deploy-owned, 0755/0644); the
   deploy smoke fetches `base.css` through nginx ([bug 001](bugs/001-nginx-static-403.md), fixed).
 - The production environment needs a reviewer approval per push to `main`; an unapproved run dies

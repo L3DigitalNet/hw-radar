@@ -2,9 +2,9 @@
 
 ## Current focus
 
-- eBay x CPU stays admitted and unchanged; day-6 review done 2026-10-03; widening is an owner decision.
-- Bug 005 fixes are on `dev`, unreleased; the release needs owner deploy approval.
-- After any PostgreSQL restart before that release, restart `hw-radar-poller` (no auto-reconnect).
+- eBay x CPU stays admitted and unchanged; day-6 review done; widening is an owner decision.
+- `f678247` live: matcher `2026.10.1`, EPYC 9354P/9654P seeds, dead-man freshness gate (OQ37/OQ38).
+- Owner audit of the CPU corpus v2 sample is open (agent-drafted relabels, see OQ38).
 - Owner decision: no drive cell admission; assess eBay x drive first, then WD/goHardDrive per-cell gates.
 
 ## Active incidents

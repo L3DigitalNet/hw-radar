@@ -54,8 +54,6 @@ Instructions for AI agents:
   because the pilot sweep queries only "EPYC 7302".
 - [ ] Ratify further CPU families only with their own owner-audited corpus (Intel Xeon first): add
   the family key to `categories.CPU_RATIFIED_FAMILIES`; EPYC-only today (OQ34, matcher 2026.09.4).
-- [ ] Release `dev` (matcher `2026.10.1`, P-SKU seeds, dead-man freshness gate; OQ37/OQ38), then run
-  `import_refdata --category cpu` in production and confirm 9354P listings resolve to 9354P.
 - [ ] Owner audit of the CPU corpus v2 sample (`docs/evidence/2026-10-03-cpu-epyc-p-sku-audit.md` §6);
   the 47 relabeled rows are agent drafts.
 - [ ] Add a CPU socket-count (1P/2P) spec field and watch clause if 2P builds must exclude P parts.
