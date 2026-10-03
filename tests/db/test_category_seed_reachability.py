@@ -56,6 +56,11 @@ _REACH: tuple[tuple[str, str, str], ...] = (
     ("cpu", "EPYC 9654", "AMD EPYC 9654 96-Core 2.4GHz SP5 100-000000789 CPU"),
     # Separator styling: 'EPYC-9654' reaches the same alias key as 'EPYC 9654'.
     ("cpu", "EPYC 9654", "AMD EPYC-9654 96-Core 2.4GHz SP5 CPU"),
+    # The 1P SKUs are their own models (own OPNs), reached by name and by OPN.
+    ("cpu", "EPYC 9354P", "AMD EPYC 9354P 32-Core 3.25GHz SP5 Processor"),
+    ("cpu", "EPYC 9354P", "AMD 100-000000805 32-Core SP5 Tray CPU"),
+    ("cpu", "EPYC 9654P", "AMD EPYC 9654P 96-Core SP5 CPU"),
+    ("cpu", "EPYC 9654P", "AMD 100-000000803 96-Core SP5 Tray CPU"),
     ("cpu", "EPYC 7763", "AMD EPYC 7763 64-Core 2.45GHz SP3 Server CPU"),
     ("cpu", "EPYC 7763", "AMD 100-000000312 64-Core SP3 Tray Processor"),
     ("cpu", "EPYC 7763", "AMD 100-100000312WOF 64-Core SP3 Boxed Processor"),
@@ -355,9 +360,6 @@ def test_missing_identity_evidence_never_accepts_seed_model(
 @pytest.mark.parametrize(
     "title",
     [
-        # 1P SKU of a seeded 2P model: a different part.
-        "AMD EPYC 9354P 32-Core 3.25GHz SP5 Processor",
-        "AMD EPYC 9654P 96-Core SP5 CPU",
         # Two models named; the second is unseeded, so a lone hit would look clean.
         "AMD EPYC 7742/7702 64-Core SP3 Server CPU",
         # Two seeded models: no pick between them.

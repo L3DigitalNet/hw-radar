@@ -740,13 +740,15 @@ def veto(extracted: ExtractedAttributes, catalog: HardAttrs) -> list[str]:
     if listing.cores is not None and spec.cores is not None and listing.cores.value != spec.cores:
         vetoed.append("cores")
     # The candidate that reached the target may be an OPN or ordering code
-    # while the title names a different model: '9354P ... 100-000000798'
-    # hits the seeded 9354 through its OPN, and 9354P has no alias to collide
-    # with, so no candidate-level guard sees two targets (and CPU runs without
-    # distinct_mpn_guard). Comparing the named model with the target's own is
-    # the only place the unseeded suffix variant is visible, and as a veto it
-    # also re-runs at rung 0, so an accepted listing re-titled to another
-    # model cannot inherit its prior (Codex s8 r1 #8).
+    # while the title names a different model. When both are seeded and both
+    # reach the alias table ('EPYC 9354P ... 100-000000798'), the two targets
+    # already conflict and the listing reviews before this runs. This veto is
+    # what catches the rest: a named model that is unseeded, or one that is
+    # not an 'EPYC <number>' candidate at all ('100-000000798 9354P'), leaves
+    # the OPN's model as the lone hit, and CPU runs without
+    # distinct_mpn_guard. As a veto it also re-runs at rung 0, so an accepted
+    # listing re-titled to another model cannot inherit its prior (Codex s8
+    # r1 #8).
     if listing.model is not None and spec.model is not None and listing.model.value != spec.model:
         vetoed.append("model")
     return vetoed

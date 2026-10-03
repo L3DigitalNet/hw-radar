@@ -1,8 +1,11 @@
 """Codex s8 round-1 findings 8 and 9 on the pure CPU rules.
 
 8: a title that explicitly names a CPU model other than the selected target
-(an unseeded suffix variant such as 9354P over the seeded 9354's OPN) is a
-contradiction, so the `model` veto fires whatever candidate reached the target.
+(a suffix variant such as 9354P or the unseeded 9354F over the seeded 9354's
+OPN) is a contradiction, so the `model` veto fires whatever candidate reached
+the target. With 9354P seeded, the live resolver usually reviews such a title
+on the rung-1 target conflict first (tests/db/test_resolver_cpu_s8_r1_model.py);
+the veto is the guard whenever the named model reaches no alias.
 9: vendor-lock wording is negation-aware, ignores lock words that describe a
 referenced product rather than the offered unit, and reads hyphen/spacing
 variants.

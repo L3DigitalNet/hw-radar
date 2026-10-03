@@ -18,6 +18,16 @@
         "retrieved": "2026-09-24"
       },
       {
+        "url": "https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9354p.html",
+        "title": "AMD EPYC 9354P product page (socket count: 1P only; tray OPN 100-000000805)",
+        "retrieved": "2026-10-03"
+      },
+      {
+        "url": "https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9654p.html",
+        "title": "AMD EPYC 9654P product page (socket count: 1P only; tray OPN 100-000000803)",
+        "retrieved": "2026-10-03"
+      },
+      {
         "url": "https://www.amd.com/en/products/processors/server/epyc/7003-series/amd-epyc-7763.html",
         "title": "AMD EPYC 7763 product page",
         "retrieved": "2026-09-24"
@@ -49,6 +59,26 @@
       ],
       "source_url": "https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9654.html",
       "retrieved_on": "2026-09-24"
+    },
+    {
+      "model_number": "EPYC 9354P",
+      "spec": {"socket": "sp5", "cores": 32, "tdp_w": 280},
+      "aliases": [
+        {"alias_type": "mpn", "text": "EPYC 9354P", "is_primary": true},
+        {"alias_type": "mpn", "text": "100-000000805"}
+      ],
+      "source_url": "https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9354p.html",
+      "retrieved_on": "2026-10-03"
+    },
+    {
+      "model_number": "EPYC 9654P",
+      "spec": {"socket": "sp5", "cores": 96, "tdp_w": 360},
+      "aliases": [
+        {"alias_type": "mpn", "text": "EPYC 9654P", "is_primary": true},
+        {"alias_type": "mpn", "text": "100-000000803"}
+      ],
+      "source_url": "https://www.amd.com/en/products/processors/server/epyc/4th-generation-9004-and-8004-series/amd-epyc-9654p.html",
+      "retrieved_on": "2026-10-03"
     },
     {
       "model_number": "EPYC 7763",
