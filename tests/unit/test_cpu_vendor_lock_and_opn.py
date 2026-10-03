@@ -70,6 +70,38 @@ def test_sample_opn_suffix_is_still_sample_vetoed() -> None:
 @pytest.mark.parametrize(
     "title",
     [
+        # cpu-0016, verbatim: the seller tagged the retail OPN with its vendor.
+        "Processor AMD EPYC 9354P 32-Core 3.25GHz 256MB 280W 100-000000805-DELL",
+        "AMD EPYC 7763 100-000000312-Lenovo",
+        "AMD EPYC 7763 100-000000312-HPE",
+        "AMD EPYC 7763 100-000000312-cisco CPU",
+    ],
+)
+def test_oem_brand_opn_suffix_is_not_a_sample(title: str) -> None:
+    extracted = cpu.extract(canonicalize_title(title))
+    assert "sample" not in cpu.veto(extracted, ladder.HardAttrs())
+    # Branding is not a lock either.
+    assert _lock(title) is None
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "AMD EPYC 7763 100-000000312-ES",
+        "AMD EPYC 7763 100-000000312-QS",
+        # A brand word only exempts itself, not a longer token that starts with it.
+        "AMD EPYC 7763 100-000000312-DELLX",
+        "AMD EPYC 7763 100-000000312-HP04",
+    ],
+)
+def test_other_letter_opn_suffixes_still_read_as_samples(title: str) -> None:
+    extracted = cpu.extract(canonicalize_title(title))
+    assert "sample" in cpu.veto(extracted, ladder.HardAttrs())
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
         "AMD EPYC GENOA SP5 ZEN4 9354P 32-Core CPU 100-000000805",
         "AMD EPYC SP5 9354P 32-Core CPU",
         "AMD EPYC Zen 4 9354P CPU 100-000000805Open",

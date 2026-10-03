@@ -884,7 +884,7 @@ Per [ADR 0006](../adr/adr-0006-cd-rsync-over-tailscale-ssh.md):
 Split concern (resolved gap #6): **infrastructure health** (up/disk/CPU/RAM) rides the existing Hetzner fleet-digest monitoring, which auto-discovers the CT from `pct list` (confirm a **disk-space threshold** alert applies — raw payloads grow); **application health** stays in-app.
 
 - `scraper_runs` records for every scheduled run: start/finish/status/counts/failure class (shared substrate for OQ5/OQ8/OQ10).
-- **Dead-man's-switch heartbeat** — alert on _absence_ of success, not just presence of failure.
+- **Dead-man's-switch heartbeat** — alert on _absence_ of success, not just presence of failure. The push requires a reachable database and a recent successful collection run per scheduled source ([OQ37](../resolved-questions.md#oq37--what-may-the-dead-man-push-vouch-for)).
 - **Email-delivery confirmation** — an operator-side signal that a send actually left the box (kept regardless of provider, ADR 0013).
 - **Off-box watchdog:** the off-site **GMK Uptime Kuma** watches the CT, additionally swept by the Hetzner Fleet Digest (_provisional_ — [resolved-questions.md OQ5](../resolved-questions.md#oq5--off-box-heartbeat), no ADR; healthchecks.io rejected). Land before entering production.
 

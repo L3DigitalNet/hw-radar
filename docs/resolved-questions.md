@@ -61,6 +61,10 @@
     - [MS-1e and CPU audit rulings (2026-09-26)](#ms-1e-and-cpu-audit-rulings-2026-09-26)
     - [OQ33 — Legacy and rebranded drive family names in corpus labels](#oq33--legacy-and-rebranded-drive-family-names-in-corpus-labels)
     - [OQ34 — CPU auto-accept scope: category-wide or the ratified EPYC family](#oq34--cpu-auto-accept-scope-category-wide-or-the-ratified-epyc-family)
+    - [OQ35 — eBay relist semantics for the buyer flow](#oq35--ebay-relist-semantics-for-the-buyer-flow)
+    - [OQ36 — Does a bare "Unlock" state a CPU's vendor unlock?](#oq36--does-a-bare-unlock-state-a-cpus-vendor-unlock)
+    - [OQ37 — What may the dead-man push vouch for?](#oq37--what-may-the-dead-man-push-vouch-for)
+    - [OQ38 — Seed EPYC 9354P/9654P?](#oq38--seed-epyc-9354p9654p)
 
 ---
 
@@ -795,3 +799,71 @@ held five Intel Xeon models the EPYC corpus never measured.
   `auto_accept=False` until their own corpora.
 
 **My Comments:** _(none recorded in the open entry; the decision above is the owner's 2026-09-26 direction.)_
+
+### OQ35 — eBay relist semantics for the buyer flow
+
+**✅ Resolved (agent recommendation under owner delegation, 2026-10-03).** Raised by the day-6
+pilot review ([evidence](evidence/2026-10-03-ebay-cpu-pilot-review.md) §2): category-164 scopes
+delisted 950 times while only 20 listings stayed delisted; the rest returned under the same item ID.
+
+- **Cause (eBay documentation, retrieved 2026-10-03):** with the out-of-stock option, a fixed-price
+  listing at quantity 0 stays alive but is hidden from search and returns with the same item ID on
+  restock ([Trading API user guide](https://developer.ebay.com/api-docs/user-guides/static/trading-user-guide/add-listing-type.html));
+  Time Away also hides listings for up to 15–30 days ([eBay help](https://www.ebay.com/help/selling/selling-tools/time-away?id=5137)).
+- **Decision:** a listing's identity is its source item key; a revived listing is the same listing,
+  never a new one. An absence delist means "not currently offered", never "sold". The v1 alert dedup
+  key is (watch, listing): a return after a delist does not re-alert. Whether a material change
+  (price drop, a verdict that left `match` and came back) may re-alert is the MS-3
+  `watch_match_state` ADR's decision (spec §18.7, Appendix C.3.3).
+- **Rejected:** delist hysteresis (N consecutive absences). Observed absences last hours, not one
+  cycle, so a short hysteresis removes little churn and delays real delistings. ADR 0020 stands.
+
+**My Comments:** _(owner delegated these decisions to the agent on 2026-10-03.)_
+
+### OQ36 — Does a bare "Unlock" state a CPU's vendor unlock?
+
+**✅ Resolved (agent recommendation under owner delegation, 2026-10-03) — no; it stays `unknown`.**
+Raised by the pilot review: titles cut at eBay's 80-character limit end in "Used Unlock".
+
+- **Evidence:** sellers state the unlock as "Unlocked" or "No vendor lock"; a bare "Unlock" is not
+  an evidenced listing convention, and "unlock" also names PSB-removal schemes and scam bait
+  (research 2026-10-03, community sources). The matcher already reads a bare `unlock` as no reading
+  (`rules/cpu.py`, `_UNLOCK_STEM`: "unlock code"), only ever as a negated denial.
+- **Decision:** keep it. A missed unlock costs a review; a misread one makes a PSB-locked CPU, which
+  will not boot outside its OEM's boards, eligible. No matcher change.
+
+**My Comments:** _(owner delegated these decisions to the agent on 2026-10-03.)_
+
+### OQ37 — What may the dead-man push vouch for?
+
+**✅ Resolved (agent recommendation under owner delegation, 2026-10-03) — database reachable AND
+recent collection success.** Spec §18.5 says "No successful run heartbeat in window → Critical";
+bug 005 showed a liveness-only push stays green while every job fails.
+
+- **Decision:** `deadman_job` pushes only when the database answers `SELECT 1` and every enabled
+  source that has a scheduled full-lane collection job has a successful non-heartbeat `ScraperRun`
+  within `max(3 × cadence_baseline_s, 1800 s)`, measured from no earlier than poller start.
+- **Scope:** matrix-blocked and heartbeat-only sources are not judged (they record no run to judge);
+  paused or SKIP sources are, since not collecting is exactly what the switch reports. Disabling the
+  source acknowledges it. An eBay outage or exhausted Browse quota therefore pages too: intended.
+- **Rejected:** `SourceConfig.last_success_at`, which a clean heartbeat probe also advances; a single
+  global window, which a slower future source would trip.
+
+**My Comments:** _(owner delegated these decisions to the agent on 2026-10-03.)_
+
+### OQ38 — Seed EPYC 9354P/9654P?
+
+**✅ Resolved (agent recommendation under owner delegation, 2026-10-03) — seeded as their own
+models; matcher `2026.10.1`.** The pilot review found live 9354P/9654P listings resolving to `none`.
+
+- **Facts (amd.com, 2026-10-03):** 9354P 32C SP5 280 W, OPN 100-000000805; 9654P 96C SP5 360 W,
+  OPN 100-000000803; both **1P only**. They are distinct models, never aliases of 9354/9654.
+- **Audit:** [agent audit](evidence/2026-10-03-cpu-epyc-p-sku-audit.md) on a new versioned corpus
+  (v2; the owner-audited 2026-09-26 corpus is unchanged): 152/152 accepts correct, FP 0. It exposed
+  two defects, fixed in `2026.10.1`: "non-working"/"not functional" spellings now read `for_parts`
+  (all categories), and an OEM suffix on an AMD OPN (`-DELL`) is no longer a sample marking.
+- **Residual:** the v2 rows are agent-drafted; an owner audit of its sample is still open. EPYC
+  ratification is family-scoped (OQ34), so P parts auto-accept now. `CpuSpec` has no socket-count
+  field, so a watch cannot yet exclude 1P-only parts.
+
+**My Comments:** _(owner delegated these decisions to the agent on 2026-10-03.)_

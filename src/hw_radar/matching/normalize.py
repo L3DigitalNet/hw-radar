@@ -145,12 +145,20 @@ NEGATED_LOCK_PHRASE = re.compile(
     rf"|\b(?:not|isn\s?t)[-\s]+(?:(?:vendor|psb|{LOCK_OEMS})[-\s]+)?locked\b"
     r"|\bnon[-\s]?(?:(?:vendor|psb)[-\s]+)?locked\b"
 )
+# The broken-unit wording vocab reads as for_parts: ONE definition for both
+# the condition pattern and the registry below. It carries its own negator
+# ("non-working", "not functional"), so it must also be a window barrier:
+# otherwise the "non" of "Non-Working Unlocked" negates the unlock in the lock
+# reader, and the condition after "non working" reads as denied. Missing the
+# hyphenated and "non" spellings accepted a broken unit at model grain
+# (CPU corpus cpu-0069, "... Processor non-working").
+NOT_WORKING_WORDING = r"(?:non[-\s]?|not[-\s]+)(?:working|functional)"
 NEGATOR_OWNING_WORDING: tuple[str, ...] = (
     r"no[-\s]+warranty",
     r"no[-\s]+reserve",
     r"no[-\s]+returns?",
     r"not[-\s]+tested",
-    r"not[-\s]+working",  # vocab's for_parts wording; the lock reader needs it too
+    NOT_WORKING_WORDING,
     r"no[-\s]+trays?",
     r"no[-\s]+cadd(?:y|ies)",
     r"no[-\s]+os",

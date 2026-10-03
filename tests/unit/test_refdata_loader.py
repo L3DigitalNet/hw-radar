@@ -45,9 +45,9 @@ def test_repo_seed_corpus_totals() -> None:
         "nvidia",
         "micron",
     }
-    assert sum(len(d.models) for d in docs) == 287
-    assert sum(len(m.aliases) for d in docs for m in d.models) == 319
+    assert sum(len(d.models) for d in docs) == 289
+    assert sum(len(m.aliases) for d in docs for m in d.models) == 323
     by_category: dict[str, int] = {}
     for doc in docs:
         by_category[doc.category] = by_category.get(doc.category, 0) + len(doc.models)
-    assert by_category == {"drive": 268, "cpu": 9, "gpu": 8, "ram": 2}
+    assert by_category == {"drive": 268, "cpu": 11, "gpu": 8, "ram": 2}

@@ -4,7 +4,8 @@ No URL configured (dev) → silent no-op. Failures return False and log — the
 watchdog alerts on ABSENCE of pushes, so this function must never raise.
 This module only sends; deciding WHETHER to push belongs to the caller:
 poller.service.deadman_job withholds the push while the database is
-unreachable, so a live process whose jobs all fail still goes quiet.
+unreachable or any enabled collection source has gone without a successful
+run for its window, so a live process whose collection has stalled goes quiet.
 The push URL is rendered by bao-agent (HW_RADAR_KUMA_PUSH_URL); never commit it.
 """
 

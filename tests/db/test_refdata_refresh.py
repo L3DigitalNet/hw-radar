@@ -252,9 +252,9 @@ def test_run_refresh_maintains_admitted_cpu_and_skips_gpu_ram(db: None) -> None:
 def test_import_refdata_command_imports_the_seeds(db: None) -> None:
     call_command("import_refdata")
     # Drive-only pin preserved from before the B4c GPU/RAM/CPU seeds landed,
-    # plus the whole-corpus total (268 drive + 19 first-party GPU/RAM/CPU).
+    # plus the whole-corpus total (268 drive + 21 first-party GPU/RAM/CPU).
     assert ProductModel.objects.filter(product_family__category__slug="drive").count() == 268
-    assert ProductModel.objects.count() == 287
+    assert ProductModel.objects.count() == 289
 
 
 def test_scan_skips_overlength_hypotheses(site: SourceSite) -> None:

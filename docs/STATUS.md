@@ -15,7 +15,7 @@
   quota ~16%/day; 20/50/229 verdicts; heavy relist churn in category 164. Widening awaits the owner.
   Evidence: `docs/evidence/2026-10-03-ebay-cpu-pilot-review.md`.
 - **Bug 005 (2026-10-03):** `pilot_report` OOM-killed production PostgreSQL (~50 s outage); PG memory
-  resized to the 4 GiB CT; code fixes on `dev`, unreleased.
+  resized to the 4 GiB CT; code fixes released in `1208526` (PR #47).
 - **OQ31 (owner, 2026-09-26):** ServerPartDeals and Seagate-recertified are retired — permission-
   required, any venue. SA-004's global enable order is replaced by a per-`(source, category)`
   admission matrix (`admission.py`; only eBay x CPU `ADMITTED`; `docs/handoff/deployed.md`).

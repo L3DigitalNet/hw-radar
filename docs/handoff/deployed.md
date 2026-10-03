@@ -4,13 +4,12 @@ Last updated: 2026-09-27 (release `8f529a8`; eBay × CPU live)
 
 ## Current Deployment
 
-- Deploys run from `main` via the Deploy workflow. Latest: `8f529a8` (PR #42 documentation-only),
-  Deploy run 36316335683, succeeded 2026-09-27 11:58Z after eligible-owner environment approval.
-- `8f529a8` made no code, dependency, migration, or settings change. The prior application release
-  `646809d` (PR #41) remains the rollback pointer; before it were `5f2d300` and `ded1000`.
-- Post-deploy health checks reported release `8f529a8` and `database: true`; no migrations were
-  pending, `base.css` returned 200, and web and poller were active with zero automatic restarts.
-- Runtime versions remain matcher `2026.09.4`, evaluator `ms2c.3`, and migration `0024`.
+- Deploys run from `main` via the Deploy workflow. Latest: `1208526` (PR #47: bug 005 fixes,
+  urllib3 2.8.0), Deploy run 37120027303, succeeded 2026-10-03 11:54Z after owner-authorized approval.
+- Rollback pointer: `8f529a8` (PR #42, docs-only over `646809d`); before it `5f2d300`, `ded1000`.
+- Post-deploy: `/healthz` reported `1208526` and `database: true`; web, poller, and PostgreSQL active,
+  `NRestarts=0`; poller started with 1 source job.
+- Runtime versions: matcher `2026.09.4`, evaluator `ms2c.3`, migration `0024`.
 - The deployed `admission.py` matches this repository. Only eBay is enabled every 600 seconds and
   only eBay × CPU is admitted; all other sources remain disabled and no `APIFY` environment entries render.
 - **Live since 2026-09-27 01:09Z: eBay enabled** (the only enabled source) after the eBay × CPU

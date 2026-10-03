@@ -1,6 +1,6 @@
 # Bug 005: `pilot_report` OOM-killed production PostgreSQL; the poller never reconnected
 
-Status: production mitigated 2026-10-03 (session 10); code fixed on `dev` (`982eebe`, `8ac812a`, `60a19b4`), not yet released
+Status: production mitigated 2026-10-03 (session 10); code fixed (`982eebe`, `8ac812a`, `60a19b4`), released in `1208526` (PR #47, 2026-10-03)
 Found: 2026-10-03 10:23Z, running `manage.py pilot_report --since 2026-09-27T01:09:00Z` in production
 for the eBay × CPU pilot review
 Severity: about 50 s of collection outage (one scheduled eBay run delayed); no data loss, no cost impact.

@@ -106,11 +106,14 @@ def test_cpu_0082_and_plain_opn_accept_epyc_9354(
         "AMD EPYC GENOA SP5 ZEN4 9354P 32-Core 3.25GHz CPU 100-000000805Open",
     ],
 )
-def test_p_variant_never_resolves_to_9354(site: SourceSite, seeded_cpus: None, title: str) -> None:
+def test_p_variant_resolves_to_9354p_never_9354(
+    site: SourceSite, seeded_cpus: None, title: str
+) -> None:
+    # 9354P is its own seeded model (OPN 100-000000805), never an alias of 9354.
     listing = _listing(site, "p-" + title.replace(" ", "")[-20:], title)
     edge = _resolve(listing)
-    assert edge.evidence["outcome"] != "accept"
-    assert listing.product_model is None
+    assert edge.evidence["outcome"] == "accept"
+    assert listing.product_model == _model("EPYC 9354P")
 
 
 def test_sample_opn_with_qualifier_words_is_vetoed(site: SourceSite, seeded_cpus: None) -> None:

@@ -45,7 +45,7 @@ def test_non_drive_import_creates_expected_per_category_counts() -> None:
     docs = _non_drive_docs()
     report = import_documents(docs)
 
-    expected_models = {"cpu": 9, "gpu": 8, "ram": 2}
+    expected_models = {"cpu": 11, "gpu": 8, "ram": 2}
     for category, count in expected_models.items():
         docs_in_category = [d for d in docs if d.category == category]
         assert sum(len(d.models) for d in docs_in_category) == count

@@ -54,19 +54,17 @@ Instructions for AI agents:
   because the pilot sweep queries only "EPYC 7302".
 - [ ] Ratify further CPU families only with their own owner-audited corpus (Intel Xeon first): add
   the family key to `categories.CPU_RATIFIED_FAMILIES`; EPYC-only today (OQ34, matcher 2026.09.4).
-- [ ] Release bug 005's fixes (`dev` `60a19b4`) to production (owner-approved deploy), then confirm
-  the poller survives a PG restart without a manual restart. Spec §18.5 should name the DB-gated push.
-- [ ] Owner decision: should the dead-man push also require recent collection success (which jobs,
-  what window)? Today it gates on database reachability only.
+- [ ] Release `dev` (matcher `2026.10.1`, P-SKU seeds, dead-man freshness gate; OQ37/OQ38), then run
+  `import_refdata --category cpu` in production and confirm 9354P listings resolve to 9354P.
+- [ ] Owner audit of the CPU corpus v2 sample (`docs/evidence/2026-10-03-cpu-epyc-p-sku-audit.md` §6);
+  the 47 relabeled rows are agent drafts.
+- [ ] Add a CPU socket-count (1P/2P) spec field and watch clause if 2P builds must exclude P parts.
+- [ ] Buyer-flow alert dedup keys on (watch, listing); a relist never re-alerts (OQ35). Re-alert
+  on material change is the MS-3 `watch_match_state` ADR's call.
 - [ ] Pilot review done 2026-10-03 (`docs/evidence/2026-10-03-ebay-cpu-pilot-review.md`); widening
   is an owner decision. Until then keep eBay x CPU unchanged.
-- [ ] Seed and audit EPYC 9354P/9654P (unseeded retail SKUs, incl. Dell `100-000000805`/`-803`) only if
-  the watch should cover them; never alias them to 9354/9654.
-- [ ] Define relist semantics before alerting: category-164 scopes delist and revive listings daily
-  (950 delists vs 20 still delisted); a relist must not trigger a new alert.
 - [ ] Keep verdict history (or a shortlist journal) so shortlist stability can be measured;
   `watch_evaluation` holds only the current verdict per listing (6 h class).
-- [ ] Owner question: does a bare trailing "Unlock" (80-char title cut) state an unlock? Today `unknown`.
 - [ ] Keep new EPYC scopes single-page provable. An OEM part (7R13, 7J13, ...) needs its own seed and
   audit; never treat it as a 7763 alias.
 - [ ] Evaluate eBay x drive first, without admission: assess ranking-limited legacy-query completeness,

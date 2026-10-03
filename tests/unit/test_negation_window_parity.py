@@ -60,6 +60,12 @@ _OWNING_SAMPLES = [
     "no returns",
     "not tested",
     "not working",
+    # Further spellings of the same for_parts entry: "non" is a negator token,
+    # so these pin that the hyphenated and fused forms are barriers too.
+    "non-working",
+    "non working",
+    "not functional",
+    "nonfunctional",
     "no tray",
     "no caddy",
     "no os",

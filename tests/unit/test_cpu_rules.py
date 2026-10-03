@@ -5,9 +5,10 @@ from __future__ import annotations
 import pytest
 
 from hw_radar.matching import ladder
-from hw_radar.matching.normalize import canonicalize_title
+from hw_radar.matching.normalize import canonicalize_title, normalize_alias_text
 from hw_radar.matching.rules import cpu
 from hw_radar.matching.types import TokenKind
+from hw_radar.refdata.loader import load_seed_documents
 
 _XEON = "Intel Xeon Gold 6448Y 32-Core 225W FCLGA4677 SRMGD"
 
@@ -113,19 +114,16 @@ def test_unknown_catalog_field_cannot_veto() -> None:
 
 # --- EPYC identity safety (F6 pilot: exact authoritative identity only) -------
 #
-# Seeded EPYC alias keys (refdata/seeds/amd-epyc.json) a near-model title must
-# never produce as a candidate: each one is an exact-alias hit on a seeded model.
+# Seeded EPYC alias keys a near-model title must never produce as a candidate:
+# each one is an exact-alias hit on a seeded model. Read from the committed
+# seed (refdata/seeds/amd-epyc.json) through the alias normalizer, so a seed
+# addition is covered without editing a hand copy.
 _SEEDED_EPYC_KEYS = frozenset(
-    {
-        "epyc9354",
-        "100000000798",
-        "epyc9654",
-        "100000000789",
-        "epyc7763",
-        "100000000312",
-        "100100000312wof",
-        "epyc7742",
-    }
+    normalize_alias_text(alias.text)
+    for doc in load_seed_documents()
+    if doc.category == "cpu" and doc.family_name == "EPYC"
+    for model in doc.models
+    for alias in model.aliases
 )
 
 
@@ -169,7 +167,8 @@ def test_oem_version_phrase_is_cpu_local() -> None:
 @pytest.mark.parametrize(
     ("title", "own_key"),
     [
-        # 1P SKUs: a different OPN and a different model from the seeded 2P part.
+        # 1P SKUs: a different OPN and a different model from the 2P part.
+        # 9354P and 9654P are seeded as their own models; 7302P is unseeded.
         ("AMD EPYC 9354P 32-Core 3.25GHz SP5 Processor", "epyc9354p"),
         ("AMD EPYC 9654P 96-Core SP5 CPU", "epyc9654p"),
         ("AMD EPYC 7302P 16-Core SP3 CPU", "epyc7302p"),
@@ -177,7 +176,8 @@ def test_oem_version_phrase_is_cpu_local() -> None:
 )
 def test_p_suffix_never_reads_as_the_seeded_model(title: str, own_key: str) -> None:
     assert own_key in _keys(title)
-    assert _seeded_hits(title) == set()
+    # The only seeded key a P title may hit is its own, never the 2P part's.
+    assert _seeded_hits(title) <= {own_key}
 
 
 def test_hyphenated_exact_model_reaches_the_seeded_alias() -> None:
@@ -385,16 +385,17 @@ def test_codename_between_epyc_and_number_reaches_the_name(title: str, key: str)
 
 
 @pytest.mark.parametrize(
-    "title",
+    ("title", "hits"),
     [
-        # The guards see the number exactly as without the codename.
-        "AMD EPYC Genoa 9354P 32-Core SP5",
-        "AMD EPYC Milan 7763 / 7713 64-Core SP3",
-        "AMD EPYC Genoa 9654 9554 SP5",
+        # The guards see the number exactly as without the codename: the P
+        # title hits only its own seeded 9354P, never the 2P 9354.
+        ("AMD EPYC Genoa 9354P 32-Core SP5", {"epyc9354p"}),
+        ("AMD EPYC Milan 7763 / 7713 64-Core SP3", set[str]()),
+        ("AMD EPYC Genoa 9654 9554 SP5", set[str]()),
     ],
 )
-def test_codename_keeps_the_p_variant_and_multi_model_guards(title: str) -> None:
-    assert _seeded_hits(title) == set()
+def test_codename_keeps_the_p_variant_and_multi_model_guards(title: str, hits: set[str]) -> None:
+    assert _seeded_hits(title) == hits
 
 
 def test_unknown_word_between_epyc_and_number_is_not_skipped() -> None:
