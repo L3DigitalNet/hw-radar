@@ -27,9 +27,10 @@ import logging
 import random
 import signal
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Final, cast
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from asgiref.sync import sync_to_async
@@ -57,6 +58,7 @@ from hw_radar.catalog.models import (
     ProviderKind,
     ProviderRun,
     RunKind,
+    RunStatus,
     SchedulingLane,
     ScraperRun,
     SourceConfig,
@@ -85,6 +87,17 @@ REFDATA_REFRESH_HOUR_UTC = 7  # after the 06:00 FX refresh
 # by at most one interval — a daily sweep would stretch that to 30h and break the
 # carve-out. The sweep is a handful of indexed DELETEs, so it is cheap to repeat.
 RETENTION_SWEEP_SECONDS = 3_600
+# Dead-man collection-freshness window: max(3 x cadence_baseline_s, 30 min).
+# Three missed cycles tolerate one slow or failed run plus a restart delay
+# without paging; over the six-day eBay x CPU pilot the largest gap between
+# successes was 1040 s, at a deploy restart, against a 600 s cadence. The
+# floor keeps a fast cadence from paging on a single back-off window or deploy.
+STALE_WINDOW_CADENCE_MULTIPLIER = 3
+STALE_WINDOW_FLOOR_S = 1_800
+# Captured once at import: __main__ imports this module during startup, before
+# run() loads the schedule, so it bounds when this process's jobs could first
+# have run. deadman_job measures freshness from no earlier than this instant.
+PROCESS_STARTED_AT: Final[datetime] = timezone.now()
 
 
 def heartbeat() -> None:
@@ -249,20 +262,129 @@ def database_reachable() -> bool:
     return True
 
 
-async def deadman_job() -> None:
-    """Push the §18.5 dead-man heartbeat only while the poller can reach its database.
+@dataclass(frozen=True)
+class StaleSource:
+    """One collection source with no successful collection run inside its window."""
+
+    key: str
+    last_success_at: datetime | None
+    window_s: int
+
+
+def freshness_window_s(config: SourceConfig) -> int:
+    """Return how long a source may go without a successful collection run."""
+    return max(STALE_WINDOW_CADENCE_MULTIPLIER * config.cadence_baseline_s, STALE_WINDOW_FLOOR_S)
+
+
+def stale_collection_sources(*, now: datetime, process_started_at: datetime) -> list[StaleSource]:
+    """Return the enabled collection sources whose last successful run is too old.
+
+    A collection source is an enabled SourceConfig that build_scheduler gives a
+    poll-{key} job: it passes scheduling_block and registers_full_lane. That
+    excludes matrix-blocked rows (retired, fixture sources such as synthetic,
+    unadmitted) and heartbeat-only sources, whose clean probes record no run
+    and so leave no evidence to judge. Lifecycle state is deliberately NOT filtered: a paused or SKIP
+    source is not collecting, which is exactly the absence of success the
+    switch reports, and disabling the row is how an operator acknowledges it.
+    An `apify` source counts like a local one — its poll-{key} job starts the
+    Actor run, and the importer records the run's ScraperRun when it settles.
+
+    A successful run is a SUCCESS ScraperRun whose run_kind is not HEARTBEAT,
+    stamped by finished_at. Rejected: SourceConfig.last_success_at, which
+    apply_run_outcome also advances for a clean heartbeat probe that collected
+    nothing, so a source whose full lane fails forever would still read fresh.
+
+    Each source's age is measured from max(last success, process_started_at):
+    the poller only loads its schedule at start, so a restart or a newly
+    enabled source (which needs a restart to be scheduled) gets one window to
+    produce its first run before it can be reported stale.
+
+    Sync ORM; DatabaseError propagates to the caller.
+    """
+    stale: list[StaleSource] = []
+    configs = SourceConfig.objects.select_related("source_site").filter(enabled=True)
+    for config in configs:
+        key = config.source_site.normalized_name
+        if scheduling_block(key) is not None or not registers_full_lane(config):
+            continue
+        # One LIMIT 1 query per source, ordered on the scraper_runs_site_started
+        # index (source_site, -started_at): it reads backward from the newest
+        # run only until the first success, and never loads run history into
+        # memory. A per-source loop, not one aggregate, because the source
+        # count is single digits and each probe stays trivially bounded.
+        latest = (
+            ScraperRun.objects.filter(source_site=config.source_site, status=RunStatus.SUCCESS)
+            .exclude(run_kind=RunKind.HEARTBEAT)
+            .order_by("-started_at")
+            .values_list("started_at", "finished_at")
+            .first()
+        )
+        last_success_at = None if latest is None else (latest[1] or latest[0])
+        reference = (
+            process_started_at
+            if last_success_at is None
+            else max(last_success_at, process_started_at)
+        )
+        window_s = freshness_window_s(config)
+        if now - reference > timedelta(seconds=window_s):
+            stale.append(StaleSource(key, last_success_at, window_s))
+    return stale
+
+
+def _describe_stale(source: StaleSource, now: datetime) -> str:
+    if source.last_success_at is None:
+        return f"{source.key} (no successful run; window {source.window_s}s)"
+    age_s = int((now - source.last_success_at).total_seconds())
+    return f"{source.key} (last success {age_s}s ago; window {source.window_s}s)"
+
+
+async def deadman_job(
+    *,
+    process_started_at: datetime | None = None,
+    clock: Callable[[], datetime] = timezone.now,
+) -> None:
+    """Push the §18.5 dead-man heartbeat only while the poller is collecting.
+
+    Pushes iff the database is reachable AND every enabled collection source
+    has had a successful collection run within its window
+    (stale_collection_sources). No enabled collection source counts as fresh.
 
     The push is the off-box alert on absence of success (spec §18.5; ADR-0017:
     "a stalled poller ... reaches a human off the box"), so a live process
-    whose every job is failing must go quiet. Rejected: pushing on bare
-    process liveness, which on 2026-10-03 kept the monitor green while every
-    collection job failed on a dead database connection.
+    whose jobs are failing or no longer running must go quiet. Rejected:
+    pushing on bare process liveness, which on 2026-10-03 kept the monitor
+    green while every collection job failed on a dead database connection;
+    and pushing on reachability alone, which stays green while a source's
+    collection has silently stopped succeeding.
 
-    The probe runs through sync_to_async so it uses the same thread and
+    Never raises: any failure withholds the push and logs, because the job
+    must keep running to resume pushing once collection recovers.
+
+    Both checks run through sync_to_async so they use the same thread and
     connection as the jobs' ORM work, after the executor has recycled it
-    (poller.executor); it therefore reports what the next job would see.
+    (poller.executor); they therefore report what the next job would see.
+    `process_started_at` (default PROCESS_STARTED_AT) and `clock` are
+    injection points for tests.
     """
     if not await sync_to_async(database_reachable)():
+        return
+    now = clock()
+    started_at = PROCESS_STARTED_AT if process_started_at is None else process_started_at
+    try:
+        stale = await sync_to_async(stale_collection_sources)(
+            now=now, process_started_at=started_at
+        )
+    except Exception:
+        # Broad on purpose: a failed freshness check proves nothing is
+        # collecting, and withholding is the fail-safe direction — a bug here
+        # must page a human rather than keep the monitor green.
+        logger.warning("dead-man push withheld: collection freshness check failed", exc_info=True)
+        return
+    if stale:
+        logger.warning(
+            "dead-man push withheld: collection stalled for %s",
+            ", ".join(_describe_stale(source, now) for source in stale),
+        )
         return
     await deadman.push()
 
@@ -450,6 +572,39 @@ def load_schedules(configs: Sequence[SourceConfig]) -> list[SourceSchedule]:
     ]
 
 
+def registers_full_lane(config: SourceConfig) -> bool:
+    """Return whether build_scheduler gives this source a full-lane poll-{key} job.
+
+    Assumes the source already passed scheduling_block; this only decides the
+    lane split. Shared with stale_collection_sources, which must judge exactly the
+    sources that have a scheduled collection job — a source collected only by
+    its heartbeat lane records no run on a clean probe, so judging it there
+    would report a healthy source stale.
+    """
+    if not config.heartbeat_enabled:
+        return True
+    # CR-006: non-eBay heartbeat sources also need a slow full-pipeline repair
+    # crawl at cadence_baseline_s — CDN edge cache floors probe freshness, so
+    # the heartbeat alone can miss changes. eBay's Browse poll IS both
+    # heartbeat and full fetch for the DRIVE sweep, so for drive alone a
+    # second poll-{key} job would just double-poll.
+    #
+    # eBay's category sweeps are the exception: the heartbeat never runs them
+    # (the probe is the legacy drive GET, and the FULL run it fires skips them
+    # to protect the Browse quota — sources/ebay.py), so the scheduled full
+    # lane is their only path. Without this job an admitted eBay category
+    # would be silently never collected. The job builds
+    # sources.admitted_ebay_adapter per run, so it sweeps exactly the admitted
+    # categories (plus the drive GET if drive is admitted, which the eBay quota
+    # math already counts per scheduled run).
+    key = config.source_site.normalized_name
+    ebay_sweeps_admitted = bool(admitted_categories(key) - {DRIVE})
+    return (
+        config.cheap_signal != CheapSignal.EBAY_BROWSE.value  # .value: django-types quirk
+        or ebay_sweeps_admitted
+    )
+
+
 def build_scheduler(
     registry: BucketRegistry, schedules: Sequence[SourceSchedule]
 ) -> AsyncIOScheduler:
@@ -527,40 +682,10 @@ def build_scheduler(
                 id=f"poll-heartbeat-{key}",
                 args=[key, registry, scheduler],
             )
-            # CR-006: non-eBay heartbeat sources also need a slow full-pipeline
-            # repair crawl at cadence_baseline_s — CDN edge cache floors probe
-            # freshness, so the heartbeat alone can miss changes. eBay's Browse
-            # poll IS both heartbeat and full fetch for the DRIVE sweep, so for
-            # drive alone a second poll-{key} job would just double-poll.
-            #
-            # eBay's category sweeps are the exception: the heartbeat never runs
-            # them (the probe is the legacy drive GET, and the FULL run it fires
-            # skips them to protect the Browse quota — sources/ebay.py), so the
-            # scheduled full lane is their only path. Without this job an
-            # admitted eBay category would be silently never collected. The job
-            # builds sources.admitted_ebay_adapter per run, so it sweeps exactly
-            # the admitted categories (plus the drive GET if drive is admitted,
-            # which the eBay quota math already counts per scheduled run).
-            ebay_sweeps_admitted = bool(admitted_categories(key) - {DRIVE})
-            if (
-                config.cheap_signal != CheapSignal.EBAY_BROWSE.value  # .value: django-types quirk
-                or ebay_sweeps_admitted
-            ):
-                # The repair lane's interval is its own row's, which ramp_floor_s
-                # pins at cadence_baseline_s for heartbeat sources — the slow end
-                # CR-006 asks for, now stated by the lane row rather than by
-                # reading cadence_baseline_s here.
-                slow_s = schedule.full_interval_s
-                scheduler.add_job(
-                    poll_source,
-                    "interval",
-                    seconds=slow_s,
-                    jitter=max(1, slow_s // 10),
-                    misfire_grace_time=config.misfire_grace_s,
-                    id=f"poll-{key}",
-                    args=[key, registry, scheduler],
-                )
-        else:
+        if registers_full_lane(config):
+            # For a heartbeat source this is the CR-006 repair crawl, whose
+            # interval is its own lane row's: ramp_floor_s pins it at
+            # cadence_baseline_s, the slow end CR-006 asks for.
             full_s = schedule.full_interval_s
             scheduler.add_job(
                 poll_source,
