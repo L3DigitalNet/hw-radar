@@ -248,10 +248,15 @@ _EPYC_NAME = re.compile(r"\bepyc\b")
 # [a-z0-9], not \b, so 'es' inside 'series', 'esxi', 'tested' or 'e5' never
 # fires while '7763-es' and 'es/qs' do. 'sample' alone covers the
 # 'engineering sample' and 'qualification sample' phrases. A suffixed AMD OPN is
-# the QS/ES marking itself even with no word beside it.
+# the QS/ES marking itself even with no word beside it, EXCEPT when the suffix
+# is an OEM brand ('100-000000805-DELL', cpu-0016): that is the seller tagging
+# a retail part with its server vendor, and branding is never identity (nor,
+# alone, a lock). Without the exclusion a Dell-branded retail 9354P vetoed as a
+# sample. Only the brand words themselves are exempt, so every other letter or
+# digit suffix still reads as a sample marking.
 _SAMPLE = re.compile(
     r"(?<![a-z0-9])(?:es[12]?|qs|samples?|pre-?production|pre\s+production"
-    r"|100-\d{9}-[a-z0-9]+)(?![a-z0-9])"
+    rf"|100-\d{{9}}-(?!{LOCK_OEMS}(?![a-z0-9]))[a-z0-9]+)(?![a-z0-9])"
 )
 
 

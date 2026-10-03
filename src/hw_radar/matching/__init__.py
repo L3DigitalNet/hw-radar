@@ -79,4 +79,7 @@ service"). Import-light on purpose — submodules are imported explicitly."""
 #               registry, so their "non"/"not" negates no neighbouring
 #               condition or vendor-lock wording. Edges stamped 2026.09.4 may
 #               carry a model-grain accept of a broken unit (cpu-0069).
+#               2026.10.1 also: an AMD OPN suffixed with an OEM brand
+#               ("100-000000805-DELL", cpu-0016) is not a CPU sample marking;
+#               2026.09.4 edges may carry a `sample` veto review for it.
 MATCHER_VERSION = "2026.10.1"
