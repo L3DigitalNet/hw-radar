@@ -102,7 +102,19 @@ network; the watch-evaluation `pending` count reuses
 eligibility.service.row_currency, the same read-time currency predicate the
 shortlist uses (MS2-D-20), so the two cannot disagree. Aggregation happens in
 Python over the window's rows, which is sized for pilot volumes, not for a
-production-scale history.
+production-scale history; the rows are streamed, so memory follows the
+number of (source, provider, scope, listing) keys, not the number of rows.
+
+Memory contract: no query here loads a raw payload body (RawPayload request/
+response JSON and text) or ProviderRun.import_listing_ids. Many snapshots
+share one page-sized payload, so a per-snapshot join of the body multiplies
+it: on 2026-10-03 a one-week production window joined 216 payloads into
+~565 MB of result set and the Python decode OOM-killed the database's
+container. Snapshot rows are therefore read as narrow value tuples, streamed
+with iterator(), and only the newest row per bucket key is retained; the
+provider is classified in SQL (_provider_expr), so not even the endpoint
+string crosses the wire. tests/db/test_pilot_report.py
+::test_report_never_loads_raw_payload_bodies pins this.
 
 Requirements: a Django context with the catalog app. No PostgreSQL-specific SQL.
 """
@@ -118,7 +130,7 @@ from decimal import Decimal
 from itertools import pairwise
 from typing import Final, cast
 
-from django.db.models import Max
+from django.db.models import Case, CharField, Max, Value, When
 
 from hw_radar.acquisition.contracts import CATEGORY_HINT_ATTR, SCOPE_OUTCOMES_KEY
 from hw_radar.catalog.models import (
@@ -170,6 +182,8 @@ _OPEN_RESERVATION: Final = frozenset(
 _GRAINS: Final = (*(str(v) for v in ResolutionGrain.values), "no_edge")
 _EDGE_OUTCOMES: Final = ("accept", "review", "none", "error", "no_edge")
 _VERDICTS: Final = ("match", "no_match", "unknown", "pending")
+# Rows per server-side cursor fetch for the streamed snapshot and run reads.
+_CHUNK: Final = 2000
 
 
 # ── Normalized run records ───────────────────────────────────────────────────
@@ -607,9 +621,10 @@ def _local_runs(report: dict[str, SourceReport], since: datetime) -> None:
             provider_run__isnull=True,
         )
         .select_related("source_site")
+        .defer("error")
         .order_by("started_at", "pk")
     )
-    for run in runs:
+    for run in runs.iterator(chunk_size=_CHUNK):
         source = report[run.source_site.normalized_name]
         if run.run_kind == RunKind.HEARTBEAT.value:
             source.heartbeat_runs += 1
@@ -674,9 +689,12 @@ def _remote_runs(report: dict[str, SourceReport], since: datetime) -> None:
             admitted_at__gte=since, source_site__normalized_name__in=list(report)
         )
         .select_related("source_site", "scraper_run", "spend_reservation")
+        # import_listing_ids grows with every listing a run imports and
+        # run_output is never reported; neither may ride along per run.
+        .defer("import_listing_ids", "run_output", "scraper_run__error")
         .order_by("admitted_at", "pk")
     )
-    for run in runs:
+    for run in runs.iterator(chunk_size=_CHUNK):
         source = report[run.source_site.normalized_name]
         provider = source.provider(run.provider_kind)
         linked = run.scraper_run
@@ -755,12 +773,25 @@ def _charge(cost: CostReport, sweep: _Sweep) -> None:
         cost.released_or_denied += 1
 
 
-def _snapshot_provider(endpoint: str | None) -> str:
-    if endpoint is None:
-        return PROVIDER_NOT_RECORDED
-    if endpoint.startswith(APIFY_RAW_ENDPOINT_PREFIX):
-        return ProviderKind.APIFY.value
-    return ProviderKind.LOCAL.value
+def _provider_expr() -> Case:
+    """SQL classification of a snapshot's provider from its raw payload endpoint.
+
+    `not_recorded` when the snapshot has no raw payload (expired or never
+    stored), `apify` for an Actor dataset row (APIFY_RAW_ENDPOINT_PREFIX),
+    `local` for any other endpoint. Evaluated in the database so neither the
+    payload nor its endpoint is fetched per snapshot, and so _freshness can
+    group by provider instead of by every distinct endpoint ever stored.
+    RawPayload.endpoint is NOT NULL, so a NULL here means "no payload row".
+    """
+    return Case(
+        When(raw_payload__endpoint__isnull=True, then=Value(PROVIDER_NOT_RECORDED)),
+        When(
+            raw_payload__endpoint__startswith=APIFY_RAW_ENDPOINT_PREFIX,
+            then=Value(ProviderKind.APIFY.value),
+        ),
+        default=Value(ProviderKind.LOCAL.value),
+        output_field=CharField(),
+    )
 
 
 def _freshness(report: dict[str, SourceReport]) -> None:
@@ -770,74 +801,93 @@ def _freshness(report: dict[str, SourceReport]) -> None:
     before the window opened is exactly the stale one the owner must see, with
     its real age rather than "no observation".
     """
-    # One maximum per (site, scope, raw endpoint): the provider is derived from
-    # the endpoint, so the per-provider maximum is taken over these in Python.
-    per_endpoint = (
+    # One maximum per (site, scope, provider), grouped in the database. Grouping
+    # by the raw endpoint instead would return a row per distinct endpoint ever
+    # stored, and an Apify endpoint is unique per dataset row.
+    per_provider = (
         OfferSnapshot.objects.filter(listing__source_site__normalized_name__in=list(report))
+        .annotate(provider_kind=_provider_expr())
         .values(
-            "listing__source_site__normalized_name",
-            "listing__collection_scope",
-            "raw_payload__endpoint",
+            "listing__source_site__normalized_name", "listing__collection_scope", "provider_kind"
         )
         .annotate(newest=Max("observed_at"))
+        .order_by()
     )
-    for row in per_endpoint:
+    for row in per_provider:
         site_key = cast("str", row["listing__source_site__normalized_name"])
         scope_key = cast("str | None", row["listing__collection_scope"])
-        endpoint = cast("str | None", row["raw_payload__endpoint"])
         newest = cast("datetime", row["newest"])
-        provider = report[site_key].provider(_snapshot_provider(endpoint))
+        provider = report[site_key].provider(cast("str", row["provider_kind"]))
         scope = provider.scope(scope_key)
         if scope.newest_observation_at is None or newest > scope.newest_observation_at:
             scope.newest_observation_at = newest
 
 
+@dataclass(frozen=True)
+class _SnapshotFacts:
+    """The newest in-window snapshot of one bucket key: only what the report reads."""
+
+    attrs: Mapping[str, object]
+    condition_label_raw: str
+
+
 def _listing_facts(report: dict[str, SourceReport], since: datetime) -> None:
-    snapshots = list(
+    # Narrow value tuples, streamed: see the module's memory contract. Ordered
+    # by observed_at so the last write per key below is the newest snapshot.
+    rows = (
         OfferSnapshot.objects.filter(
             observed_at__gte=since, listing__source_site__normalized_name__in=list(report)
         )
-        .select_related("listing__source_site", "raw_payload")
+        .annotate(provider_kind=_provider_expr())
         .order_by("observed_at")
+        .values_list(
+            "listing_id",
+            "listing__source_site__normalized_name",
+            "provider_kind",
+            "listing__collection_scope",
+            "listing__condition_label_raw",
+            "shipping_price",
+            "attrs_json",
+        )
     )
-    if not snapshots:
-        return
-    listing_ids = {cast("int", s.listing.pk) for s in snapshots}
-    edges: dict[int, ListingResolution] = {
-        cast("int", e.listing.pk): e
-        for e in ListingResolution.objects.filter(
-            listing_id__in=listing_ids, is_current=True
-        ).select_related("listing")
-    }
-    verdicts = _verdicts(listing_ids)
 
-    # Key: (site, provider, scope, listing). Snapshots are ordered by
-    # observed_at, so the last write wins and holds the newest in-window
-    # snapshot of that listing under that provider.
-    newest: dict[tuple[str, str, str | None, int], OfferSnapshot] = {}
+    # Key: (site, provider, scope, listing). Rows are ordered by observed_at,
+    # so the last write wins and holds the newest in-window snapshot of that
+    # listing under that provider.
+    newest: dict[tuple[str, str, str | None, int], _SnapshotFacts] = {}
     counts: defaultdict[tuple[str, str, str | None, int], int] = defaultdict(int)
     shipping: defaultdict[tuple[str, str, str | None, int], Counter[str]] = defaultdict(Counter)
-    for snap in snapshots:
-        listing = snap.listing
-        raw = snap.raw_payload
+    for row in rows.iterator(chunk_size=_CHUNK):
+        listing_pk, site_key, provider_kind, scope_key, condition, ship_price, attrs = row
         key = (
-            listing.source_site.normalized_name,
-            _snapshot_provider(None if raw is None else raw.endpoint),
-            listing.collection_scope,
-            cast("int", listing.pk),
+            cast("str", site_key),
+            cast("str", provider_kind),
+            cast("str | None", scope_key),
+            cast("int", listing_pk),
         )
-        newest[key] = snap
+        newest[key] = _SnapshotFacts(
+            attrs=cast("Mapping[str, object]", attrs), condition_label_raw=cast("str", condition)
+        )
         counts[key] += 1
-        if snap.shipping_price is None:
+        price = cast("Decimal | None", ship_price)
+        if price is None:
             shipping[key]["unknown"] += 1
-        elif snap.shipping_price == 0:
+        elif price == 0:
             shipping[key]["free"] += 1
         else:
             shipping[key]["paid"] += 1
+    if not newest:
+        return
+    listing_ids = {key[3] for key in newest}
+    edges: dict[int, ListingResolution] = {
+        cast("int", e.listing_id): e  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue] - django-types has no <field>_id stubs
+        for e in ListingResolution.objects.filter(listing_id__in=listing_ids, is_current=True)
+    }
+    verdicts = _verdicts(listing_ids)
 
     for key, snap in newest.items():
         site_key, provider_kind, scope_key, listing_id = key
-        attrs: Mapping[str, object] = snap.attrs_json
+        attrs = snap.attrs
         edge = edges.get(listing_id)
         category = _category(attrs, edge)
         scope = report[site_key].provider(provider_kind).scope(scope_key)
@@ -862,7 +912,7 @@ def _listing_facts(report: dict[str, SourceReport], since: datetime) -> None:
             cat.grain[edge.grain] = cat.grain.get(edge.grain, 0) + 1
             outcome = _edge_outcome(edge)
             cat.edge_outcome[outcome] = cat.edge_outcome.get(outcome, 0) + 1
-        cat.with_condition += bool(snap.listing.condition_label_raw.strip())
+        cat.with_condition += bool(snap.condition_label_raw.strip())
         ship = shipping[key]
         cat.shipping_free += ship["free"]
         cat.shipping_paid += ship["paid"]
@@ -935,14 +985,17 @@ def build_report(
     configs = {
         c.source_site.normalized_name: c for c in SourceConfig.objects.select_related("source_site")
     }
+    # DISTINCT in the database: one row per active site, not one per run.
     active = set(
-        ScraperRun.objects.filter(started_at__gte=since).values_list(
-            "source_site__normalized_name", flat=True
-        )
+        ScraperRun.objects.filter(started_at__gte=since)
+        .order_by()
+        .values_list("source_site__normalized_name", flat=True)
+        .distinct()
     ) | set(
-        ProviderRun.objects.filter(admitted_at__gte=since).values_list(
-            "source_site__normalized_name", flat=True
-        )
+        ProviderRun.objects.filter(admitted_at__gte=since)
+        .order_by()
+        .values_list("source_site__normalized_name", flat=True)
+        .distinct()
     )
     keys = set(configs) | active
     if sources is not None:

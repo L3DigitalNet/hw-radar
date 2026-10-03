@@ -676,3 +676,19 @@ def test_report_issues_no_writes(pilot: Pilot) -> None:
         if q["sql"].lstrip().split(" ", 1)[0].upper() in {"INSERT", "UPDATE", "DELETE"}
     ]
     assert writes == []
+
+
+def test_report_never_loads_raw_payload_bodies(pilot: Pilot) -> None:
+    # Production incident 2026-10-03: ~50 snapshots share one eBay page
+    # payload, so joining raw_payload bodies per snapshot multiplied ~28 KB
+    # documents into ~565 MB of result set and the decode OOM-killed the
+    # database's container. The report only needs each payload's endpoint, so
+    # no query may select a body column (nor ProviderRun's per-run listing-id
+    # array, which grows with every imported listing and is never reported).
+    body_columns = ('"request_json"', '"response_json"', '"response_text"', '"import_listing_ids"')
+    with CaptureQueriesContext(connection) as ctx:
+        render_text(build_report(now=pilot.now, since=pilot.now - timedelta(days=7)))
+    offending = [
+        q["sql"] for q in ctx.captured_queries if any(col in q["sql"] for col in body_columns)
+    ]
+    assert offending == []
